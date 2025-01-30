@@ -1,18 +1,75 @@
-import { Context, Schema, h } from 'koishi'
+import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const name = 'luobot'
+const logger = new Logger('cave');
+
+export const name = 'cave';
+
+export interface User {
+  userId: string;
+  username: string;
+}
+
+export interface getStrangerInfo {
+  user_id: string;
+  nickname: string;
+}
 
 export interface Config {
   manager: string[];
   number: number;
+  consoleinfo?: boolean;
 }
 
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required().description('管理员QQ，一个项目填一个ID'),
-  number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒')
-})
+  number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒'),
+  consoleinfo: Schema.boolean().default(false).description('是否在控制台输出信息')
+});
+
+async function saveImages(url: string, selectedPath: string, safeFilename: string, imageExtension: string, config: Config, ctx: Context): Promise<string> {
+  let fileRoot = path.join(selectedPath, safeFilename);
+  let fileExt = `.${imageExtension}`;
+  let targetPath = `${fileRoot}${fileExt}`;
+  let index = 0;
+
+  if (config.consoleinfo) {
+    logger.info('提取到的图片链接：' + url);
+  }
+
+  while (fs.existsSync(targetPath)) {
+    index++;
+    targetPath = `${fileRoot}_${index}${fileExt}`;
+  }
+
+  try {
+    const buffer = await ctx.http.get<ArrayBuffer>(url, { responseType: 'arraybuffer' });
+    if (buffer.byteLength === 0) throw new Error('下载的数据为空');
+    await fs.promises.writeFile(targetPath, Buffer.from(buffer));
+    return targetPath;
+  } catch (error) {
+    logger.info('保存图片时出错： ' + error.message);
+    throw error;
+  }
+}
+
+function readJsonFile(filePath: string): any[] {
+  try {
+    const data = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    throw new Error(`读取文件出错: ${error.message}`);
+  }
+}
+
+function writeJsonFile(filePath: string, data: any[]): void {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    throw new Error(`写入文件出错: ${error.message}`);
+  }
+}
 
 export async function apply(ctx: Context, config: Config) {
   const caveFilePath = path.join(ctx.baseDir, 'data', 'cave.json');
@@ -32,38 +89,18 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function saveImage(url: string, dirPath: string): Promise<string> {
-    const safeFilename = `${Date.now()}`;
-    const imageExtension = 'png';
-    let fileRoot = path.join(dirPath, safeFilename);
-    let fileExt = `.${imageExtension}`;
-    let targetPath = `${fileRoot}${fileExt}`;
-    let index = 0;
-
-    while (fs.existsSync(targetPath)) {
-      index++;
-      targetPath = `${fileRoot}_${index}${fileExt}`;
-    }
-
-    try {
-      const buffer = await ctx.http.get<ArrayBuffer>(url, { responseType: 'arraybuffer' });
-      if (buffer.byteLength === 0) throw new Error('下载的数据为空');
-      await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-      return targetPath;
-    } catch (error) {
-      console.error('保存图片时出错：', error.message);
-      throw error;
-    }
-  }
-
   await ensureFileExists(caveFilePath);
 
   ctx.command('cave [text]', '回声洞')
+    .example('cave')
+    .example('cave -a')
+    .example('cave -g <id>')
+    .example('cave -r <id>')
     .option('a', '-a 添加回声洞')
     .option('r', '-r 删除回声洞')
     .option('g', '-g 查看某个序号的回声洞')
     .action(async ({ session, options }, text) => {
-      const data = JSON.parse(fs.readFileSync(caveFilePath, 'utf8'));
+      const data = readJsonFile(caveFilePath);
 
       if (options.a) {
         let quote = session.quote;
@@ -105,7 +142,7 @@ export async function apply(ctx: Context, config: Config) {
 
         let imagePath = '';
         if (imageURL) {
-          imagePath = await saveImage(imageURL, assetsDir);
+          imagePath = await saveImages(imageURL, assetsDir, `${Date.now()}`, 'png', config, ctx);
         }
 
         let caveId = 1;
@@ -115,7 +152,7 @@ export async function apply(ctx: Context, config: Config) {
 
         const newCave = { cave_id: caveId, text: imagePath || text, contributor_id: session.userId, state: 1 };
         data.push(newCave);
-        fs.writeFileSync(caveFilePath, JSON.stringify(data, null, 2), 'utf8');
+        writeJsonFile(caveFilePath, data);
         return `添加成功, 序号为 [${caveId}]`;
       }
 
@@ -124,7 +161,7 @@ export async function apply(ctx: Context, config: Config) {
         const index = data.findIndex(item => item.cave_id === caveId);
         if (index === -1) return '未找到对应的回声洞序号。';
         data.splice(index, 1);
-        fs.writeFileSync(caveFilePath, JSON.stringify(data, null, 2), 'utf8');
+        writeJsonFile(caveFilePath, data);
         return `回声洞序号 ${caveId} 已成功删除。`;
       }
 
