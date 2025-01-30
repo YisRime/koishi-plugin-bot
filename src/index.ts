@@ -6,6 +6,9 @@ const logger = new Logger('cave');
 
 export const name = 'cave';
 
+// 添加 using 声明
+export const using = ['database'] as const;
+
 export interface User {
   userId: string;
   username: string;
@@ -89,31 +92,28 @@ function getRandomObject(data: any[]): any {
   return data[randomIndex];
 }
 
-// 定义 destructureAndPrint 函数
-function destructureAndPrint(message: any): string {
-  // 根据实际需求实现函数逻辑
-  return message.toString();
-}
-
 // 插件入口函数，用于初始化并绑定指令
 export async function apply(ctx: Context, config: Config) {
-  // 确保基础目录结构存在
-  const dataDir = path.join(ctx.baseDir, 'data');
-  const assetsDir = path.join(dataDir, 'assets');
-  const caveDir = path.join(assetsDir, 'cave');
-  const caveFilePath = path.join(assetsDir, 'cave.json');
+  // 确保数据库服务可用
+  ctx.on('ready', async () => {
+    // 确保基础目录结构存在
+    const dataDir = path.join(ctx.baseDir, 'data');
+    const assetsDir = path.join(dataDir, 'assets');
+    const caveDir = path.join(assetsDir, 'cave');
+    const caveFilePath = path.join(assetsDir, 'cave.json');
 
-  // 创建所需的目录结构
-  [dataDir, assetsDir, caveDir].forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    // 创建所需的目录结构
+    [dataDir, assetsDir, caveDir].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    });
+
+    // 确保 cave.json 文件存在
+    if (!fs.existsSync(caveFilePath)) {
+      fs.writeFileSync(caveFilePath, '[]', 'utf8');
     }
   });
-
-  // 确保 cave.json 文件存在
-  if (!fs.existsSync(caveFilePath)) {
-    fs.writeFileSync(caveFilePath, '[]', 'utf8');
-  }
 
   const lastUsed: Map<string, number> = new Map();
 
@@ -123,14 +123,7 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function ensureDirExists(dirPath: string) {
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-  }
-
-  await ensureFileExists(caveFilePath);
-
+  // 注册命令
   ctx.command('cave [text]', '回声洞')
     .example('cave')
     .example('cave -a')
@@ -140,6 +133,8 @@ export async function apply(ctx: Context, config: Config) {
     .option('r', '-r 删除回声洞')
     .option('g', '-g 查看某个序号的回声洞')
     .action(async ({ session, options }, inputText) => {
+      const caveFilePath = path.join(ctx.baseDir, 'data', 'assets', 'cave.json');
+      const assetsDir = path.join(ctx.baseDir, 'data', 'assets');
       // 根据不同子命令执行相应逻辑
       const data = readJsonFile(caveFilePath);
 
