@@ -51,13 +51,26 @@ async function saveImages(url: string, selectedPath: string, safeFilename: strin
   }
 }
 
-// 从文件读取 JSON 并解析为对象数组
+// 更新 readJsonFile 函数
 function readJsonFile(filePath: string): any[] {
   try {
+    // 确保目录存在
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // 如果文件不存在，创建空数组文件
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, '[]', 'utf8');
+      return [];
+    }
+
     const data = fs.readFileSync(filePath, 'utf8');
     return JSON.parse(data);
   } catch (error) {
-    throw new Error(`读取文件出错: ${error.message}`);
+    logger.error(`读取文件出错: ${error.message}`);
+    return [];
   }
 }
 
@@ -84,9 +97,24 @@ function destructureAndPrint(message: any): string {
 
 // 插件入口函数，用于初始化并绑定指令
 export async function apply(ctx: Context, config: Config) {
-  const caveFilePath = path.join(ctx.baseDir, 'data', 'assets', 'cave.json');
-  const assetsDir = path.join(ctx.baseDir, 'data', 'assets', 'cave');
-  await ensureDirExists(assetsDir);
+  // 确保基础目录结构存在
+  const dataDir = path.join(ctx.baseDir, 'data');
+  const assetsDir = path.join(dataDir, 'assets');
+  const caveDir = path.join(assetsDir, 'cave');
+  const caveFilePath = path.join(assetsDir, 'cave.json');
+
+  // 创建所需的目录结构
+  [dataDir, assetsDir, caveDir].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+
+  // 确保 cave.json 文件存在
+  if (!fs.existsSync(caveFilePath)) {
+    fs.writeFileSync(caveFilePath, '[]', 'utf8');
+  }
+
   const lastUsed: Map<string, number> = new Map();
 
   async function ensureFileExists(filePath: string) {
