@@ -19,24 +19,21 @@ export interface getStrangerInfo {
 export interface Config {
   manager: string[];
   number: number;
-  consoleinfo?: boolean;
+  nameinfo?: boolean;
 }
 
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required().description('管理员QQ，一个项目填一个ID'),
   number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒'),
-  consoleinfo: Schema.boolean().default(false).description('是否在控制台输出信息')
+  nameinfo: Schema.boolean().default(false).description('是否显示用户名')
 });
 
+// 保存图片至指定目录并返回保存后的文件路径
 async function saveImages(url: string, selectedPath: string, safeFilename: string, imageExtension: string, config: Config, ctx: Context): Promise<string> {
   let fileRoot = path.join(selectedPath, safeFilename);
   let fileExt = `.${imageExtension}`;
   let targetPath = `${fileRoot}${fileExt}`;
   let index = 0;
-
-  if (config.consoleinfo) {
-    logger.info('提取到的图片链接：' + url);
-  }
 
   while (fs.existsSync(targetPath)) {
     index++;
@@ -54,6 +51,7 @@ async function saveImages(url: string, selectedPath: string, safeFilename: strin
   }
 }
 
+// 从文件读取 JSON 并解析为对象数组
 function readJsonFile(filePath: string): any[] {
   try {
     const data = fs.readFileSync(filePath, 'utf8');
@@ -63,6 +61,7 @@ function readJsonFile(filePath: string): any[] {
   }
 }
 
+// 将对象数组写入到 JSON 文件
 function writeJsonFile(filePath: string, data: any[]): void {
   try {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
@@ -71,8 +70,21 @@ function writeJsonFile(filePath: string, data: any[]): void {
   }
 }
 
+// 从对象数组中随机选择一个对象
+function getRandomObject(data: any[]): any {
+  const randomIndex = Math.floor(Math.random() * data.length);
+  return data[randomIndex];
+}
+
+// 定义 destructureAndPrint 函数
+function destructureAndPrint(message: any): string {
+  // 根据实际需求实现函数逻辑
+  return message.toString();
+}
+
+// 插件入口函数，用于初始化并绑定指令
 export async function apply(ctx: Context, config: Config) {
-  const caveFilePath = path.join(ctx.baseDir, 'data', 'cave.json');
+  const caveFilePath = path.join(ctx.baseDir, 'assets', 'cave.json');
   const assetsDir = path.join(ctx.baseDir, 'assets', 'cave');
   await ensureDirExists(assetsDir);
   const lastUsed: Map<string, number> = new Map();
@@ -100,44 +112,17 @@ export async function apply(ctx: Context, config: Config) {
     .option('r', '-r 删除回声洞')
     .option('g', '-g 查看某个序号的回声洞')
     .action(async ({ session, options }, text) => {
+      // 根据不同子命令执行相应逻辑
       const data = readJsonFile(caveFilePath);
 
       if (options.a) {
-        let quote = session.quote;
+        // 处理添加回声洞
         let imageURL: string;
         let sessioncontent: string = session.content;
 
         imageURL = h.select(sessioncontent, 'img').map(a => a.attrs.src)[0];
-        if (!imageURL && !quote) {
-          return '请输入图片或引用回复一条消息';
-        }
-
-        let elements = quote?.elements;
-        let textContents = [];
-        let imgSrcs = [];
-        let message = [];
-
-        if (elements) {
-          elements.forEach(element => {
-            if (element.type === 'text') {
-              textContents.push(element.attrs.content);
-            } else if (element.type === 'img') {
-              imgSrcs.push(element.attrs.src);
-            }
-          });
-
-          let textMessage = {
-            type: 'text',
-            text: textContents.join(' ')
-          };
-          if (textContents.length > 0) {
-            message.push(textMessage);
-          }
-          imageURL = imgSrcs[0];
-        } else if (imageURL) {
-          let quotemessage: string | h[];
-          quotemessage = session.quote?.content ?? imageURL;
-          imageURL = h.select(quotemessage, 'img').map(a => a.attrs.src)[0];
+        if (!imageURL && !text) {
+          return '请输入图片或文字';
         }
 
         let imagePath = '';
@@ -191,10 +176,71 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       lastUsed.set(guildId, now);
-      const randomCave = data[Math.floor(Math.random() * data.length)];
-      if (randomCave.text.startsWith('http')) {
-        return `回声洞 —— [${randomCave.cave_id}]\n${h('image', { src: randomCave.text })}\n—— ${randomCave.contributor_id}`;
+      const randomObject = getRandomObject(data);
+      const { cave_id, message, contributor_id } = randomObject;
+
+      let texts = randomObject.message.map(destructureAndPrint);
+      let messages = randomObject.message.map(destructureAndPrint);
+      let filteredTexts = texts.filter(text => text !== undefined);
+
+      let username = contributor_id;
+      if (config.nameinfo) {
+        const user = await ctx.bots[0].getUser(contributor_id);
+        username = user.name;
       }
-      return `回声洞 —— [${randomCave.cave_id}]\n${randomCave.text}\n—— ${randomCave.contributor_id}`;
+
+      let chars = filteredTexts.map(text => {
+        if (text !== undefined) {
+          if (text.includes('\\u')) {
+            let codePoints = text.split('\\u').filter(Boolean).map(hex => {
+              let codePoint = parseInt(hex, 16);
+              if (isNaN(codePoint)) {
+                return '';
+              }
+              return String.fromCodePoint(codePoint);
+            });
+            return codePoints.join('');
+          } else {
+            try {
+              return JSON.parse(`"${text.replace(/"/g, '\\"')}"`);
+            } catch (e) {
+              console.error(e);
+              return text;
+            }
+          }
+        }
+        return '';
+      });
+
+      const file = 'file:///';
+      let str = chars.join('');
+      if (!str) {
+        const messageElements = [
+          `回声洞 —— [ ${cave_id} ]`,
+          `\n`,
+          h('image', { src: file + messages.filter(msg => msg).join('\n') }),
+          `—— ${username}`
+        ];
+        session.send(messageElements);
+      } else if (messages.length === 1 && messages[0] !== '') {
+        const messageElements = [
+          `回声洞 —— [ ${cave_id} ]`,
+          `\n\n`,
+          h.text(str),
+          '\n\n',
+          h('image', { src: file + messages.filter(msg => msg).join('\n') }),
+          `—— ${username}`
+        ];
+        session.send(messageElements);
+      } else {
+        const messageElements = [
+          `回声洞 —— [ ${cave_id} ]`,
+          `\n\n`,
+          h.text(str),
+          '\n\n',
+          `—— ${username}`
+        ];
+        session.send(messageElements);
+      }
     });
 }
