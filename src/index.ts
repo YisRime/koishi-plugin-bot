@@ -221,29 +221,41 @@ export async function apply(ctx: Context, config: Config) {
         return `回声洞序号 ${caveId} 已成功删除。`;
       }
 
-      // 修改显示逻辑
+      // 修改显示逻辑，添加空值检查
       if (options.g || !options.a) {
         const cave = options.g ?
           data.find(item => item.cave_id === Number(inputText)) :
           getRandomObject(data);
 
         if (!cave) return options.g ? '未找到对应的回声洞序号。' : '获取回声洞失败';
+        if (!cave.message || !Array.isArray(cave.message)) {
+          return '回声洞数据格式错误';
+        }
 
         let username = cave.contributor_id;
         if (config.nameinfo) {
           try {
-            const user = await ctx.bots[0].getUser(cave.contributor_id);
-            username = user.name;
+            const user = await ctx.bots[0]?.getUser(cave.contributor_id);
+            username = user?.name || cave.contributor_id;
           } catch (error) {
             logger.warn(`获取用户名失败: ${error}`);
           }
         }
 
-        const messageContent = cave.message.map(msg => {
-          if (msg.type === 'text') return msg.text;
-          if (msg.type === 'image') return h('image', { src: msg.path });
-          return '';
-        }).filter(Boolean).join('\n');
+        // 确保 message 数组中的每个元素都是有效的
+        const messageContent = cave.message
+          .filter(msg => msg && (msg.type === 'text' || msg.type === 'image'))
+          .map(msg => {
+            if (msg.type === 'text' && msg.text) return msg.text;
+            if (msg.type === 'image' && msg.path) return h('image', { src: msg.path });
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n');
+
+        if (!messageContent) {
+          return '回声洞内容为空';
+        }
 
         return `回声洞 —— [${cave.cave_id}]\n${messageContent}\n—— ${username}`;
       }
