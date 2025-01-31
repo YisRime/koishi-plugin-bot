@@ -77,7 +77,7 @@ function readJsonFile(filePath: string): CaveObject[] {
     return parsed.filter(item =>
       item &&
       typeof item.cave_id === 'number' &&
-      Array.isArray(item.message) &&
+      typeof item.text === 'string' &&
       typeof item.contributor_id === 'string'
     );
   } catch (error) {
@@ -93,7 +93,7 @@ function writeJsonFile(filePath: string, data: CaveObject[]): void {
     const validData = data.filter(item =>
       item &&
       typeof item.cave_id === 'number' &&
-      Array.isArray(item.message) &&
+      typeof item.text === 'string' &&
       typeof item.contributor_id === 'string'
     );
     fs.writeFileSync(filePath, JSON.stringify(validData, null, 2), 'utf8');
@@ -110,15 +110,9 @@ function getRandomObject(data: CaveObject[]): CaveObject | undefined {
 }
 
 // 添加新的接口定义
-interface MessageContent {
-  type: 'text' | 'image';
-  text?: string;
-  path?: string;
-}
-
 interface CaveObject {
   cave_id: number;
-  message: MessageContent[];
+  text: string;
   contributor_id: string;
 }
 
@@ -159,43 +153,95 @@ export async function apply(ctx: Context, config: Config) {
       const inputText = content.join(' ');
 
       try {
-        // 修改查看功能的逻辑
+        // 添加功能
+        if (options.a) {
+          let imageURL = h.select(session.content, 'img').map(a => a.attrs.src)[0];
+          if (!imageURL && !inputText) {
+            return '请输入图片或文字';
+          }
+
+          let caveId = 1;
+          while (data.some(item => item.cave_id === caveId)) {
+            caveId++;
+          }
+
+          let finalContent = inputText;
+          if (imageURL) {
+            try {
+              finalContent = await saveImages(imageURL, caveDir, `cave_${caveId}`, 'png', config, ctx);
+            } catch (error) {
+              logger.error(`保存图片失败: ${error.message}`);
+              return '图片保存失败，请稍后重试';
+            }
+          }
+
+          const newCave = {
+            cave_id: caveId,
+            text: finalContent,
+            contributor_id: session.userId
+          };
+
+          data.push(newCave);
+          writeJsonFile(caveFilePath, data);
+          return `添加成功, 序号为 [${caveId}]`;
+        }
+
+        // 查看功能
         if (options.g) {
-          if (typeof options.g !== 'string') {
-            return '请输入有效的回声洞序号';
-          }
-          const caveId = parseInt(options.g);
+          const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
           if (isNaN(caveId)) {
-            return '请输入有效的回声洞序号';
+            return '请输入有效的回声洞序号。';
           }
+
           const cave = data.find(item => item.cave_id === caveId);
           if (!cave) {
             return '未找到对应的回声洞序号。';
           }
 
-          // 使用 session.send 直接发送消息
-          const messageElements = [];
-          messageElements.push(`回声洞 —— [ ${cave.cave_id} ]\n\n`);
-
-          // 处理消息内容
-          for (const msg of cave.message) {
-            if (msg.type === 'text' && msg.text) {
-              messageElements.push(msg.text);
-              messageElements.push('\n\n');
-            } else if (msg.type === 'image' && msg.path) {
-              const imagePath = msg.path.startsWith('/') || msg.path.startsWith('http')
-                ? msg.path
-                : `file:///${msg.path}`;
-              messageElements.push(h('image', { src: imagePath }));
-              messageElements.push('\n');
-            }
+          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
+            return [
+              `回声洞 —— [${cave.cave_id}]\n`,
+              h('image', { src: cave.text }),
+              `\n—— ${cave.contributor_id}`
+            ].join('');
           }
 
-          messageElements.push(`—— ${cave.contributor_id}`);
-          return session.send(messageElements.join(''));
+          return [
+            `回声洞 —— [${cave.cave_id}]\n`,
+            cave.text,
+            `\n—— ${cave.contributor_id}`
+          ].join('');
         }
 
-        // 删除回声洞
+        // 随机查看（默认功能）
+        if (!options.a && !options.g && !options.r) {
+          if (data.length === 0) return '当前无回声洞。';
+
+          // 处理冷却时间
+          const guildId = session.guildId;
+          const now = Date.now();
+          const lastCall = lastUsed.get(guildId) || 0;
+
+          if (now - lastCall < config.number * 1000) {
+            return `群回声洞调用的太频繁了, 请等待${Math.ceil((config.number * 1000 - (now - lastCall)) / 1000)}秒后再试`;
+          }
+
+          lastUsed.set(guildId, now);
+          const cave = getRandomObject(data);
+          if (!cave) return '获取回声洞失败';
+          if (!cave.text) return '回声洞内容为空';
+
+          return [
+            `回声洞 —— [ ${cave.cave_id} ]\n`,
+            cave.text.startsWith('/') || cave.text.startsWith('http')
+              ? h('image', { src: cave.text })
+              : h.text(cave.text),
+            '\n',
+            `—— ${cave.contributor_id}`
+          ].join('');
+        }
+
+        // 删除功能
         if (options.r) {
           if (typeof options.r !== 'string') return '请输入有效的回声洞序号';
           const caveId = parseInt(options.r);
@@ -206,115 +252,6 @@ export async function apply(ctx: Context, config: Config) {
           writeJsonFile(caveFilePath, data);
           return `回声洞序号 ${caveId} 已成功删除。`;
         }
-
-        // 添加回声洞
-        if (options.a) {
-          let quote = session.quote;
-          let imageURL = h.select(session.content, 'img').map(a => a.attrs.src)[0];
-
-          if (!imageURL && !quote) {
-            return '请输入图片或引用回复一条消息';
-          }
-
-          let message = [];
-
-          // 处理引用消息
-          if (quote) {
-            const elements = h.parse(quote.content);
-            const textContents = [];
-            const imgSrcs = [];
-
-            for (const element of elements) {
-              if (element.type === 'text' && element.attrs?.content) {
-                textContents.push(element.attrs.content.trim());
-              } else if (element.type === 'img' && element.attrs?.src) {
-                imgSrcs.push(element.attrs.src);
-              }
-            }
-
-            // 添加文本内容
-            if (textContents.length > 0) {
-              message.push({
-                type: 'text',
-                text: textContents.join(' ')
-              });
-            }
-
-            // 设置图片URL（如果存在）
-            if (imgSrcs.length > 0) {
-              imageURL = imgSrcs[0];
-            }
-          }
-
-          // 处理图片
-          if (imageURL) {
-            try {
-              const caveId = Math.max(0, ...data.map(item => item.cave_id)) + 1;
-              const savedPath = await saveImages(
-                imageURL,
-                caveDir,
-                `cave_${caveId}`,
-                'png',
-                config,
-                ctx
-              );
-              if (savedPath) {
-                message.push({
-                  type: 'image',
-                  path: savedPath
-                });
-              }
-            } catch (error) {
-              logger.error(`保存图片失败: ${error.message}`);
-              return '图片保存失败，请稍后重试';
-            }
-          }
-
-          if (message.length === 0) {
-            return '请不要引用合并转发,视频,语音等\n或消息在bot重启之前发送,无法寻找上下文';
-          }
-
-          const caveId = Math.max(0, ...data.map(item => item.cave_id)) + 1;
-          const newCave: CaveObject = {
-            cave_id: caveId,
-            message,
-            contributor_id: session.userId
-          };
-
-          data.push(newCave);
-          writeJsonFile(caveFilePath, data);
-          return `添加成功, 序号为 [${caveId}]`;
-        }
-
-        // 随机查看
-        if (data.length === 0) return '当前无回声洞。';
-
-        const guildId = session.guildId;
-        const now = Date.now();
-        const lastCall = lastUsed.get(guildId) || 0;
-        if (now - lastCall < config.number * 1000) {
-          return `群回声洞调用的太频繁了, 请等待${Math.ceil((config.number * 1000 - (now - lastCall)) / 1000)}秒后再试`;
-        }
-
-        lastUsed.set(guildId, now);
-        const cave = getRandomObject(data);
-        if (!cave) return '获取回声洞失败';
-
-        const messageElements = [`回声洞 —— [ ${cave.cave_id} ]\n`];
-
-        // 处理消息内容
-        for (const msg of cave.message) {
-          if (msg.type === 'text' && msg.text) {
-            messageElements.push(h.text(msg.text).toString());
-            messageElements.push('\n');
-          } else if (msg.type === 'image' && msg.path) {
-            messageElements.push(h('image', { src: msg.path }).toString());
-            messageElements.push('\n');
-          }
-        }
-
-        messageElements.push(`—— ${cave.contributor_id}`);
-        return session.send(messageElements);
 
       } catch (error) {
         logger.error(`执行命令出错: ${error.message}`);
