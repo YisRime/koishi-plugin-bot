@@ -147,8 +147,8 @@ export async function apply(ctx: Context, config: Config) {
     .example('cave -r 1      删除序号为1的回声洞')
     .option('a', '添加回声洞')
     // 修改选项类型定义
-    .option('g', '查看指定回声洞', { type: 'number' })
-    .option('r', '删除回声洞', { type: 'number' })
+    .option('g', '查看指定回声洞', { type: 'string' })
+    .option('r', '删除回声洞', { type: 'string' })
     .before(async ({ session, options }) => {
       if (options.r && !config.manager.includes(session.userId)) {
         return '你没有删除回声洞的权限';
@@ -160,14 +160,39 @@ export async function apply(ctx: Context, config: Config) {
 
       try {
         // 修改查看功能的逻辑
-        if (options.g !== undefined) {
-          const caveId = Number(options.g);
-          // 简化验证逻辑
-          if (!Number.isInteger(caveId)) {
+        if (options.g) {
+          if (typeof options.g !== 'string') {
+            return '请输入有效的回声洞序号';
+          }
+          const caveId = parseInt(options.g);
+          if (isNaN(caveId)) {
             return '请输入有效的回声洞序号';
           }
           const cave = data.find(item => item.cave_id === caveId);
-          return cave ? await displayCave(cave) : '未找到对应的回声洞序号。';
+          if (!cave) {
+            return '未找到对应的回声洞序号。';
+          }
+
+          // 使用 session.send 直接发送消息
+          const messageElements = [];
+          messageElements.push(`回声洞 —— [ ${cave.cave_id} ]\n\n`);
+
+          // 处理消息内容
+          for (const msg of cave.message) {
+            if (msg.type === 'text' && msg.text) {
+              messageElements.push(msg.text);
+              messageElements.push('\n\n');
+            } else if (msg.type === 'image' && msg.path) {
+              const imagePath = msg.path.startsWith('/') || msg.path.startsWith('http')
+                ? msg.path
+                : `file:///${msg.path}`;
+              messageElements.push(h('image', { src: imagePath }));
+              messageElements.push('\n');
+            }
+          }
+
+          messageElements.push(`—— ${cave.contributor_id}`);
+          return session.send(messageElements.join(''));
         }
 
         // 删除回声洞
@@ -184,42 +209,69 @@ export async function apply(ctx: Context, config: Config) {
 
         // 添加回声洞
         if (options.a) {
-          const message: MessageContent[] = [];
-          const elements = h.parse(session.content);
-          let isFirstText = true;
+          let quote = session.quote;
+          let imageURL = h.select(session.content, 'img').map(a => a.attrs.src)[0];
 
-          for (const element of elements) {
-            // 处理命令文本
-            if (element.type === 'text' && element.attrs?.content) {
-              const text = element.attrs.content.trim();
-              if (!isFirstText && text) {
-                message.push({ type: 'text', text });
+          if (!imageURL && !quote) {
+            return '请输入图片或引用回复一条消息';
+          }
+
+          let message = [];
+
+          // 处理引用消息
+          if (quote) {
+            const elements = h.parse(quote.content);
+            const textContents = [];
+            const imgSrcs = [];
+
+            for (const element of elements) {
+              if (element.type === 'text' && element.attrs?.content) {
+                textContents.push(element.attrs.content.trim());
+              } else if (element.type === 'img' && element.attrs?.src) {
+                imgSrcs.push(element.attrs.src);
               }
-              isFirstText = false;
             }
-            // 处理图片，使用简单序号作为文件名
-            else if (element.type === 'img' && element.attrs?.src) {
+
+            // 添加文本内容
+            if (textContents.length > 0) {
+              message.push({
+                type: 'text',
+                text: textContents.join(' ')
+              });
+            }
+
+            // 设置图片URL（如果存在）
+            if (imgSrcs.length > 0) {
+              imageURL = imgSrcs[0];
+            }
+          }
+
+          // 处理图片
+          if (imageURL) {
+            try {
               const caveId = Math.max(0, ...data.map(item => item.cave_id)) + 1;
-              try {
-                const savedPath = await saveImages(
-                  element.attrs.src,
-                  caveDir,
-                  caveId.toString(), // 直接使用序号作为文件名
-                  'png',
-                  config,
-                  ctx
-                );
-                if (savedPath) {
-                  message.push({ type: 'image', path: savedPath });
-                }
-              } catch (error) {
-                logger.error(`保存图片失败: ${error.message}`);
+              const savedPath = await saveImages(
+                imageURL,
+                caveDir,
+                `cave_${caveId}`,
+                'png',
+                config,
+                ctx
+              );
+              if (savedPath) {
+                message.push({
+                  type: 'image',
+                  path: savedPath
+                });
               }
+            } catch (error) {
+              logger.error(`保存图片失败: ${error.message}`);
+              return '图片保存失败，请稍后重试';
             }
           }
 
           if (message.length === 0) {
-            return '请输入文字或图片内容';
+            return '请不要引用合并转发,视频,语音等\n或消息在bot重启之前发送,无法寻找上下文';
           }
 
           const caveId = Math.max(0, ...data.map(item => item.cave_id)) + 1;
@@ -269,25 +321,5 @@ export async function apply(ctx: Context, config: Config) {
         return '执行命令时发生错误，请稍后重试';
       }
     });
-}
-
-async function displayCave(cave: CaveObject): Promise<h.Fragment> {
-  const messageElements = [`回声洞 —— [ ${cave.cave_id} ]\n`];
-
-  // 处理消息内容
-  for (const msg of cave.message) {
-    if (msg.type === 'text' && msg.text) {
-      messageElements.push('\n');
-      messageElements.push(h.text(msg.text).toString());
-      messageElements.push('\n');
-    } else if (msg.type === 'image' && msg.path) {
-      messageElements.push('\n');
-      messageElements.push(h('image', { src: msg.path }).toString());
-      messageElements.push('\n');
-    }
-  }
-
-  messageElements.push(`—— ${cave.contributor_id}`);
-  return h('message', null, ...messageElements);
 }
 
