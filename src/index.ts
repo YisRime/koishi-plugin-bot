@@ -6,7 +6,6 @@ const logger = new Logger('cave');
 
 export const name = 'cave';
 
-
 export interface User {
   userId: string;
   username: string;
@@ -37,13 +36,11 @@ async function saveImages(
   ctx: Context
 ): Promise<string> {
   const targetPath = path.join(caveDir, `${safeFilename}.${imageExtension}`);
-
   try {
     const buffer = await ctx.http.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
       timeout: 10000 // 添加超时设置
     });
-
     if (buffer.byteLength === 0) throw new Error('下载的数据为空');
     await fs.promises.writeFile(targetPath, Buffer.from(buffer));
     return targetPath;
@@ -61,13 +58,11 @@ function readJsonFile(filePath: string): CaveObject[] {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-
     // 如果文件不存在，创建空数组文件
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, '[]', 'utf8');
       return [];
     }
-
     const data = fs.readFileSync(filePath, 'utf8');
     const parsed = JSON.parse(data);
     // 验证数据格式
@@ -114,6 +109,21 @@ interface CaveObject {
   cave_id: number;
   text: string;
   contributor_id: string;
+}
+
+// 添加图片处理辅助函数
+function processImagePath(imagePath: string): string {
+  try {
+    if (fs.existsSync(imagePath)) {
+      const imageBuffer = fs.readFileSync(imagePath);
+      const base64Image = imageBuffer.toString('base64');
+      return `data:image/png;base64,${base64Image}`;
+    }
+    return imagePath;
+  } catch (error) {
+    logger.error(`处理图片失败: ${error.message}`);
+    return imagePath;
+  }
 }
 
 // 插件入口函数，用于初始化并绑定指令
@@ -198,21 +208,12 @@ export async function apply(ctx: Context, config: Config) {
             return '未找到对应的回声洞序号。';
           }
 
-          const messageElements = [];
-          messageElements.push(`回声洞 —— [${cave.cave_id}]\n`);
-
-          // 修改图片路径处理
+          // 修改后的消息构建
           if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
-            messageElements.push({
-              type: 'image',
-              data: { file: cave.text }
-            });
-          } else {
-            messageElements.push(cave.text);
+            const imageSrc = processImagePath(cave.text);
+            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
           }
-
-          messageElements.push(`\n—— ${cave.contributor_id}`);
-          return session.send(messageElements);
+          return `回声洞 —— [${cave.cave_id}]\n${cave.text}\n—— ${cave.contributor_id}`;
         }
 
         // 随机查看（默认功能）
@@ -233,21 +234,12 @@ export async function apply(ctx: Context, config: Config) {
           if (!cave) return '获取回声洞失败';
           if (!cave.text) return '回声洞内容为空';
 
-          const messageElements = [];
-          messageElements.push(`回声洞 —— [${cave.cave_id}]\n`);
-
-          // 修改图片路径处理
+          // 修改后的消息构建
           if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
-            messageElements.push({
-              type: 'image',
-              data: { file: cave.text }
-            });
-          } else {
-            messageElements.push(cave.text);
+            const imageSrc = processImagePath(cave.text);
+            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
           }
-
-          messageElements.push(`\n—— ${cave.contributor_id}`);
-          return session.send(messageElements);
+          return `回声洞 —— [${cave.cave_id}]\n${cave.text}\n—— ${cave.contributor_id}`;
         }
 
         // 删除功能
