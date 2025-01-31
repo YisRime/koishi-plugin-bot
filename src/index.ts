@@ -198,19 +198,16 @@ export async function apply(ctx: Context, config: Config) {
             return '未找到对应的回声洞序号。';
           }
 
-          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
-            return [
-              `回声洞 —— [${cave.cave_id}]\n`,
-              h('image', { src: cave.text }),
-              `\n—— ${cave.contributor_id}`
-            ].join('');
-          }
-
-          return [
+          const messageElements = [
             `回声洞 —— [${cave.cave_id}]\n`,
-            cave.text,
-            `\n—— ${cave.contributor_id}`
-          ].join('');
+            cave.text.startsWith('/') || cave.text.startsWith('http')
+              ? h.image('file:///' + cave.text)
+              : h.text(cave.text),
+            '\n',
+            `—— ${cave.contributor_id}`
+          ];
+
+          return session.send(messageElements);
         }
 
         // 随机查看（默认功能）
@@ -231,23 +228,30 @@ export async function apply(ctx: Context, config: Config) {
           if (!cave) return '获取回声洞失败';
           if (!cave.text) return '回声洞内容为空';
 
-          return [
+          const messageElements = [
             `回声洞 —— [ ${cave.cave_id} ]\n`,
             cave.text.startsWith('/') || cave.text.startsWith('http')
-              ? h('image', { src: cave.text })
+              ? h.image('file:///' + cave.text)
               : h.text(cave.text),
             '\n',
             `—— ${cave.contributor_id}`
-          ].join('');
+          ];
+
+          return session.send(messageElements);
         }
 
         // 删除功能
         if (options.r) {
-          if (typeof options.r !== 'string') return '请输入有效的回声洞序号';
-          const caveId = parseInt(options.r);
-          if (isNaN(caveId)) return '请输入有效的回声洞序号';
+          const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
+          if (isNaN(caveId)) {
+            return '请输入有效的回声洞序号。';
+          }
+
           const index = data.findIndex(item => item.cave_id === caveId);
-          if (index === -1) return '未找到对应的回声洞序号。';
+          if (index === -1) {
+            return '未找到对应的回声洞序号。';
+          }
+
           data.splice(index, 1);
           writeJsonFile(caveFilePath, data);
           return `回声洞序号 ${caveId} 已成功删除。`;
