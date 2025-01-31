@@ -198,15 +198,20 @@ export async function apply(ctx: Context, config: Config) {
             return '未找到对应的回声洞序号。';
           }
 
-          const messageElements = [
-            `回声洞 —— [${cave.cave_id}]\n`,
-            cave.text.startsWith('/') || cave.text.startsWith('http')
-              ? h.image('file:///' + cave.text)
-              : h.text(cave.text),
-            '\n',
-            `—— ${cave.contributor_id}`
-          ];
+          const messageElements = [];
+          messageElements.push(`回声洞 —— [${cave.cave_id}]\n`);
 
+          // 修改图片路径处理
+          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
+            messageElements.push({
+              type: 'image',
+              data: { file: cave.text }
+            });
+          } else {
+            messageElements.push(cave.text);
+          }
+
+          messageElements.push(`\n—— ${cave.contributor_id}`);
           return session.send(messageElements);
         }
 
@@ -228,15 +233,20 @@ export async function apply(ctx: Context, config: Config) {
           if (!cave) return '获取回声洞失败';
           if (!cave.text) return '回声洞内容为空';
 
-          const messageElements = [
-            `回声洞 —— [ ${cave.cave_id} ]\n`,
-            cave.text.startsWith('/') || cave.text.startsWith('http')
-              ? h.image('file:///' + cave.text)
-              : h.text(cave.text),
-            '\n',
-            `—— ${cave.contributor_id}`
-          ];
+          const messageElements = [];
+          messageElements.push(`回声洞 —— [${cave.cave_id}]\n`);
 
+          // 修改图片路径处理
+          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
+            messageElements.push({
+              type: 'image',
+              data: { file: cave.text }
+            });
+          } else {
+            messageElements.push(cave.text);
+          }
+
+          messageElements.push(`\n—— ${cave.contributor_id}`);
           return session.send(messageElements);
         }
 
