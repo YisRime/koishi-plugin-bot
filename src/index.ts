@@ -30,14 +30,14 @@ export const Config: Schema<Config> = Schema.object({
 // 修改 saveImages 函数，简化路径处理
 async function saveImages(
   url: string,
-  caveDir: string,
+  imageDir: string,  // 改为直接使用 imageDir
   caveId: number,
   imageExtension: string,
   config: Config,
   ctx: Context
 ): Promise<string> {
   const filename = `cave_${caveId}.${imageExtension}`;
-  const targetPath = path.join(caveDir, filename);
+  const targetPath = path.join(imageDir, filename);  // 使用 imageDir
   try {
     const buffer = await ctx.http.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
@@ -108,11 +108,12 @@ function getRandomObject(data: CaveObject[]): CaveObject | undefined {
   return data[randomIndex];
 }
 
-// 修改接口定义
+// 修改接口定义，添加网络图片字段
 interface CaveObject {
   cave_id: number;
   text: string;
-  image_path?: string;  // 新增图片路径字段
+  image_path?: string;     // 本地图片路径
+  image_url?: string;      // 备用网络图片URL
   contributor_number: string;  // 原来的 contributor_id
   contributor_name: string;    // 新增昵称字段
 }
@@ -201,8 +202,9 @@ export async function apply(ctx: Context, config: Config) {
 
           if (imageURL) {
             try {
-              const filename = await saveImages(imageURL, caveDir, caveId, 'png', config, ctx);
+              const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
               newCave.image_path = filename;
+              newCave.image_url = imageURL;  // 保存原始URL作为备份
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
               return '图片保存失败，请稍后重试';
@@ -220,7 +222,9 @@ export async function apply(ctx: Context, config: Config) {
           if (cave.image_path) {
             const imagePath = path.join(imageDir, cave.image_path);
             const imageSrc = processImagePath(imagePath);
-            content += `\n${h('image', { src: imageSrc })}`;
+            if (imageSrc !== imagePath) {  // 只有成功读取到本地图片时才显示
+              content += `\n${h('image', { src: imageSrc })}`;
+            }
           }
           return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
         };
