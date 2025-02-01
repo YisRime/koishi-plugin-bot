@@ -253,9 +253,108 @@ export async function apply(ctx: Context, config: Config) {
 
     // 命令处理函数
     .action(async ({ session, options }, ...content) => {
-      const data = readJsonFile(caveFilePath);
-
       try {
+        // 优先处理审核相关命令
+        if (options.p || options.d || options.pa || options.da) {
+          const pendingData = readPendingFile(pendingFilePath);
+
+          // 处理一键通过所有待审核
+          if (options.pa) {
+            if (pendingData.length === 0) return '没有待审核的回声洞';
+
+            const data = readJsonFile(caveFilePath);
+            for (const cave of pendingData) {
+              data.push(cave);
+              if (cave.groupId) {
+                await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${cave.cave_id} 已通过审核`);
+              }
+            }
+
+            writeJsonFile(caveFilePath, data);
+            writePendingFile(pendingFilePath, []);
+            return `✅ 已通过全部 ${pendingData.length} 条待审核回声洞`;
+          }
+
+          // 处理一键拒绝所有待审核
+          if (options.da) {
+            if (pendingData.length === 0) return '没有待审核的回声洞';
+
+            for (const cave of pendingData) {
+              // 删除图片
+              if (cave.images) {
+                for (const imagePath of cave.images) {
+                  const fullPath = path.join(imageDir, imagePath);
+                  if (fs.existsSync(fullPath)) {
+                    fs.unlinkSync(fullPath);
+                  }
+                }
+              }
+              if (cave.groupId) {
+                await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${cave.cave_id} 未通过审核`);
+              }
+            }
+
+            writePendingFile(pendingFilePath, []);
+            return `❌ 已拒绝全部 ${pendingData.length} 条待审核回声洞`;
+          }
+
+          // 处理通过单条审核
+          if (options.p) {
+            const id = parseInt(content[0] || (typeof options.p === 'string' ? options.p : ''));
+            if (isNaN(id)) return '请输入正确的回声洞编号';
+
+            const pendingData = readPendingFile(pendingFilePath);
+            const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
+            if (pendingIndex === -1) return '未找到该待审核回声洞';
+
+            const cave = pendingData[pendingIndex];
+            const data = readJsonFile(caveFilePath);
+            data.push(cave);
+            writeJsonFile(caveFilePath, data);
+
+            pendingData.splice(pendingIndex, 1);
+            writePendingFile(pendingFilePath, pendingData);
+
+            if (cave.groupId) {
+              await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${id} 已通过审核`);
+            }
+            return '审核通过成功';
+          }
+
+          // 处理拒绝单条审核
+          if (options.d) {
+            const id = parseInt(content[0] || (typeof options.d === 'string' ? options.d : ''));
+            if (isNaN(id)) return '请输入正确的回声洞编号';
+
+            const pendingData = readPendingFile(pendingFilePath);
+            const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
+            if (pendingIndex === -1) return '未找到该待审核回声洞';
+
+            const cave = pendingData[pendingIndex];
+            if (cave.images) {
+              for (const imagePath of cave.images) {
+                const fullPath = path.join(imageDir, imagePath);
+                if (fs.existsSync(fullPath)) {
+                  fs.unlinkSync(fullPath);
+                }
+              }
+            }
+
+            pendingData.splice(pendingIndex, 1);
+            writePendingFile(pendingFilePath, pendingData);
+
+            if (cave.groupId) {
+              await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${id} 未通过审核`);
+            }
+            return '已拒绝该回声洞';
+          }
+
+          return; // 确保审核命令执行后不会继续执行其他命令
+        }
+
+        const data = readJsonFile(caveFilePath);
+
+        // 处理添加回声洞时的审核消息发送
         if (options.a) {
           let imageURLs: string[] = [];
           let cleanText = '';
@@ -352,16 +451,31 @@ export async function apply(ctx: Context, config: Config) {
             pendingData.push(pendingCave);
             writePendingFile(pendingFilePath, pendingData);
 
-            // 发送审核通知给主人
-            const auditMessage = `📝 新回声洞待审核 #${caveId}\n`
-              + `内容：${pendingCave.text}\n`
-              + `来自：${pendingCave.contributor_name}\n`
-              + `群组：${pendingCave.groupId || '私聊'}\n`
-              + `处理方式：\n`
-              + `同意 ${caveId} - 通过审核\n`
-              + `拒绝 ${caveId} - 拒绝通过`;
+            // 构建审核消息，包含图片
+            let auditMessage = `新回声洞待审核 —— [${caveId}]\n`;
+            auditMessage += `内容：${pendingCave.text}\n`;
+            auditMessage += `来自：${pendingCave.contributor_name}\n`;
+            auditMessage += `群组：${pendingCave.groupId || '私聊'}\n`;
+            auditMessage += `处理方式：cave -p ${caveId} (通过) 或 cave -d ${caveId} (拒绝)`;
 
-            ctx.bots[0]?.sendPrivateMessage(config.manager[0], auditMessage);
+            // 发送文本消息
+            await ctx.bots[0]?.sendPrivateMessage(config.manager[0], auditMessage);
+
+            // 如果有图片，单独发送图片预览
+            if (pendingCave.images && pendingCave.images.length > 0) {
+              for (const imagePath of pendingCave.images) {
+                const fullImagePath = path.join(imageDir, imagePath);
+                if (fs.existsSync(fullImagePath)) {
+                  const imageBuffer = fs.readFileSync(fullImagePath);
+                  const base64Image = imageBuffer.toString('base64');
+                  await ctx.bots[0]?.sendPrivateMessage(
+                    config.manager[0],
+                    h('image', { src: `data:image/png;base64,${base64Image}` })
+                  );
+                }
+              }
+            }
+
             return '✨ 回声洞已提交审核，请等待审核结果';
           }
 
@@ -407,7 +521,7 @@ export async function apply(ctx: Context, config: Config) {
               logger.error(`读取图片失败: ${error.message}`);
             }
           }
-          return `📝 回声洞 #${cave.cave_id}\n${content}\n——${cave.contributor_name}`;
+          return `回声洞 —— [${cave.cave_id}]\n${content}\n——${cave.contributor_name}`;
         };
 
         // 查看指定回声洞
@@ -481,99 +595,6 @@ export async function apply(ctx: Context, config: Config) {
           data.splice(index, 1);
           writeJsonFile(caveFilePath, data);
           return `✅ 已删除 #${caveId} 号回声洞`;
-        }
-
-        // 处理一键通过所有待审核
-        if (options.pa) {
-          const pendingData = readPendingFile(pendingFilePath);
-          if (pendingData.length === 0) return '没有待审核的回声洞';
-
-          const data = readJsonFile(caveFilePath);
-          for (const cave of pendingData) {
-            data.push(cave);
-            if (cave.groupId) {
-              await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${cave.cave_id} 已通过审核`);
-            }
-          }
-
-          writeJsonFile(caveFilePath, data);
-          writePendingFile(pendingFilePath, []);
-          return `✅ 已通过全部 ${pendingData.length} 条待审核回声洞`;
-        }
-
-        // 处理一键拒绝所有待审核
-        if (options.da) {
-          const pendingData = readPendingFile(pendingFilePath);
-          if (pendingData.length === 0) return '没有待审核的回声洞';
-
-          for (const cave of pendingData) {
-            // 删除图片
-            if (cave.images) {
-              for (const imagePath of cave.images) {
-                const fullPath = path.join(imageDir, imagePath);
-                if (fs.existsSync(fullPath)) {
-                  fs.unlinkSync(fullPath);
-                }
-              }
-            }
-            if (cave.groupId) {
-              await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${cave.cave_id} 未通过审核`);
-            }
-          }
-
-          writePendingFile(pendingFilePath, []);
-          return `❌ 已拒绝全部 ${pendingData.length} 条待审核回声洞`;
-        }
-
-        // 处理通过单条审核
-        if (options.p) {
-          const id = parseInt(content[0] || (typeof options.p === 'string' ? options.p : ''));
-          if (isNaN(id)) return '请输入正确的回声洞编号';
-
-          const pendingData = readPendingFile(pendingFilePath);
-          const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
-          if (pendingIndex === -1) return '未找到该待审核回声洞';
-
-          const cave = pendingData[pendingIndex];
-          const data = readJsonFile(caveFilePath);
-          data.push(cave);
-          writeJsonFile(caveFilePath, data);
-
-          pendingData.splice(pendingIndex, 1);
-          writePendingFile(pendingFilePath, pendingData);
-
-          if (cave.groupId) {
-            await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${id} 已通过审核`);
-          }
-          return '审核通过成功';
-        }
-
-        // 处理拒绝单条审核
-        if (options.d) {
-          const id = parseInt(content[0] || (typeof options.d === 'string' ? options.d : ''));
-          if (isNaN(id)) return '请输入正确的回声洞编号';
-
-          const pendingData = readPendingFile(pendingFilePath);
-          const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
-          if (pendingIndex === -1) return '未找到该待审核回声洞';
-
-          const cave = pendingData[pendingIndex];
-          if (cave.images) {
-            for (const imagePath of cave.images) {
-              const fullPath = path.join(imageDir, imagePath);
-              if (fs.existsSync(fullPath)) {
-                fs.unlinkSync(fullPath);
-              }
-            }
-          }
-
-          pendingData.splice(pendingIndex, 1);
-          writePendingFile(pendingFilePath, pendingData);
-
-          if (cave.groupId) {
-            await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${id} 未通过审核`);
-          }
-          return '已拒绝该回声洞';
         }
 
       } catch (error) {
