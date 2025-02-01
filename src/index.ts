@@ -5,76 +5,74 @@ import * as path from 'path';
 // 初始化日志记录器
 const logger = new Logger('cave');
 
-// 插件名称
+// 插件名称和依赖声明
 export const name = 'cave';
-
-// 插件依赖声明
 export const inject = ['database'];
 
-// 用户信息接口
+// 用户基础信息接口
 export interface User {
   userId: string;
   username: string;
   nickname?: string;
 }
 
-// 获取陌生人信息接口
+// QQ用户信息接口
 export interface getStrangerInfo {
   user_id: string;
   nickname: string;
 }
 
-// 插件配置接口
+// 插件配置接口和Schema定义
 export interface Config {
   manager: string[];
   number: number;
 }
 
-// 插件配置Schema
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required().description('管理员QQ，一个项目填一个ID'),
   number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒'),
 });
 
-/**
- * 保存图片文件
- * @param url 图片URL
- * @param imageDir 图片保存目录
- * @param caveId 回声洞ID
- * @param imageExtension 图片扩展名
- * @param config 插件配置
- * @param ctx Koishi上下文
- * @returns 保存后的文件名
- */
+// 图片文件保存函数：处理URL并保存图片到本地
 async function saveImages(
   url: string,
-  imageDir: string,  // 改为直接使用 imageDir
+  imageDir: string,
   caveId: number,
   imageExtension: string,
   config: Config,
   ctx: Context
 ): Promise<string> {
   const filename = `cave_${caveId}.${imageExtension}`;
-  const targetPath = path.join(imageDir, filename);  // 使用 imageDir
+  const targetPath = path.join(imageDir, filename);
+
   try {
-    const buffer = await ctx.http.get<ArrayBuffer>(url, {
+    // 处理URL编码
+    const processedUrl = decodeURIComponent(url);
+
+    // 添加请求头
+    const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
       responseType: 'arraybuffer',
-      timeout: 10000 // 添加超时设置
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'image/*'
+      }
     });
-    if (buffer.byteLength === 0) throw new Error('下载的数据为空');
+
+    if (!buffer || buffer.byteLength === 0) {
+      throw new Error('下载的数据为空');
+    }
+
     await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-    return filename;  // 只返回文件名
+    return filename;
   } catch (error) {
-    logger.info('保存图片时出错： ' + error.message);
+    logger.error(`保存图片时出错：${error.message}`);
+    logger.error(`问题URL：${url}`);
     throw error;
   }
 }
 
-/**
- * 读取JSON数据文件
- * @param filePath 文件路径
- * @returns 回声洞数据数组
- */
+// 读取JSON数据文件：验证并返回回声洞数据数组
 function readJsonFile(filePath: string): CaveObject[] {
   try {
     // 确保目录存在
@@ -106,11 +104,7 @@ function readJsonFile(filePath: string): CaveObject[] {
   }
 }
 
-/**
- * 写入JSON数据文件
- * @param filePath 文件路径
- * @param data 回声洞数据数组
- */
+// 写入JSON数据：验证数据格式并保存到文件
 function writeJsonFile(filePath: string, data: CaveObject[]): void {
   try {
     // 数据格式验证
@@ -127,114 +121,69 @@ function writeJsonFile(filePath: string, data: CaveObject[]): void {
   }
 }
 
-/**
- * 获取随机回声洞对象
- * @param data 回声洞数据数组
- * @returns 随机选择的回声洞对象
- */
+// 随机获取一条回声洞数据
 function getRandomObject(data: CaveObject[]): CaveObject | undefined {
   if (!data.length) return undefined;
   const randomIndex = Math.floor(Math.random() * data.length);
   return data[randomIndex];
 }
 
-/**
- * 回声洞数据对象接口
- */
+// 回声洞数据结构定义
 interface CaveObject {
-  cave_id: number;          // 回声洞ID
-  text: string;             // 文本内容
-  image_path?: string;      // 本地图片路径
-  image_url?: string;       // 备用网络图片URL
-  contributor_number: string;// 贡献者ID
-  contributor_name: string; // 贡献者昵称
+  cave_id: number;           // 回声洞唯一ID
+  text: string;              // 文本内容
+  image_path?: string;       // 本地图片路径
+  image_url?: string;        // 备用网络图片URL
+  contributor_number: string; // 贡献者ID
+  contributor_name: string;   // 贡献者昵称
 }
 
-/**
- * 插件主函数
- * 功能：
- * 1. 初始化目录和文件
- * 2. 提供添加回声洞功能
- * 3. 提供查看回声洞功能
- * 4. 提供删除回声洞功能
- * 5. 提供随机查看功能
- *
- * 命令：
- * - cave        随机查看回声洞
- * - cave -a     添加回声洞
- * - cave -g     查看指定回声洞
- * - cave -r     删除回声洞（需要权限）
- */
+// 插件主函数：提供回声洞的添加、查看、删除和随机功能
 export async function apply(ctx: Context, config: Config) {
-  /**
-   * 1. 初始化目录结构
-   */
-  const dataDir = path.join(ctx.baseDir, 'data');        // 基础数据目录
-  const caveDir = path.join(dataDir, 'cave');            // 回声洞专用目录
-  const caveFilePath = path.join(caveDir, 'cave.json');  // 回声洞数据文件
-  const imageDir = path.join(caveDir, 'images');         // 图片存储目录
+  // 初始化目录结构和文件
+  const dataDir = path.join(ctx.baseDir, 'data');         // 数据根目录
+  const caveDir = path.join(dataDir, 'cave');             // 回声洞目录
+  const caveFilePath = path.join(caveDir, 'cave.json');   // 数据文件
+  const imageDir = path.join(caveDir, 'images');          // 图片目录
 
-  // 确保所有必要目录存在
+  // 创建必要目录
   [dataDir, caveDir, imageDir].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   });
 
-  // 确保数据文件存在
+  // 初始化数据文件
   if (!fs.existsSync(caveFilePath)) {
     fs.writeFileSync(caveFilePath, '[]', 'utf8');
   }
 
-  /**
-   * 2. 初始化群组冷却时间Map
-   * - key: 群组ID
-   * - value: 上次使用时间戳
-   */
+  // 群组冷却时间管理
   const lastUsed: Map<string, number> = new Map();
 
-  /**
-   * 3. 注册命令
-   */
+  // 注册回声洞命令
   ctx.command('cave', '回声洞')
-    // 设置命令帮助信息
     .usage('cave [-a/-g/-r] [内容]')
     .example('cave           随机查看回声洞')
     .example('cave -a x      添加内容为x的回声洞')
     .example('cave -g 1      查看序号为1的回声洞')
     .example('cave -r 1      删除序号为1的回声洞')
-    // 注册命令选项
     .option('a', '添加回声洞')
     .option('g', '查看回声洞', { type: 'string' })
     .option('r', '删除回声洞', { type: 'string' })
 
-    /**
-     * 4. 权限预检查
-     * - 检查删除操作的权限
-     * - 仅管理员可执行删除操作
-     */
+    // 权限检查：删除操作需要管理员权限
     .before(async ({ session, options }) => {
       if (options.r && !config.manager.includes(session.userId)) {
         return '你没有删除回声洞的权限';
       }
     })
 
-    /**
-     * 5. 命令处理函数
-     */
+    // 命令处理函数
     .action(async ({ session, options }, ...content) => {
       const data = readJsonFile(caveFilePath);
       const inputText = content.join(' ');
 
       try {
-        /**
-         * 5.1 添加功能 (-a)
-         * - 支持文字内容
-         * - 支持图片内容
-         * - 支持图文混合内容
-         * - 获取用户昵称
-         * - 保存图片到本地
-         * - 生成唯一ID
-         * - 写入数据文件
-         */
+        // 添加回声洞：支持文字、图片和图文混合
         if (options.a) {
           // 清理输入文本中的图片标签
           const cleanText = content.join(' ').replace(/<img[^>]+>/g, '').trim();
@@ -300,14 +249,7 @@ export async function apply(ctx: Context, config: Config) {
           return `添加成功, 序号为 [${caveId}]`;
         }
 
-        /**
-         * 5.2 查看功能 (-g)
-         * - 验证序号有效性
-         * - 查找对应回声洞
-         * - 处理文本显示
-         * - 处理图片显示（转base64）
-         * - 显示贡献者信息
-         */
+        // 显示消息构建函数：处理文本和图片显示
         const buildMessage = (cave: CaveObject) => {
           let content = cave.text;
           if (cave.image_path) {
@@ -327,6 +269,7 @@ export async function apply(ctx: Context, config: Config) {
           return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
         };
 
+        // 查看指定回声洞
         if (options.g) {
           const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
           if (isNaN(caveId)) {
@@ -341,15 +284,7 @@ export async function apply(ctx: Context, config: Config) {
           return buildMessage(cave);
         }
 
-        /**
-         * 5.3 随机查看功能（默认）
-         * - 检查群组冷却时间
-         * - 随机选择回声洞
-         * - 处理文本显示
-         * - 处理图片显示（转base64）
-         * - 显示贡献者信息
-         * - 更新冷却时间
-         */
+        // 随机查看回声洞：包含群组冷却控制
         if (!options.a && !options.g && !options.r) {
           if (data.length === 0) return '当前无回声洞。';
 
@@ -370,14 +305,7 @@ export async function apply(ctx: Context, config: Config) {
           return buildMessage(cave);
         }
 
-        /**
-         * 5.4 删除功能 (-r)
-         * - 验证序号有效性
-         * - 权限验证（贡献者或管理员）
-         * - 删除图片文件（如果有）
-         * - 从数据文件中移除
-         * - 保存更新后的数据
-         */
+        // 删除回声洞：需要权限验证
         if (options.r) {
           const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
           if (isNaN(caveId)) {
@@ -413,11 +341,7 @@ export async function apply(ctx: Context, config: Config) {
         }
 
       } catch (error) {
-        /**
-         * 5.5 错误处理
-         * - 记录错误日志
-         * - 返回友好的错误消息
-         */
+        // 错误处理：记录日志并返回友好提示
         logger.error(`执行命令出错: ${error.message}`);
         return '执行命令时发生错误，请稍后重试';
       }
