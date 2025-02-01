@@ -51,45 +51,42 @@ function processQQImageUrl(url: string): string {
   }
 }
 
-// 图片文件保存函数：处理URL并保存图片到本地
+// 修改图片文件保存函数：处理URL并保存多张图片到本地
 async function saveImages(
-  url: string,
+  urls: string[],
   imageDir: string,
   caveId: number,
-  imageExtension: string,
   config: Config,
   ctx: Context
-): Promise<string> {
-  const filename = `cave_${caveId}.${imageExtension}`;
-  const targetPath = path.join(imageDir, filename);
+): Promise<string[]> {
+  const savedFiles: string[] = [];
 
-  try {
-    const processedUrl = processQQImageUrl(url);
-    const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
-      responseType: 'arraybuffer',
-      timeout: 30000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'image/*',
-        'Referer': 'https://qq.com'
-      }
-    }).catch(error => {
-      if (error.response) {
-        logger.error(`下载图片失败: ${error.response.status} ${error.response.statusText}`);
-      }
-      throw error;
-    });
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const filename = `cave_${caveId}_${i + 1}.png`;
+      const targetPath = path.join(imageDir, filename);
+      const processedUrl = processQQImageUrl(urls[i]);
 
-    if (!buffer || buffer.byteLength === 0) {
-      throw new Error('下载的数据为空');
+      const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Accept': 'image/*',
+          'Referer': 'https://qq.com'
+        }
+      });
+
+      if (buffer && buffer.byteLength > 0) {
+        await fs.promises.writeFile(targetPath, Buffer.from(buffer));
+        savedFiles.push(filename);
+      }
+    } catch (error) {
+      logger.error(`保存图片失败: ${error.message}`);
     }
-
-    await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-    return filename;
-  } catch (error) {
-    logger.error(`保存图片失败: ${error.message}`);
-    throw error;
   }
+
+  return savedFiles;
 }
 
 // 读取JSON数据文件：验证并返回回声洞数据数组
@@ -143,19 +140,21 @@ function writeJsonFile(filePath: string, data: CaveObject[]): void {
 
 // 随机获取一条回声洞数据
 function getRandomObject(data: CaveObject[]): CaveObject | undefined {
-  if (!data.length) return undefined;
-  const randomIndex = Math.floor(Math.random() * data.length);
-  return data[randomIndex];
+  if (!data || !data.length) return undefined;
+  // 过滤出有效的回声洞（至少包含文本或图片的记录）
+  const validCaves = data.filter(cave => cave.text || cave.images);
+  if (!validCaves.length) return undefined;
+  const randomIndex = Math.floor(Math.random() * validCaves.length);
+  return validCaves[randomIndex];
 }
 
-// 回声洞数据结构定义
+// 修改回声洞数据结构定义
 interface CaveObject {
-  cave_id: number;           // 回声洞唯一ID
-  text: string;              // 文本内容
-  image_path?: string;       // 本地图片路径
-  image_url?: string;        // 备用网络图片URL
-  contributor_number: string; // 贡献者ID
-  contributor_name: string;   // 贡献者昵称
+  cave_id: number;
+  text: string;
+  images?: string[];         // 修改为图片路径数组
+  contributor_number: string;
+  contributor_name: string;
 }
 
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
@@ -203,48 +202,53 @@ export async function apply(ctx: Context, config: Config) {
 
       try {
         if (options.a) {
-          let imageURL = null;
+          let imageURLs: string[] = [];
           let cleanText = '';
           let originalContent = '';
 
-          // 1. 获取完整消息内容
+          // 获取完整消息内容
           if (session.quote) {
-            // 处理引用消息
             originalContent = session.quote.content;
           } else {
-            // 处理直接消息
             originalContent = session.content;
           }
 
-          // 2. 获取图片URL
-          // 从原始内容中提取图片
-          const imgMatch = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/);
-          if (imgMatch) {
-            imageURL = imgMatch[1];
+          // 获取所有图片URL
+          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
+          if (imgMatches) {
+            imageURLs = imgMatches.map(img => {
+              const match = img.match(/src="([^"]+)"/);
+              return match ? match[1] : null;
+            }).filter(url => url);
           }
 
-          // 如果原始内容没有图片，检查elements
-          if (!imageURL && session.elements) {
-            const imageElement = session.elements.find(el => el.type === 'image');
-            if (imageElement && 'url' in imageElement) {
-              imageURL = imageElement.url;
-            }
+          // 检查 elements 中的图片
+          if (session.elements) {
+            const imageElements = session.elements.filter(el => el.type === 'image');
+            imageElements.forEach(el => {
+              if ('url' in el) {
+                imageURLs.push(el.url as string);
+              }
+            });
           }
 
-          // 3. 生成ID
+          // 去重
+          imageURLs = [...new Set(imageURLs)];
+
+          // 生成ID
           let caveId = 1;
           while (data.some(item => item.cave_id === caveId)) {
             caveId++;
           }
 
-          // 4. 处理文本内容
+          // 处理文本内容
           cleanText = originalContent
             .replace(/<img[^>]+>/g, '')    // 移除所有img标签
             .replace(/^~cave -a\s*/, '')   // 移除命令前缀
             .replace(/\s+/g, ' ')          // 规范化空格
             .trim();
 
-          // 5. 获取用户信息
+          // 获取用户信息
           let contributorName = session.username;
           if (ctx.database) {
             try {
@@ -255,12 +259,12 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
-          // 6. 检查内容
-          if (!imageURL && !cleanText) {
+          // 检查内容
+          if (imageURLs.length === 0 && !cleanText) {
             return '请输入图片或文字';
           }
 
-          // 7. 创建新回声洞对象
+          // 创建新回声洞对象
           const newCave: CaveObject = {
             cave_id: caveId,
             text: cleanText,
@@ -268,39 +272,41 @@ export async function apply(ctx: Context, config: Config) {
             contributor_name: contributorName
           };
 
-          // 8. 保存图片（如果有）
-          if (imageURL) {
+          // 保存图片（如果有）
+          if (imageURLs.length > 0) {
             try {
-              const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
-              newCave.image_path = filename;
+              const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
+              if (savedImages.length > 0) {
+                newCave.images = savedImages;
+              }
             } catch (error) {
               if (cleanText) {
                 data.push(newCave);
                 writeJsonFile(caveFilePath, data);
-                return `添加成功 (图片保存失败), 序号为 [${caveId}]`;
+                return `添加成功 (部分图片保存失败), 序号为 [${caveId}]`;
               }
               return '图片保存失败，请稍后重试';
             }
           }
 
-          // 9. 保存数据
+          // 保存数据
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
           return `添加成功, 序号为 [${caveId}]`;
         }
 
-        // 显示消息构建函数：处理文本和图片显示
+        // 显示消息构建函数：处理文本和多张图片显示
         const buildMessage = (cave: CaveObject) => {
           let content = cave.text;
-          if (cave.image_path) {
+          if (cave.images && cave.images.length > 0) {
             try {
-              const imagePath = path.join(imageDir, cave.image_path);
-              if (fs.existsSync(imagePath)) {
-                const imageBuffer = fs.readFileSync(imagePath);
-                const base64Image = imageBuffer.toString('base64');
-                content += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
-              } else {
-                logger.error(`找不到图片文件: ${imagePath}`);
+              for (const imagePath of cave.images) {
+                const fullImagePath = path.join(imageDir, imagePath);
+                if (fs.existsSync(fullImagePath)) {
+                  const imageBuffer = fs.readFileSync(fullImagePath);
+                  const base64Image = imageBuffer.toString('base64');
+                  content += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
+                }
               }
             } catch (error) {
               logger.error(`读取图片失败: ${error.message}`);
@@ -364,11 +370,13 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           // 如果是图片内容，删除对应的图片文件
-          if (cave.image_path) {
+          if (cave.images) {
             try {
-              const imagePath = path.join(imageDir, cave.image_path);
-              if (fs.existsSync(imagePath)) {
-                fs.unlinkSync(imagePath);
+              for (const imagePath of cave.images) {
+                const fullPath = path.join(imageDir, imagePath);
+                if (fs.existsSync(fullPath)) {
+                  fs.unlinkSync(fullPath);
+                }
               }
             } catch (error) {
               logger.error(`删除图片文件失败: ${error.message}`);
