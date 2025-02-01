@@ -26,11 +26,13 @@ export interface getStrangerInfo {
 export interface Config {
   manager: string[];
   number: number;
+  enableAudit: boolean;    // 是否开启审核
 }
 
 export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required().description('管理员账号，每个ID单独填写'),
+  manager: Schema.array(Schema.string()).required().description('管理员账号，用于审核和管理'),
   number: Schema.number().default(60).description('群内回声洞调用冷却时间（秒）'),
+  enableAudit: Schema.boolean().default(false).description('是否开启回声洞审核功能'),
 });
 
 // 处理QQ图片链接
@@ -172,6 +174,34 @@ interface CaveObject {
   contributor_name: string;
 }
 
+// 添加待审核回声洞接口
+interface PendingCave extends CaveObject {
+  groupId?: string;        // 来源群号
+  timestamp: number;       // 提交时间
+}
+
+// 添加待审核数据读写函数
+function readPendingFile(filePath: string): PendingCave[] {
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, '[]', 'utf8');
+      return [];
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    logger.error(`读取待审核文件失败: ${error.message}`);
+    return [];
+  }
+}
+
+function writePendingFile(filePath: string, data: PendingCave[]): void {
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    logger.error(`写入待审核文件失败: ${error.message}`);
+  }
+}
+
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
 export async function apply(ctx: Context, config: Config) {
   // 初始化目录结构和文件
@@ -179,6 +209,7 @@ export async function apply(ctx: Context, config: Config) {
   const caveDir = path.join(dataDir, 'cave');             // 回声洞目录
   const caveFilePath = path.join(caveDir, 'cave.json');   // 数据文件
   const imageDir = path.join(caveDir, 'images');          // 图片目录
+  const pendingFilePath = path.join(caveDir, 'pending.json');  // 待审核数据文件
 
   // 创建必要目录
   [dataDir, caveDir, imageDir].forEach(dir => {
@@ -195,19 +226,28 @@ export async function apply(ctx: Context, config: Config) {
 
   // 注册回声洞命令
   ctx.command('cave', '回声洞')
-    .usage('支持添加、查看、随机获取回声洞内容')
+    .usage('支持添加、查看、随机获取、审核回声洞')
     .example('cave           随机一条回声洞')
     .example('cave -a 内容   添加新回声洞')
     .example('cave -g 1      查看指定编号回声洞')
     .example('cave -r 1      删除指定编号回声洞')
+    .example('cave -p 1      通过指定编号待审核回声洞')
+    .example('cave -d 1      拒绝指定编号待审核回声洞')
+    .example('cave -pa       一键通过所有待审核回声洞')
+    .example('cave -da       一键拒绝所有待审核回声洞')
     .option('a', '添加回声洞')
     .option('g', '查看回声洞', { type: 'string' })
     .option('r', '删除回声洞', { type: 'string' })
+    .option('p', '通过审核', { type: 'string' })
+    .option('d', '拒绝审核', { type: 'string' })
+    .option('pa', '一键通过所有待审核')
+    .option('da', '一键拒绝所有待审核')
 
-    // 权限检查：删除操作需要管理员权限
+    // 权限检查：管理员权限
     .before(async ({ session, options }) => {
-      if (options.r && !config.manager.includes(session.userId)) {
-        return '抱歉，只有管理员才能删除回声洞';
+      if ((options.r || options.p || options.d || options.pa || options.da)
+          && !config.manager.includes(session.userId)) {
+        return '抱歉，只有管理员才能执行此操作';
       }
     })
 
@@ -287,6 +327,43 @@ export async function apply(ctx: Context, config: Config) {
             contributor_number: session.userId,
             contributor_name: contributorName
           };
+
+          // 处理审核流程
+          if (config.enableAudit) {
+            const pendingData = readPendingFile(pendingFilePath);
+            const pendingCave: PendingCave = {
+              ...newCave,
+              groupId: session.guildId,
+              timestamp: Date.now()
+            };
+
+            // 保存图片（如果有）
+            if (imageURLs.length > 0) {
+              try {
+                const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
+                if (savedImages.length > 0) {
+                  pendingCave.images = savedImages;
+                }
+              } catch (error) {
+                return '图片保存失败，请稍后重试';
+              }
+            }
+
+            pendingData.push(pendingCave);
+            writePendingFile(pendingFilePath, pendingData);
+
+            // 发送审核通知给主人
+            const auditMessage = `📝 新回声洞待审核 #${caveId}\n`
+              + `内容：${pendingCave.text}\n`
+              + `来自：${pendingCave.contributor_name}\n`
+              + `群组：${pendingCave.groupId || '私聊'}\n`
+              + `处理方式：\n`
+              + `同意 ${caveId} - 通过审核\n`
+              + `拒绝 ${caveId} - 拒绝通过`;
+
+            ctx.bots[0]?.sendPrivateMessage(config.manager[0], auditMessage);
+            return '✨ 回声洞已提交审核，请等待审核结果';
+          }
 
           // 保存图片（如果有）
           if (imageURLs.length > 0) {
@@ -404,6 +481,99 @@ export async function apply(ctx: Context, config: Config) {
           data.splice(index, 1);
           writeJsonFile(caveFilePath, data);
           return `✅ 已删除 #${caveId} 号回声洞`;
+        }
+
+        // 处理一键通过所有待审核
+        if (options.pa) {
+          const pendingData = readPendingFile(pendingFilePath);
+          if (pendingData.length === 0) return '没有待审核的回声洞';
+
+          const data = readJsonFile(caveFilePath);
+          for (const cave of pendingData) {
+            data.push(cave);
+            if (cave.groupId) {
+              await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${cave.cave_id} 已通过审核`);
+            }
+          }
+
+          writeJsonFile(caveFilePath, data);
+          writePendingFile(pendingFilePath, []);
+          return `✅ 已通过全部 ${pendingData.length} 条待审核回声洞`;
+        }
+
+        // 处理一键拒绝所有待审核
+        if (options.da) {
+          const pendingData = readPendingFile(pendingFilePath);
+          if (pendingData.length === 0) return '没有待审核的回声洞';
+
+          for (const cave of pendingData) {
+            // 删除图片
+            if (cave.images) {
+              for (const imagePath of cave.images) {
+                const fullPath = path.join(imageDir, imagePath);
+                if (fs.existsSync(fullPath)) {
+                  fs.unlinkSync(fullPath);
+                }
+              }
+            }
+            if (cave.groupId) {
+              await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${cave.cave_id} 未通过审核`);
+            }
+          }
+
+          writePendingFile(pendingFilePath, []);
+          return `❌ 已拒绝全部 ${pendingData.length} 条待审核回声洞`;
+        }
+
+        // 处理通过单条审核
+        if (options.p) {
+          const id = parseInt(content[0] || (typeof options.p === 'string' ? options.p : ''));
+          if (isNaN(id)) return '请输入正确的回声洞编号';
+
+          const pendingData = readPendingFile(pendingFilePath);
+          const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
+          if (pendingIndex === -1) return '未找到该待审核回声洞';
+
+          const cave = pendingData[pendingIndex];
+          const data = readJsonFile(caveFilePath);
+          data.push(cave);
+          writeJsonFile(caveFilePath, data);
+
+          pendingData.splice(pendingIndex, 1);
+          writePendingFile(pendingFilePath, pendingData);
+
+          if (cave.groupId) {
+            await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${id} 已通过审核`);
+          }
+          return '审核通过成功';
+        }
+
+        // 处理拒绝单条审核
+        if (options.d) {
+          const id = parseInt(content[0] || (typeof options.d === 'string' ? options.d : ''));
+          if (isNaN(id)) return '请输入正确的回声洞编号';
+
+          const pendingData = readPendingFile(pendingFilePath);
+          const pendingIndex = pendingData.findIndex(item => item.cave_id === id);
+          if (pendingIndex === -1) return '未找到该待审核回声洞';
+
+          const cave = pendingData[pendingIndex];
+          if (cave.images) {
+            for (const imagePath of cave.images) {
+              const fullPath = path.join(imageDir, imagePath);
+              if (fs.existsSync(fullPath)) {
+                fs.unlinkSync(fullPath);
+              }
+            }
+          }
+
+          pendingData.splice(pendingIndex, 1);
+          writePendingFile(pendingFilePath, pendingData);
+
+          if (cave.groupId) {
+            await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${id} 未通过审核`);
+          }
+          return '已拒绝该回声洞';
         }
 
       } catch (error) {
