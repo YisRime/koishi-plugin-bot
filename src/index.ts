@@ -405,6 +405,8 @@ export async function apply(ctx: Context, config: Config) {
           cleanText = originalContent
             .replace(/<img[^>]+>/g, '')    // 移除所有img标签
             .replace(/^~cave -a\s*/, '')   // 移除命令前缀
+            .replace(/\\n/g, '\n')         // 先处理显式的换行符
+            .replace(/\n+/g, '\n')         // 规范化换行
             .replace(/\s+/g, ' ')          // 规范化空格
             .trim();
           cleanText = processSpecialChars(cleanText);  // 处理特殊字符
@@ -458,38 +460,46 @@ export async function apply(ctx: Context, config: Config) {
             writePendingFile(pendingFilePath, pendingData);
 
             // 构建审核消息，包含图片
-            let auditMessage = `新回声洞待审核 —— [${caveId}]\n`;
-            auditMessage += `内容：${pendingCave.text}\n`;
-            auditMessage += `来自：${pendingCave.contributor_name}\n`;
-            auditMessage += `群组：${pendingCave.groupId || '私聊'}\n\n`;
-
-            // 添加其他待审核的回声洞列表
-            if (pendingData.length > 1) {
-              auditMessage += '当前待审核列表：\n';
-              pendingData.forEach(cave => {
-                auditMessage += `[${cave.cave_id}] ${cave.text.slice(0, 20)}${cave.text.length > 20 ? '...' : ''}\n`;
-              });
-              auditMessage += '\n';
-            }
-
-            auditMessage += `处理方式：\ncave -p ${caveId} (通过)\ncave -d ${caveId} (拒绝)\n`;
-            auditMessage += `cave -pa (一键通过所有)\ncave -da (一键拒绝所有)`;
-
-            // 发送文本消息
-            await ctx.bots[0]?.sendPrivateMessage(config.manager[0], auditMessage);
-
-            // 如果有图片，单独发送图片预览
+            let auditContent = pendingCave.text || '';
             if (pendingCave.images && pendingCave.images.length > 0) {
               for (const imagePath of pendingCave.images) {
                 const fullImagePath = path.join(imageDir, imagePath);
                 if (fs.existsSync(fullImagePath)) {
                   const imageBuffer = fs.readFileSync(fullImagePath);
                   const base64Image = imageBuffer.toString('base64');
-                  await ctx.bots[0]?.sendPrivateMessage(
-                    config.manager[0],
-                    h('image', { src: `data:image/png;base64,${base64Image}` })
-                  );
+                  auditContent += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
                 }
+              }
+            }
+
+            await ctx.bots[0]?.sendPrivateMessage(
+              config.manager[0],
+              `新回声洞待审核 —— [${caveId}]\n来自：${pendingCave.contributor_name}\n群组：${pendingCave.groupId || '私聊'}\n内容：\n${auditContent}`
+            );
+
+            // 2. 如果有其他待审核的回声洞，逐个发送
+            if (pendingData.length > 1) {
+              await ctx.bots[0]?.sendPrivateMessage(config.manager[0], '当前其他待审核回声洞：');
+
+              for (const cave of pendingData) {
+                if (cave.cave_id === caveId) continue; // 跳过刚刚添加的
+
+                let content = cave.text || '';
+                if (cave.images && cave.images.length > 0) {
+                  for (const imagePath of cave.images) {
+                    const fullImagePath = path.join(imageDir, imagePath);
+                    if (fs.existsSync(fullImagePath)) {
+                      const imageBuffer = fs.readFileSync(fullImagePath);
+                      const base64Image = imageBuffer.toString('base64');
+                      content += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
+                    }
+                  }
+                }
+
+                await ctx.bots[0]?.sendPrivateMessage(
+                  config.manager[0],
+                  `待审核 —— [${cave.cave_id}]\n来自：${cave.contributor_name}\n群组：${cave.groupId || '私聊'}\n内容：\n${content}`
+                );
               }
             }
 
