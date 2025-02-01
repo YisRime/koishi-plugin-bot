@@ -175,14 +175,17 @@ export async function apply(ctx: Context, config: Config) {
             caveId++;
           }
 
-          let finalContent = inputText;
+          let finalContent = '';
           if (imageURL) {
             try {
-              finalContent = await saveImages(imageURL, caveDir, `cave_${caveId}`, 'png', config, ctx);
+              const imagePath = await saveImages(imageURL, caveDir, `cave_${caveId}`, 'png', config, ctx);
+              finalContent = inputText ? `${inputText}\n${imagePath}` : imagePath;
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
               return '图片保存失败，请稍后重试';
             }
+          } else {
+            finalContent = inputText;
           }
 
           const newCave = {
@@ -209,7 +212,11 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           // 修改后的消息构建
-          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
+          if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
+            const [text, imagePath] = cave.text.split('\n');
+            const imageSrc = processImagePath(imagePath);
+            return `回声洞 —— [${cave.cave_id}]\n${text}\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+          } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
             const imageSrc = processImagePath(cave.text);
             return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
           }
@@ -235,7 +242,11 @@ export async function apply(ctx: Context, config: Config) {
           if (!cave.text) return '回声洞内容为空';
 
           // 修改后的消息构建
-          if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
+          if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
+            const [text, imagePath] = cave.text.split('\n');
+            const imageSrc = processImagePath(imagePath);
+            return `回声洞 —— [${cave.cave_id}]\n${text}\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+          } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
             const imageSrc = processImagePath(cave.text);
             return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
           }
