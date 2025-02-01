@@ -31,12 +31,13 @@ export const Config: Schema<Config> = Schema.object({
 async function saveImages(
   url: string,
   caveDir: string,
-  safeFilename: string,
+  caveId: number,
   imageExtension: string,
   config: Config,
   ctx: Context
 ): Promise<string> {
-  const targetPath = path.join(caveDir, `${safeFilename}.${imageExtension}`);
+  const filename = `cave_${caveId}.${imageExtension}`;
+  const targetPath = path.join(caveDir, filename);
   try {
     const buffer = await ctx.http.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
@@ -44,7 +45,7 @@ async function saveImages(
     });
     if (buffer.byteLength === 0) throw new Error('下载的数据为空');
     await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-    return targetPath;
+    return filename;  // 只返回文件名
   } catch (error) {
     logger.info('保存图片时出错： ' + error.message);
     throw error;
@@ -111,6 +112,7 @@ function getRandomObject(data: CaveObject[]): CaveObject | undefined {
 interface CaveObject {
   cave_id: number;
   text: string;
+  image_path?: string;  // 新增图片路径字段
   contributor_number: string;  // 原来的 contributor_id
   contributor_name: string;    // 新增昵称字段
 }
@@ -133,11 +135,12 @@ function processImagePath(imagePath: string): string {
 // 插件入口函数，用于初始化并绑定指令
 export async function apply(ctx: Context, config: Config) {
   const dataDir = path.join(ctx.baseDir, 'data');
-  const assetsDir = path.join(dataDir, 'assets');
-  const caveDir = path.join(assetsDir, 'cave');
-  const caveFilePath = path.join(assetsDir, 'cave.json');
+  const caveDir = path.join(dataDir, 'cave');
+  const caveFilePath = path.join(caveDir, 'cave.json');
+  const imageDir = path.join(caveDir, 'images');
 
-  [dataDir, assetsDir, caveDir].forEach(dir => {
+  // 确保必要的目录都存在
+  [dataDir, caveDir, imageDir].forEach(dir => {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   });
 
@@ -179,19 +182,6 @@ export async function apply(ctx: Context, config: Config) {
             caveId++;
           }
 
-          let finalContent = '';
-          if (imageURL) {
-            try {
-              const imagePath = await saveImages(imageURL, caveDir, `cave_${caveId}`, 'png', config, ctx);
-              finalContent = inputText ? `${inputText}\n${imagePath}` : imagePath;
-            } catch (error) {
-              logger.error(`保存图片失败: ${error.message}`);
-              return '图片保存失败，请稍后重试';
-            }
-          } else {
-            finalContent = inputText;
-          }
-
           // 获取用户昵称
           let contributorName = session.username;
           try {
@@ -202,12 +192,22 @@ export async function apply(ctx: Context, config: Config) {
             contributorName = session.username;
           }
 
-          const newCave = {
+          const newCave: CaveObject = {
             cave_id: caveId,
-            text: finalContent,
+            text: inputText || '',
             contributor_number: session.userId,
             contributor_name: contributorName
           };
+
+          if (imageURL) {
+            try {
+              const filename = await saveImages(imageURL, caveDir, caveId, 'png', config, ctx);
+              newCave.image_path = filename;
+            } catch (error) {
+              logger.error(`保存图片失败: ${error.message}`);
+              return '图片保存失败，请稍后重试';
+            }
+          }
 
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
@@ -215,14 +215,12 @@ export async function apply(ctx: Context, config: Config) {
         }
 
         // 修改显示消息的构建部分
-        const buildMessage = (cave: CaveObject, withImage = false) => {
-          let content = '';
-          if (withImage) {
-            const [text, imagePath] = cave.text.split('\n');
+        const buildMessage = (cave: CaveObject) => {
+          let content = cave.text;
+          if (cave.image_path) {
+            const imagePath = path.join(imageDir, cave.image_path);
             const imageSrc = processImagePath(imagePath);
-            content = `${text}\n${h('image', { src: imageSrc })}`;
-          } else {
-            content = cave.text;
+            content += `\n${h('image', { src: imageSrc })}`;
           }
           return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
         };
@@ -239,13 +237,6 @@ export async function apply(ctx: Context, config: Config) {
             return '未找到对应的回声洞序号。';
           }
 
-          // 修改后的消息构建
-          if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
-            return buildMessage(cave, true);
-          } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
-            const imageSrc = processImagePath(cave.text);
-            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_name}`;
-          }
           return buildMessage(cave);
         }
 
@@ -267,13 +258,6 @@ export async function apply(ctx: Context, config: Config) {
           if (!cave) return '获取回声洞失败';
           if (!cave.text) return '回声洞内容为空';
 
-          // 修改后的消息构建
-          if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
-            return buildMessage(cave, true);
-          } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
-            const imageSrc = processImagePath(cave.text);
-            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_name}`;
-          }
           return buildMessage(cave);
         }
 
