@@ -202,6 +202,13 @@ function writePendingFile(filePath: string, data: PendingCave[]): void {
   }
 }
 
+// 添加获取最大ID的函数
+function getMaxId(data: CaveObject[], pendingData: PendingCave[]): number {
+  const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
+  const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
+  return Math.max(maxDataId, maxPendingId);
+}
+
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
 export async function apply(ctx: Context, config: Config) {
   // 初始化目录结构和文件
@@ -390,10 +397,9 @@ export async function apply(ctx: Context, config: Config) {
           imageURLs = [...new Set(imageURLs)];
 
           // 生成ID
-          let caveId = 1;
-          while (data.some(item => item.cave_id === caveId)) {
-            caveId++;
-          }
+          const pendingData = readPendingFile(pendingFilePath);
+          const maxId = getMaxId(data, pendingData);
+          const caveId = maxId + 1;
 
           // 处理文本内容时增加转义字符处理
           cleanText = originalContent
@@ -455,8 +461,19 @@ export async function apply(ctx: Context, config: Config) {
             let auditMessage = `新回声洞待审核 —— [${caveId}]\n`;
             auditMessage += `内容：${pendingCave.text}\n`;
             auditMessage += `来自：${pendingCave.contributor_name}\n`;
-            auditMessage += `群组：${pendingCave.groupId || '私聊'}\n`;
-            auditMessage += `处理方式：cave -p ${caveId} (通过) 或 cave -d ${caveId} (拒绝)`;
+            auditMessage += `群组：${pendingCave.groupId || '私聊'}\n\n`;
+
+            // 添加其他待审核的回声洞列表
+            if (pendingData.length > 1) {
+              auditMessage += '当前待审核列表：\n';
+              pendingData.forEach(cave => {
+                auditMessage += `[${cave.cave_id}] ${cave.text.slice(0, 20)}${cave.text.length > 20 ? '...' : ''}\n`;
+              });
+              auditMessage += '\n';
+            }
+
+            auditMessage += `处理方式：\ncave -p ${caveId} (通过)\ncave -d ${caveId} (拒绝)\n`;
+            auditMessage += `cave -pa (一键通过所有)\ncave -da (一键拒绝所有)`;
 
             // 发送文本消息
             await ctx.bots[0]?.sendPrivateMessage(config.manager[0], auditMessage);
