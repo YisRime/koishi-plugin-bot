@@ -205,31 +205,46 @@ export async function apply(ctx: Context, config: Config) {
         if (options.a) {
           let imageURL = null;
           let cleanText = '';
+          let originalContent = '';
 
-          // 1. 优先处理图片
-          // 从elements中获取URL（优先级最高）
-          if (session.elements) {
+          // 1. 获取完整消息内容
+          if (session.quote) {
+            // 处理引用消息
+            originalContent = session.quote.content;
+          } else {
+            // 处理直接消息
+            originalContent = session.content;
+          }
+
+          // 2. 获取图片URL
+          // 从原始内容中提取图片
+          const imgMatch = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/);
+          if (imgMatch) {
+            imageURL = imgMatch[1];
+          }
+
+          // 如果原始内容没有图片，检查elements
+          if (!imageURL && session.elements) {
             const imageElement = session.elements.find(el => el.type === 'image');
             if (imageElement && 'url' in imageElement) {
               imageURL = imageElement.url;
             }
           }
 
-          // 如果elements中没有图片，尝试从img标签获取
-          if (!imageURL) {
-            const imgMatch = session.content.match(/<img[^>]+src="([^"]+)"[^>]*>/);
-            if (imgMatch) {
-              imageURL = imgMatch[1];
-            }
-          }
-
-          // 2. 生成ID
+          // 3. 生成ID
           let caveId = 1;
           while (data.some(item => item.cave_id === caveId)) {
             caveId++;
           }
 
-          // 3. 获取用户信息
+          // 4. 处理文本内容
+          cleanText = originalContent
+            .replace(/<img[^>]+>/g, '')    // 移除所有img标签
+            .replace(/^~cave -a\s*/, '')   // 移除命令前缀
+            .replace(/\s+/g, ' ')          // 规范化空格
+            .trim();
+
+          // 5. 获取用户信息
           let contributorName = session.username;
           if (ctx.database) {
             try {
@@ -240,18 +255,12 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
-          // 4. 处理文本内容（移除所有img标签）
-          cleanText = session.content
-            .replace(/<img[^>]+>/g, '')  // 移除所有img标签
-            .replace(/~cave -a/g, '')    // 移除命令前缀
-            .trim();                     // 清理多余空格
-
-          // 5. 检查是否有有效内容
+          // 6. 检查内容
           if (!imageURL && !cleanText) {
             return '请输入图片或文字';
           }
 
-          // 6. 创建新回声洞对象
+          // 7. 创建新回声洞对象
           const newCave: CaveObject = {
             cave_id: caveId,
             text: cleanText,
@@ -259,7 +268,7 @@ export async function apply(ctx: Context, config: Config) {
             contributor_name: contributorName
           };
 
-          // 7. 处理图片
+          // 8. 保存图片（如果有）
           if (imageURL) {
             try {
               const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
@@ -274,7 +283,7 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
-          // 8. 保存数据
+          // 9. 保存数据
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
           return `添加成功, 序号为 [${caveId}]`;
