@@ -33,6 +33,24 @@ export const Config: Schema<Config> = Schema.object({
   number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒'),
 });
 
+// 处理QQ图片链接
+function processQQImageUrl(url: string): string {
+  try {
+    // 解码URL
+    const decodedUrl = decodeURIComponent(url);
+
+    // 处理QQ图片链接特殊字符
+    if (decodedUrl.includes('multimedia.nt.qq.com.cn')) {
+      return decodedUrl.replace(/&amp;/g, '&');
+    }
+
+    return url;
+  } catch (error) {
+    logger.error(`处理图片URL失败：${error.message}`);
+    return url;
+  }
+}
+
 // 图片文件保存函数：处理URL并保存图片到本地
 async function saveImages(
   url: string,
@@ -46,8 +64,9 @@ async function saveImages(
   const targetPath = path.join(imageDir, filename);
 
   try {
-    // 处理URL编码
-    const processedUrl = decodeURIComponent(url);
+    // 处理URL
+    const processedUrl = processQQImageUrl(url);
+    logger.info(`处理后的URL: ${processedUrl}`);
 
     // 添加请求头
     const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
@@ -55,8 +74,15 @@ async function saveImages(
       timeout: 30000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'image/*'
+        'Accept': 'image/*',
+        'Referer': 'https://qq.com'
       }
+    }).catch(error => {
+      logger.error(`下载图片失败: ${error.message}`);
+      if (error.response) {
+        logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
     });
 
     if (!buffer || buffer.byteLength === 0) {
@@ -64,6 +90,7 @@ async function saveImages(
     }
 
     await fs.promises.writeFile(targetPath, Buffer.from(buffer));
+    logger.success(`图片保存成功: ${filename}`);
     return filename;
   } catch (error) {
     logger.error(`保存图片时出错：${error.message}`);
@@ -236,10 +263,19 @@ export async function apply(ctx: Context, config: Config) {
           // 保存图片
           if (imageURL) {
             try {
+              logger.info(`尝试保存图片，原始URL: ${imageURL}`);
               const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
               newCave.image_path = filename;
+              logger.info(`图片保存成功: ${filename}`);
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
+              // 如果有文本内容，仍然保存文本
+              if (cleanText) {
+                logger.info('保存文本内容');
+                data.push(newCave);
+                writeJsonFile(caveFilePath, data);
+                return `添加成功 (图片保存失败), 序号为 [${caveId}]`;
+              }
               return '图片保存失败，请稍后重试';
             }
           }
