@@ -29,8 +29,8 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required().description('管理员QQ，一个项目填一个ID'),
-  number: Schema.number().default(3).description('群单位回声洞冷却时间,单位为秒'),
+  manager: Schema.array(Schema.string()).required().description('管理员账号，每个ID单独填写'),
+  number: Schema.number().default(60).description('群内回声洞调用冷却时间（秒）'),
 });
 
 // 处理QQ图片链接
@@ -167,7 +167,7 @@ function getRandomObject(data: CaveObject[]): CaveObject | undefined {
 interface CaveObject {
   cave_id: number;
   text: string;
-  images?: string[];         // 修改为图片路径数组
+  images?: string[];
   contributor_number: string;
   contributor_name: string;
 }
@@ -195,11 +195,11 @@ export async function apply(ctx: Context, config: Config) {
 
   // 注册回声洞命令
   ctx.command('cave', '回声洞')
-    .usage('cave [-a/-g/-r] [内容]')
-    .example('cave           随机查看回声洞')
-    .example('cave -a x      添加内容为x的回声洞')
-    .example('cave -g 1      查看序号为1的回声洞')
-    .example('cave -r 1      删除序号为1的回声洞')
+    .usage('支持添加、查看、随机获取回声洞内容')
+    .example('cave           随机一条回声洞')
+    .example('cave -a 内容   添加新回声洞')
+    .example('cave -g 1      查看指定编号回声洞')
+    .example('cave -r 1      删除指定编号回声洞')
     .option('a', '添加回声洞')
     .option('g', '查看回声洞', { type: 'string' })
     .option('r', '删除回声洞', { type: 'string' })
@@ -207,7 +207,7 @@ export async function apply(ctx: Context, config: Config) {
     // 权限检查：删除操作需要管理员权限
     .before(async ({ session, options }) => {
       if (options.r && !config.manager.includes(session.userId)) {
-        return '你没有删除回声洞的权限';
+        return '抱歉，只有管理员才能删除回声洞';
       }
     })
 
@@ -277,7 +277,7 @@ export async function apply(ctx: Context, config: Config) {
 
           // 检查内容
           if (imageURLs.length === 0 && !cleanText) {
-            return '请输入图片或文字';
+            return '添加失败：请提供文字内容或图片';
           }
 
           // 创建新回声洞对象
@@ -308,7 +308,7 @@ export async function apply(ctx: Context, config: Config) {
           // 保存数据
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
-          return `添加成功, 序号为 [${caveId}]`;
+          return `✨ 回声洞添加成功！编号为 [${caveId}]`;
         }
 
         // 显示消息构建函数：处理文本和多张图片显示
@@ -330,19 +330,19 @@ export async function apply(ctx: Context, config: Config) {
               logger.error(`读取图片失败: ${error.message}`);
             }
           }
-          return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
+          return `📝 回声洞 #${cave.cave_id}\n${content}\n——${cave.contributor_name}`;
         };
 
         // 查看指定回声洞
         if (options.g) {
           const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
           if (isNaN(caveId)) {
-            return '请输入有效的回声洞序号。';
+            return '请输入正确的回声洞编号';
           }
 
           const cave = data.find(item => item.cave_id === caveId);
           if (!cave) {
-            return '未找到对应的回声洞序号。';
+            return '未找到该编号的回声洞';
           }
 
           return buildMessage(cave);
@@ -350,7 +350,7 @@ export async function apply(ctx: Context, config: Config) {
 
         // 随机查看回声洞：包含群组冷却控制
         if (!options.a && !options.g && !options.r) {
-          if (data.length === 0) return '当前无回声洞。';
+          if (data.length === 0) return '暂无回声洞内容';
 
           // 处理冷却时间
           const guildId = session.guildId;
@@ -358,7 +358,8 @@ export async function apply(ctx: Context, config: Config) {
           const lastCall = lastUsed.get(guildId) || 0;
 
           if (now - lastCall < config.number * 1000) {
-            return `群回声洞调用的太频繁了, 请等待${Math.ceil((config.number * 1000 - (now - lastCall)) / 1000)}秒后再试`;
+            const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
+            return `冷却中...请${waitTime}秒后再试`;
           }
 
           lastUsed.set(guildId, now);
@@ -372,18 +373,18 @@ export async function apply(ctx: Context, config: Config) {
         if (options.r) {
           const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
           if (isNaN(caveId)) {
-            return '请输入有效的回声洞序号。';
+            return '请输入正确的回声洞编号';
           }
 
           const index = data.findIndex(item => item.cave_id === caveId);
           if (index === -1) {
-            return '未找到对应的回声洞序号。';
+            return '未找到该编号的回声洞';
           }
 
           // 权限校验：检查是否为内容贡献者或管理员
           const cave = data[index];
           if (cave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
-            return '你没有权限删除该回声洞。只有内容贡献者或管理员可以删除。';
+            return '抱歉，只有内容发布者或管理员可以删除回声洞';
           }
 
           // 如果是图片内容，删除对应的图片文件
@@ -402,13 +403,13 @@ export async function apply(ctx: Context, config: Config) {
 
           data.splice(index, 1);
           writeJsonFile(caveFilePath, data);
-          return `回声洞序号 ${caveId} 已成功删除。`;
+          return `✅ 已删除 #${caveId} 号回声洞`;
         }
 
       } catch (error) {
         // 错误处理：记录日志并返回友好提示
-        logger.error(`执行命令出错: ${error.message}`);
-        return '执行命令时发生错误，请稍后重试';
+        logger.error(`操作失败: ${error.message}`);
+        return '操作失败，请稍后重试';
       }
     });
 }
