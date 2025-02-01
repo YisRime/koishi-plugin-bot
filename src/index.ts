@@ -9,6 +9,7 @@ export const name = 'cave';
 export interface User {
   userId: string;
   username: string;
+  nickname?: string;
 }
 
 export interface getStrangerInfo {
@@ -73,7 +74,8 @@ function readJsonFile(filePath: string): CaveObject[] {
       item &&
       typeof item.cave_id === 'number' &&
       typeof item.text === 'string' &&
-      typeof item.contributor_id === 'string'
+      typeof item.contributor_number === 'string' &&
+      typeof item.contributor_name === 'string'
     );
   } catch (error) {
     logger.error(`读取文件出错: ${error.message}`);
@@ -89,7 +91,8 @@ function writeJsonFile(filePath: string, data: CaveObject[]): void {
       item &&
       typeof item.cave_id === 'number' &&
       typeof item.text === 'string' &&
-      typeof item.contributor_id === 'string'
+      typeof item.contributor_number === 'string' &&
+      typeof item.contributor_name === 'string'
     );
     fs.writeFileSync(filePath, JSON.stringify(validData, null, 2), 'utf8');
   } catch (error) {
@@ -104,11 +107,12 @@ function getRandomObject(data: CaveObject[]): CaveObject | undefined {
   return data[randomIndex];
 }
 
-// 添加新的接口定义
+// 修改接口定义
 interface CaveObject {
   cave_id: number;
   text: string;
-  contributor_id: string;
+  contributor_number: string;  // 原来的 contributor_id
+  contributor_name: string;    // 新增昵称字段
 }
 
 // 添加图片处理辅助函数
@@ -188,16 +192,40 @@ export async function apply(ctx: Context, config: Config) {
             finalContent = inputText;
           }
 
+          // 获取用户昵称
+          let contributorName = session.username;
+          try {
+            const userInfo = await ctx.database.getUser(session.platform, session.userId);
+            contributorName = (userInfo as unknown as User)?.nickname || session.username;
+          } catch (error) {
+            logger.error(`获取用户昵称失败: ${error.message}`);
+            contributorName = session.username;
+          }
+
           const newCave = {
             cave_id: caveId,
             text: finalContent,
-            contributor_id: session.userId
+            contributor_number: session.userId,
+            contributor_name: contributorName
           };
 
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
           return `添加成功, 序号为 [${caveId}]`;
         }
+
+        // 修改显示消息的构建部分
+        const buildMessage = (cave: CaveObject, withImage = false) => {
+          let content = '';
+          if (withImage) {
+            const [text, imagePath] = cave.text.split('\n');
+            const imageSrc = processImagePath(imagePath);
+            content = `${text}\n${h('image', { src: imageSrc })}`;
+          } else {
+            content = cave.text;
+          }
+          return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
+        };
 
         // 查看功能
         if (options.g) {
@@ -213,14 +241,12 @@ export async function apply(ctx: Context, config: Config) {
 
           // 修改后的消息构建
           if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
-            const [text, imagePath] = cave.text.split('\n');
-            const imageSrc = processImagePath(imagePath);
-            return `回声洞 —— [${cave.cave_id}]\n${text}\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+            return buildMessage(cave, true);
           } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
             const imageSrc = processImagePath(cave.text);
-            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_name}`;
           }
-          return `回声洞 —— [${cave.cave_id}]\n${cave.text}\n—— ${cave.contributor_id}`;
+          return buildMessage(cave);
         }
 
         // 随机查看（默认功能）
@@ -243,14 +269,12 @@ export async function apply(ctx: Context, config: Config) {
 
           // 修改后的消息构建
           if (cave.text.includes('\n/') || cave.text.includes('\nhttp')) {
-            const [text, imagePath] = cave.text.split('\n');
-            const imageSrc = processImagePath(imagePath);
-            return `回声洞 —— [${cave.cave_id}]\n${text}\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+            return buildMessage(cave, true);
           } else if (cave.text.startsWith('/') || cave.text.startsWith('http')) {
             const imageSrc = processImagePath(cave.text);
-            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_id}`;
+            return `回声洞 —— [${cave.cave_id}]\n${h('image', { src: imageSrc })}\n—— ${cave.contributor_name}`;
           }
-          return `回声洞 —— [${cave.cave_id}]\n${cave.text}\n—— ${cave.contributor_id}`;
+          return buildMessage(cave);
         }
 
         // 删除功能
