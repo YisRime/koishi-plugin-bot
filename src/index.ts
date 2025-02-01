@@ -64,11 +64,7 @@ async function saveImages(
   const targetPath = path.join(imageDir, filename);
 
   try {
-    // 处理URL
     const processedUrl = processQQImageUrl(url);
-    logger.info(`处理后的URL: ${processedUrl}`);
-
-    // 添加请求头
     const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
       responseType: 'arraybuffer',
       timeout: 30000,
@@ -78,9 +74,8 @@ async function saveImages(
         'Referer': 'https://qq.com'
       }
     }).catch(error => {
-      logger.error(`下载图片失败: ${error.message}`);
       if (error.response) {
-        logger.error(`响应数据: ${JSON.stringify(error.response.data)}`);
+        logger.error(`下载图片失败: ${error.response.status} ${error.response.statusText}`);
       }
       throw error;
     });
@@ -90,11 +85,9 @@ async function saveImages(
     }
 
     await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-    logger.success(`图片保存成功: ${filename}`);
     return filename;
   } catch (error) {
-    logger.error(`保存图片时出错：${error.message}`);
-    logger.error(`问题URL：${url}`);
+    logger.error(`保存图片失败: ${error.message}`);
     throw error;
   }
 }
