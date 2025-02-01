@@ -51,6 +51,22 @@ function processQQImageUrl(url: string): string {
   }
 }
 
+// 添加处理特殊字符的函数
+function processSpecialChars(text: string): string {
+  return text
+    .replace(/\\n/g, '\n')       // 处理换行符
+    .replace(/\\t/g, '\t')       // 处理制表符
+    .replace(/\\r/g, '\r')       // 处理回车符
+    .replace(/\\\\/g, '\\')      // 处理反斜杠
+    .replace(/\\"/g, '"')        // 处理引号
+    .replace(/\\'/g, "'")        // 处理单引号
+    .replace(/&lt;/g, '<')       // 处理HTML转义字符
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 // 修改图片文件保存函数：处理URL并保存多张图片到本地
 async function saveImages(
   urls: string[],
@@ -138,11 +154,10 @@ function writeJsonFile(filePath: string, data: CaveObject[]): void {
   }
 }
 
-// 随机获取一条回声洞数据
+// 修改随机获取一条回声洞数据的逻辑
 function getRandomObject(data: CaveObject[]): CaveObject | undefined {
   if (!data || !data.length) return undefined;
-  // 过滤出有效的回声洞（至少包含文本或图片的记录）
-  const validCaves = data.filter(cave => cave.text || cave.images);
+  const validCaves = data.filter(cave => cave.text || (cave.images && cave.images.length > 0));
   if (!validCaves.length) return undefined;
   const randomIndex = Math.floor(Math.random() * validCaves.length);
   return validCaves[randomIndex];
@@ -241,12 +256,13 @@ export async function apply(ctx: Context, config: Config) {
             caveId++;
           }
 
-          // 处理文本内容
+          // 处理文本内容时增加转义字符处理
           cleanText = originalContent
             .replace(/<img[^>]+>/g, '')    // 移除所有img标签
             .replace(/^~cave -a\s*/, '')   // 移除命令前缀
             .replace(/\s+/g, ' ')          // 规范化空格
             .trim();
+          cleanText = processSpecialChars(cleanText);  // 处理特殊字符
 
           // 获取用户信息
           let contributorName = session.username;
@@ -297,7 +313,9 @@ export async function apply(ctx: Context, config: Config) {
 
         // 显示消息构建函数：处理文本和多张图片显示
         const buildMessage = (cave: CaveObject) => {
-          let content = cave.text;
+          let content = cave.text || '';
+          content = processSpecialChars(content);  // 处理特殊字符
+
           if (cave.images && cave.images.length > 0) {
             try {
               for (const imagePath of cave.images) {
@@ -346,7 +364,6 @@ export async function apply(ctx: Context, config: Config) {
           lastUsed.set(guildId, now);
           const cave = getRandomObject(data);
           if (!cave) return '获取回声洞失败';
-          if (!cave.text) return '回声洞内容为空';
 
           return buildMessage(cave);
         }
