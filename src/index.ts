@@ -200,24 +200,14 @@ export async function apply(ctx: Context, config: Config) {
     // 命令处理函数
     .action(async ({ session, options }, ...content) => {
       const data = readJsonFile(caveFilePath);
-      const inputText = content.join(' ');
 
       try {
-        // 添加回声洞：支持文字、图片和图文混合
         if (options.a) {
-          // 清理输入文本中的图片标签
-          const cleanText = content.join(' ').replace(/<img[^>]+>/g, '').trim();
-
-          // 收集所有图片URL
           let imageURL = null;
+          let cleanText = '';
 
-          // 从img标签中获取URL
-          const imgMatch = session.content.match(/<img[^>]+src="([^"]+)"[^>]*>/);
-          if (imgMatch) {
-            imageURL = imgMatch[1];
-          }
-
-          // 从elements中获取URL（优先级更高）
+          // 1. 优先处理图片
+          // 从elements中获取URL（优先级最高）
           if (session.elements) {
             const imageElement = session.elements.find(el => el.type === 'image');
             if (imageElement && 'url' in imageElement) {
@@ -225,17 +215,21 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
-          // 检查是否有有效内容
-          if (!imageURL && !cleanText) {
-            return '请输入图片或文字';
+          // 如果elements中没有图片，尝试从img标签获取
+          if (!imageURL) {
+            const imgMatch = session.content.match(/<img[^>]+src="([^"]+)"[^>]*>/);
+            if (imgMatch) {
+              imageURL = imgMatch[1];
+            }
           }
 
+          // 2. 生成ID
           let caveId = 1;
           while (data.some(item => item.cave_id === caveId)) {
             caveId++;
           }
 
-          // 获取用户昵称
+          // 3. 获取用户信息
           let contributorName = session.username;
           if (ctx.database) {
             try {
@@ -246,6 +240,18 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
+          // 4. 处理文本内容（移除所有img标签）
+          cleanText = session.content
+            .replace(/<img[^>]+>/g, '')  // 移除所有img标签
+            .replace(/~cave -a/g, '')    // 移除命令前缀
+            .trim();                     // 清理多余空格
+
+          // 5. 检查是否有有效内容
+          if (!imageURL && !cleanText) {
+            return '请输入图片或文字';
+          }
+
+          // 6. 创建新回声洞对象
           const newCave: CaveObject = {
             cave_id: caveId,
             text: cleanText,
@@ -253,18 +259,13 @@ export async function apply(ctx: Context, config: Config) {
             contributor_name: contributorName
           };
 
-          // 保存图片
+          // 7. 处理图片
           if (imageURL) {
             try {
-              logger.info(`尝试保存图片，原始URL: ${imageURL}`);
               const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
               newCave.image_path = filename;
-              logger.info(`图片保存成功: ${filename}`);
             } catch (error) {
-              logger.error(`保存图片失败: ${error.message}`);
-              // 如果有文本内容，仍然保存文本
               if (cleanText) {
-                logger.info('保存文本内容');
                 data.push(newCave);
                 writeJsonFile(caveFilePath, data);
                 return `添加成功 (图片保存失败), 序号为 [${caveId}]`;
@@ -273,6 +274,7 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
+          // 8. 保存数据
           data.push(newCave);
           writeJsonFile(caveFilePath, data);
           return `添加成功, 序号为 [${caveId}]`;
