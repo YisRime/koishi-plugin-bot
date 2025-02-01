@@ -174,8 +174,18 @@ export async function apply(ctx: Context, config: Config) {
         // 添加功能
         if (options.a) {
           let imageURL = h.select(session.content, 'img').map(a => a.attrs.src)[0];
-          if (!imageURL && !inputText) {
+
+          // 修改空内容判断逻辑
+          if (!imageURL && !inputText && !session.elements?.some(el => el.type === 'image')) {
             return '请输入图片或文字';
+          }
+
+          // 获取图片URL（支持多种方式发送的图片）
+          if (!imageURL && session.elements) {
+            const imageElement = session.elements.find(el => el.type === 'image');
+            if (imageElement && 'url' in imageElement) {
+              imageURL = imageElement.url;
+            }
           }
 
           let caveId = 1;
@@ -200,11 +210,11 @@ export async function apply(ctx: Context, config: Config) {
             contributor_name: contributorName
           };
 
+          // 修改图片保存逻辑
           if (imageURL) {
             try {
               const filename = await saveImages(imageURL, imageDir, caveId, 'png', config, ctx);
               newCave.image_path = filename;
-              newCave.image_url = imageURL;  // 保存原始URL作为备份
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
               return '图片保存失败，请稍后重试';
@@ -216,14 +226,21 @@ export async function apply(ctx: Context, config: Config) {
           return `添加成功, 序号为 [${caveId}]`;
         }
 
-        // 修改显示消息的构建部分
+        // 修改 buildMessage 函数以确保使用本地图片
         const buildMessage = (cave: CaveObject) => {
           let content = cave.text;
           if (cave.image_path) {
-            const imagePath = path.join(imageDir, cave.image_path);
-            const imageSrc = processImagePath(imagePath);
-            if (imageSrc !== imagePath) {  // 只有成功读取到本地图片时才显示
-              content += `\n${h('image', { src: imageSrc })}`;
+            try {
+              const imagePath = path.join(imageDir, cave.image_path);
+              if (fs.existsSync(imagePath)) {
+                const imageBuffer = fs.readFileSync(imagePath);
+                const base64Image = imageBuffer.toString('base64');
+                content += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
+              } else {
+                logger.error(`找不到图片文件: ${imagePath}`);
+              }
+            } catch (error) {
+              logger.error(`读取图片失败: ${error.message}`);
             }
           }
           return `回声洞 —— [${cave.cave_id}]\n${content}\n—— ${cave.contributor_name}`;
@@ -275,6 +292,24 @@ export async function apply(ctx: Context, config: Config) {
           const index = data.findIndex(item => item.cave_id === caveId);
           if (index === -1) {
             return '未找到对应的回声洞序号。';
+          }
+
+          // 权限校验：检查是否为内容贡献者或管理员
+          const cave = data[index];
+          if (cave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
+            return '你没有权限删除该回声洞。只有内容贡献者或管理员可以删除。';
+          }
+
+          // 如果是图片内容，删除对应的图片文件
+          if (cave.image_path) {
+            try {
+              const imagePath = path.join(imageDir, cave.image_path);
+              if (fs.existsSync(imagePath)) {
+                fs.unlinkSync(imagePath);
+              }
+            } catch (error) {
+              logger.error(`删除图片文件失败: ${error.message}`);
+            }
           }
 
           data.splice(index, 1);
