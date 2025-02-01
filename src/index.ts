@@ -69,6 +69,17 @@ function processSpecialChars(text: string): string {
     .replace(/&#39;/g, "'");
 }
 
+// 添加处理保存内容的函数
+function formatContentForSave(text: string): string {
+  return text
+    .replace(/\n/g, '\\n')       // 保存时将换行转为\n
+    .replace(/\t/g, '\\t')       // 保存时将制表符转为\t
+    .replace(/\r/g, '\\r')       // 保存时将回车转为\r
+    .replace(/\\/g, '\\\\')      // 保存时将反斜杠转为\\
+    .replace(/"/g, '\\"')        // 保存时将引号转为\"
+    .replace(/'/g, "\\'");       // 保存时将单引号转为\'
+}
+
 // 修改图片文件保存函数：处理URL并保存多张图片到本地
 async function saveImages(
   urls: string[],
@@ -261,11 +272,10 @@ export async function apply(ctx: Context, config: Config) {
     // 命令处理函数
     .action(async ({ session, options }, ...content) => {
       try {
-        // 优先处理审核相关命令
-        if (options.p || options.d || options.pa || options.da) {
+        // 优先处理批量审核命令
+        if (options.pa || options.da) {
           const pendingData = readPendingFile(pendingFilePath);
 
-          // 处理一键通过所有待审核
           if (options.pa) {
             if (pendingData.length === 0) return '没有待审核的回声洞';
 
@@ -273,7 +283,7 @@ export async function apply(ctx: Context, config: Config) {
             for (const cave of pendingData) {
               data.push(cave);
               if (cave.groupId) {
-                await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${cave.cave_id} 已通过审核`);
+                await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 [${cave.cave_id}] 已通过审核`);
               }
             }
 
@@ -282,12 +292,10 @@ export async function apply(ctx: Context, config: Config) {
             return `✅ 已通过全部 ${pendingData.length} 条待审核回声洞`;
           }
 
-          // 处理一键拒绝所有待审核
           if (options.da) {
             if (pendingData.length === 0) return '没有待审核的回声洞';
 
             for (const cave of pendingData) {
-              // 删除图片
               if (cave.images) {
                 for (const imagePath of cave.images) {
                   const fullPath = path.join(imageDir, imagePath);
@@ -297,13 +305,18 @@ export async function apply(ctx: Context, config: Config) {
                 }
               }
               if (cave.groupId) {
-                await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${cave.cave_id} 未通过审核`);
+                await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 [${cave.cave_id}] 未通过审核`);
               }
             }
 
             writePendingFile(pendingFilePath, []);
             return `❌ 已拒绝全部 ${pendingData.length} 条待审核回声洞`;
           }
+        }
+
+        // 处理单条审核
+        if (options.p || options.d) {
+          const pendingData = readPendingFile(pendingFilePath);
 
           // 处理通过单条审核
           if (options.p) {
@@ -323,7 +336,14 @@ export async function apply(ctx: Context, config: Config) {
             writePendingFile(pendingFilePath, pendingData);
 
             if (cave.groupId) {
-              await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 #${id} 已通过审核`);
+              await ctx.bots[0]?.sendMessage(cave.groupId, `✅ 回声洞 [${id}] 已通过审核`);
+            }
+
+            // 检查是否还有其他待审核内容
+            const remainingCount = pendingData.length;
+            if (remainingCount > 0) {
+              const remainingIds = pendingData.map(c => c.cave_id).join(', ');
+              return `审核通过成功，还有 ${remainingCount} 条待审核回声洞：[${remainingIds}]`;
             }
             return '审核通过成功';
           }
@@ -351,7 +371,14 @@ export async function apply(ctx: Context, config: Config) {
             writePendingFile(pendingFilePath, pendingData);
 
             if (cave.groupId) {
-              await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 #${id} 未通过审核`);
+              await ctx.bots[0]?.sendMessage(cave.groupId, `❌ 回声洞 [${id}] 未通过审核`);
+            }
+
+            // 检查是否还有其他待审核内容
+            const remainingCount = pendingData.length;
+            if (remainingCount > 0) {
+              const remainingIds = pendingData.map(c => c.cave_id).join(', ');
+              return `已拒绝该回声洞，还有 ${remainingCount} 条待审核回声洞：[${remainingIds}]`;
             }
             return '已拒绝该回声洞';
           }
@@ -427,10 +454,10 @@ export async function apply(ctx: Context, config: Config) {
             return '添加失败：请提供文字内容或图片';
           }
 
-          // 创建新回声洞对象
+          // 创建新回声洞对象时格式化内容
           const newCave: CaveObject = {
             cave_id: caveId,
-            text: cleanText,
+            text: formatContentForSave(cleanText),
             contributor_number: session.userId,
             contributor_name: contributorName
           };
@@ -476,32 +503,6 @@ export async function apply(ctx: Context, config: Config) {
               config.manager[0],
               `新回声洞待审核 —— [${caveId}]\n来自：${pendingCave.contributor_name}\n群组：${pendingCave.groupId || '私聊'}\n内容：\n${auditContent}`
             );
-
-            // 2. 如果有其他待审核的回声洞，逐个发送
-            if (pendingData.length > 1) {
-              await ctx.bots[0]?.sendPrivateMessage(config.manager[0], '当前其他待审核回声洞：');
-
-              for (const cave of pendingData) {
-                if (cave.cave_id === caveId) continue; // 跳过刚刚添加的
-
-                let content = cave.text || '';
-                if (cave.images && cave.images.length > 0) {
-                  for (const imagePath of cave.images) {
-                    const fullImagePath = path.join(imageDir, imagePath);
-                    if (fs.existsSync(fullImagePath)) {
-                      const imageBuffer = fs.readFileSync(fullImagePath);
-                      const base64Image = imageBuffer.toString('base64');
-                      content += `\n${h('image', { src: `data:image/png;base64,${base64Image}` })}`;
-                    }
-                  }
-                }
-
-                await ctx.bots[0]?.sendPrivateMessage(
-                  config.manager[0],
-                  `待审核 —— [${cave.cave_id}]\n来自：${cave.contributor_name}\n群组：${cave.groupId || '私聊'}\n内容：\n${content}`
-                );
-              }
-            }
 
             return '✨ 回声洞已提交审核，请等待审核结果';
           }
@@ -621,7 +622,7 @@ export async function apply(ctx: Context, config: Config) {
 
           data.splice(index, 1);
           writeJsonFile(caveFilePath, data);
-          return `✅ 已删除 #${caveId} 号回声洞`;
+          return `✅ 已删除回声洞 [${caveId}]`;
         }
 
       } catch (error) {
