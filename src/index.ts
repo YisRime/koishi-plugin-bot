@@ -177,13 +177,11 @@ async function saveImages(
 }
 
 // 审核相关函数
-// 发送审核消息给所有管理员
+// 修改审核消息格式
 async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string) {
-  const auditMessage = `📝 新回声洞待审核 [${cave.cave_id}]
+  const auditMessage = `待审核：${content}
 来源：${cave.groupId ? `群${cave.groupId}` : '私聊'}
-投稿：${cave.contributor_name}
-内容：
-${content}`;
+投稿：${cave.contributor_name} (${cave.contributor_number})`;
 
   for (const managerId of config.manager) {
     try {
@@ -223,7 +221,9 @@ async function handleSingleCaveAudit(
 ): Promise<boolean> {
   try {
     if (isApprove && data) {
-      data.push(cave);
+      // 创建新对象，去除 groupId 字段
+      const { groupId, ...cleanCave } = cave;
+      data.push(cleanCave);
       logger.info(`审核通过回声洞 [${cave.cave_id}], 来自: ${cave.contributor_name}`);
     } else if (!isApprove && cave.elements) {
       // 删除被拒绝的图片
@@ -416,23 +416,39 @@ export async function apply(ctx: Context, config: Config) {
 
           // 处理elements中的内容
           if (session.elements) {
+            let lastWasImage = false;
             for (const el of session.elements) {
               if (el.type === 'text' && 'content' in el.attrs) {
-                // 移除命令前缀
-                const text = el.attrs.content.replace(/^~cave -a\s*/, '');
-                if (text.trim()) {
-                  currentText += text;
+                // 移除命令前缀 (只处理第一个元素)
+                let text = el.attrs.content;
+                if (!messageElements.length) {
+                  text = text.replace(/^~cave -a\s*/, '');
                 }
+
+                // 如果前一个是图片元素，作为新的文本元素添加
+                if (lastWasImage) {
+                  if (text.trim()) {
+                    messageElements.push({
+                      type: 'text',
+                      content: text
+                    });
+                  }
+                } else {
+                  // 如果前一个是文本，追加到最后一个文本元素
+                  const lastElement = messageElements[messageElements.length - 1];
+                  if (lastElement && lastElement.type === 'text') {
+                    lastElement.content += text;
+                  } else if (text.trim()) {
+                    messageElements.push({
+                      type: 'text',
+                      content: text
+                    });
+                  }
+                }
+                lastWasImage = false;
               } else if (el.type === 'image' && 'url' in el) {
-                // 如果有累积的文本，先添加文本元素
-                if (currentText.trim()) {
-                  messageElements.push({
-                    type: 'text',
-                    content: currentText.trim()
-                  });
-                  currentText = '';
-                }
                 imageURLs.push(el.url as string);
+                lastWasImage = true;
               }
             }
           }
@@ -490,13 +506,8 @@ export async function apply(ctx: Context, config: Config) {
           // 创建新回声洞对象
           const elements: Element[] = [];
 
-          // 处理文本内容
-          if (cleanText) {
-            elements.push({
-              type: 'text',
-              content: cleanText
-            });
-          }
+          // 使用处理好的messageElements
+          elements.push(...messageElements);
 
           const newCave: CaveObject = {
             cave_id: caveId,
@@ -562,21 +573,25 @@ export async function apply(ctx: Context, config: Config) {
 
           // 非审核模式处理图片
           if (imageURLs.length > 0) {
-            try {
-              const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
-              for (const filename of savedImages) {
+            const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
+            for (let i = 0; i < savedImages.length; i++) {
+              // 找到对应图片在原始消息中的位置
+              const insertIndex = elements.findIndex(el =>
+                el.type === 'text' && i < imageURLs.length
+              );
+              if (insertIndex >= 0) {
+                // 在文本之后插入图片
+                elements.splice(insertIndex + 1, 0, {
+                  type: 'img',
+                  file: savedImages[i]
+                });
+              } else {
+                // 如果找不到对应位置，追加到末尾
                 elements.push({
                   type: 'img',
-                  file: filename
+                  file: savedImages[i]
                 });
               }
-            } catch (error) {
-              if (cleanText) {
-                data.push(newCave);
-                writeJsonFile(caveFilePath, data);
-                return `添加成功 (部分图片保存失败), 序号为 [${caveId}]`;
-              }
-              return '图片保存失败，请稍后重试';
             }
           }
 
