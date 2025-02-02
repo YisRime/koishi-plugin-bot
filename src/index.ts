@@ -271,12 +271,14 @@ function buildMessage(cave: CaveObject, imageDir: string): string {
 
 // 在文件顶部添加清理函数
 function cleanElementsForSave(elements: Element[]): Element[] {
-  return elements.map(({ type, content, file, index }) => ({
-    type,
-    index,
-    ...(content && { content }),
-    ...(file && { file })
-  }));
+  return elements
+    .sort((a, b) => a.index - b.index)  // 先按 index 排序
+    .map(({ type, content, file, index }) => ({
+      type,
+      index,
+      ...(content && { content }),
+      ...(file && { file })
+    }));
 }
 
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
