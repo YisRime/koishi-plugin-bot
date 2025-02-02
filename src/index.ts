@@ -34,6 +34,7 @@ interface Element {
   type: 'text' | 'img';
   content?: string;
   file?: string;
+  index: number;    // 添加索引字段
 }
 
 interface CaveObject {
@@ -353,112 +354,94 @@ export async function apply(ctx: Context, config: Config) {
           typeof item.contributor_name === 'string'
         );
 
-// ...existing code...
-
         // 处理添加回声洞时的审核消息发送
         if (options.a) {
-          // 1. 收集内容
-          interface ContentItem {
-            index: number;     // 内容在原始消息中的位置
-            type: 'text' | 'img';
-            content?: string;  // 文本内容
-            url?: string;     // 图片URL
-          }
-
-          const contents: ContentItem[] = [];
           const originalContent = session.quote?.content || session.content;
-          let currentIndex = 0;
+          const elements: Element[] = [];
+          const imageUrls: string[] = [];
 
-          // 处理文本内容
-          const texts = originalContent
-            .replace(/<img[^>]+>/g, '\n')
+          // 1. 提取并排序文本内容
+          const textParts = originalContent
             .replace(/^~cave -a\s*/, '')
-            .split('\n')
+            .split(/<img[^>]+>/g)
             .map(text => text.trim())
-            .filter(text => text);
+            .filter(text => text)
+            .map((text, idx) => ({
+              type: 'text' as const,
+              content: text,
+              index: idx * 2  // 使用偶数索引给文本
+            }));
 
-          texts.forEach(text => {
-            contents.push({
-              index: currentIndex++,
-              type: 'text',
-              content: text
-            });
-          });
+          // 2. 提取图片URL并分配索引
+          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
+          const imageElements = imgMatches.map((img, idx) => {
+            const match = img.match(/src="([^"]+)"/);
+            if (match?.[1]) {
+              imageUrls.push(match[1]);
+              return {
+                type: 'img' as const,
+                index: idx * 2 + 1  // 使用奇数索引给图片
+              };
+            }
+            return null;
+          }).filter((el): el is NonNullable<typeof el> => el !== null);
 
-          // 处理图片URL
-          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
-          if (imgMatches) {
-            imgMatches.forEach(img => {
-              const match = img.match(/src="([^"]+)"/);
-              if (match?.[1]) {
-                contents.push({
-                  index: currentIndex++,
-                  type: 'img',
-                  url: match[1]
-                });
-              }
-            });
-          }
-
-          // 2. 生成ID
+          // 3. 生成ID
           const pendingData = readJsonData<PendingCave>(pendingFilePath);
           const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
           const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
           const caveId = Math.max(maxDataId, maxPendingId) + 1;
 
-          // 3. 按序号排序并处理内容
-          const elements: Element[] = [];
-          const imageUrls = contents.filter(item => item.type === 'img').map(item => item.url!);
-
-          // 保存图片
+          // 4. 保存图片
           let savedImages: string[] = [];
           if (imageUrls.length > 0) {
             try {
               savedImages = await saveImages(imageUrls, imageDir, caveId, config, ctx);
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
+              // 继续处理文本内容
             }
           }
 
-          // 4. 按原始顺序构建元素数组
-          let imageIndex = 0;
-          contents.sort((a, b) => a.index - b.index).forEach(item => {
-            if (item.type === 'text' && item.content) {
+          // 5. 合并文本和图片元素，保持索引顺序
+          elements.push(...textParts);
+
+          savedImages.forEach((file, idx) => {
+            if (imageElements[idx]) {
               elements.push({
-                type: 'text',
-                content: item.content
-              });
-            } else if (item.type === 'img' && imageIndex < savedImages.length) {
-              elements.push({
+                ...imageElements[idx],
                 type: 'img',
-                file: savedImages[imageIndex++]
+                file
               });
             }
           });
+
+          // 6. 按索引排序
+          elements.sort((a, b) => a.index - b.index);
 
           if (elements.length === 0) {
             return '添加失败：请提供文字内容或图片';
           }
 
-          // 5. 创建和保存回声洞对象
-          const newCave: CaveObject = {
-            cave_id: caveId,
-            elements,
-            contributor_number: session.userId,
-            contributor_name: session.username
-          };
-
-          // 获取用户昵称
+          // 7. 获取用户信息并创建对象
+          let contributorName = session.username;
           if (ctx.database) {
             try {
               const userInfo = await ctx.database.getUser(session.platform, session.userId);
-              newCave.contributor_name = (userInfo as unknown as User)?.nickname || session.username;
+              contributorName = (userInfo as unknown as User)?.nickname || session.username;
             } catch (error) {
               logger.error(`获取用户昵称失败: ${error.message}`);
             }
           }
 
-          // 6. 处理审核或直接保存
+          const newCave: CaveObject = {
+            cave_id: caveId,
+            elements,
+            contributor_number: session.userId,
+            contributor_name: contributorName
+          };
+
+          // 8. 处理审核或直接保存
           if (config.enableAudit) {
             pendingData.push(newCave);
             writeJsonData(pendingFilePath, pendingData);
@@ -470,8 +453,6 @@ export async function apply(ctx: Context, config: Config) {
           writeJsonData(caveFilePath, data);
           return `✨ 回声洞添加成功！编号为 [${caveId}]`;
         }
-
-        // ...existing code...
 
         // 查看指定回声洞
         if (options.g) {
