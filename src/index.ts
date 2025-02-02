@@ -394,10 +394,11 @@ export async function apply(ctx: Context, config: Config) {
           // 去重图片URL
           imageURLs = [...new Set(imageURLs)];
 
-          // 处理文本内容
+          // 处理文本内容，确保图片前有换行符
           cleanText = originalContent
-            .replace(/<img[^>]+>/g, '')    // 移除所有img标签
+            .replace(/<img[^>]+>/g, '\n')  // 将图片标签替换为换行符
             .replace(/^~cave -a\s*/, '')   // 移除命令前缀
+            .replace(/\n{3,}/g, '\n\n')    // 将多个换行符规范化为最多两个
             .trim();
 
           // 2. 生成ID
@@ -410,6 +411,7 @@ export async function apply(ctx: Context, config: Config) {
           const elements: Element[] = [];
           let savedImages: string[] = [];
 
+          // 先保存所有图片
           if (imageURLs.length > 0) {
             try {
               savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
@@ -418,25 +420,39 @@ export async function apply(ctx: Context, config: Config) {
               if (!cleanText) {
                 return '图片保存失败，请稍后重试';
               }
-              // 如果有文本内容，继续处理
             }
           }
 
-          // 4. 添加文本元素
-          if (cleanText) {
-            elements.push({
-              type: 'text',
-              content: cleanText
-            });
+          // 处理文本和图片的混合内容
+          const parts = cleanText.split('\n');
+          let imageIndex = 0;
+
+          for (const part of parts) {
+            const trimmedPart = part.trim();
+            if (trimmedPart) {
+              // 添加文本元素
+              elements.push({
+                type: 'text',
+                content: trimmedPart
+              });
+            }
+
+            // 在每个文本后尝试插入一个图片（如果有的话）
+            if (imageIndex < savedImages.length) {
+              elements.push({
+                type: 'img',
+                file: savedImages[imageIndex++]
+              });
+            }
           }
 
-          // 添加图片元素
-          savedImages.forEach(file => {
+          // 添加剩余的图片
+          while (imageIndex < savedImages.length) {
             elements.push({
               type: 'img',
-              file
+              file: savedImages[imageIndex++]
             });
-          });
+          }
 
           // 验证内容
           if (elements.length === 0) {
@@ -563,13 +579,4 @@ export async function apply(ctx: Context, config: Config) {
         return '操作失败，请稍后重试';
       }
     });
-}
-
-// 添加消息处理辅助函数
-function processSpecialChars(text: string): string {
-  return text
-    .replace(/\\n/g, '\n')         // 处理显式换行符
-    .replace(/\n+/g, '\n')         // 规范化换行
-    .replace(/\s+/g, ' ')          // 规范化空格
-    .trim();
 }
