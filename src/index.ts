@@ -353,53 +353,52 @@ export async function apply(ctx: Context, config: Config) {
           typeof item.contributor_name === 'string'
         );
 
+// ...existing code...
+
         // 处理添加回声洞时的审核消息发送
         if (options.a) {
-          let imageURLs: string[] = [];
-          let cleanText = '';
-          let originalContent = '';
+          // 1. 收集内容
+          interface ContentItem {
+            index: number;     // 内容在原始消息中的位置
+            type: 'text' | 'img';
+            content?: string;  // 文本内容
+            url?: string;     // 图片URL
+          }
 
-          // 1. 获取图片URL和文本内容
-          originalContent = session.quote?.content || session.content;
+          const contents: ContentItem[] = [];
+          const originalContent = session.quote?.content || session.content;
+          let currentIndex = 0;
 
-          // 获取HTML中的图片URL
+          // 处理文本内容
+          const texts = originalContent
+            .replace(/<img[^>]+>/g, '\n')
+            .replace(/^~cave -a\s*/, '')
+            .split('\n')
+            .map(text => text.trim())
+            .filter(text => text);
+
+          texts.forEach(text => {
+            contents.push({
+              index: currentIndex++,
+              type: 'text',
+              content: text
+            });
+          });
+
+          // 处理图片URL
           const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
           if (imgMatches) {
-            imageURLs = imgMatches.map(img => {
+            imgMatches.forEach(img => {
               const match = img.match(/src="([^"]+)"/);
-              return match ? match[1] : null;
-            }).filter((url): url is string => !!url);
-          }
-
-          // 获取elements中的图片URL
-          if (session.elements) {
-            const imageElements = session.elements.filter(el => el.type === 'image');
-            imageElements.forEach(el => {
-              if ('url' in el && typeof el.url === 'string') {
-                imageURLs.push(el.url);
+              if (match?.[1]) {
+                contents.push({
+                  index: currentIndex++,
+                  type: 'img',
+                  url: match[1]
+                });
               }
             });
           }
-
-          // 处理引用消息中的图片
-          if (session.quote?.elements) {
-            const quoteImageElements = session.quote.elements.filter(el => el.type === 'image');
-            quoteImageElements.forEach(el => {
-              if ('url' in el && typeof el.url === 'string') {
-                imageURLs.push(el.url);
-              }
-            });
-          }
-
-          // 去重图片URL
-          imageURLs = [...new Set(imageURLs)];
-
-          // 处理文本内容，确保图片前有换行符
-          cleanText = originalContent
-            .replace(/<img[^>]+>/g, '\n')  // 将图片标签替换为换行符
-            .replace(/^~cave -a\s*/, '')   // 移除命令前缀
-            .replace(/\n{3,}/g, '\n\n')    // 将多个换行符规范化为最多两个
-            .trim();
 
           // 2. 生成ID
           const pendingData = readJsonData<PendingCave>(pendingFilePath);
@@ -407,78 +406,59 @@ export async function apply(ctx: Context, config: Config) {
           const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
           const caveId = Math.max(maxDataId, maxPendingId) + 1;
 
-          // 3. 保存图片并创建元素数组
+          // 3. 按序号排序并处理内容
           const elements: Element[] = [];
-          let savedImages: string[] = [];
+          const imageUrls = contents.filter(item => item.type === 'img').map(item => item.url!);
 
-          // 先保存所有图片
-          if (imageURLs.length > 0) {
+          // 保存图片
+          let savedImages: string[] = [];
+          if (imageUrls.length > 0) {
             try {
-              savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
+              savedImages = await saveImages(imageUrls, imageDir, caveId, config, ctx);
             } catch (error) {
               logger.error(`保存图片失败: ${error.message}`);
-              if (!cleanText) {
-                return '图片保存失败，请稍后重试';
-              }
             }
           }
 
-          // 处理文本和图片的混合内容
-          const parts = cleanText.split('\n');
+          // 4. 按原始顺序构建元素数组
           let imageIndex = 0;
-
-          for (const part of parts) {
-            const trimmedPart = part.trim();
-            if (trimmedPart) {
-              // 添加文本元素
+          contents.sort((a, b) => a.index - b.index).forEach(item => {
+            if (item.type === 'text' && item.content) {
               elements.push({
                 type: 'text',
-                content: trimmedPart
+                content: item.content
               });
-            }
-
-            // 在每个文本后尝试插入一个图片（如果有的话）
-            if (imageIndex < savedImages.length) {
+            } else if (item.type === 'img' && imageIndex < savedImages.length) {
               elements.push({
                 type: 'img',
                 file: savedImages[imageIndex++]
               });
             }
-          }
+          });
 
-          // 添加剩余的图片
-          while (imageIndex < savedImages.length) {
-            elements.push({
-              type: 'img',
-              file: savedImages[imageIndex++]
-            });
-          }
-
-          // 验证内容
           if (elements.length === 0) {
             return '添加失败：请提供文字内容或图片';
           }
 
-          // 5. 获取用户信息
-          let contributorName = session.username;
+          // 5. 创建和保存回声洞对象
+          const newCave: CaveObject = {
+            cave_id: caveId,
+            elements,
+            contributor_number: session.userId,
+            contributor_name: session.username
+          };
+
+          // 获取用户昵称
           if (ctx.database) {
             try {
               const userInfo = await ctx.database.getUser(session.platform, session.userId);
-              contributorName = (userInfo as unknown as User)?.nickname || session.username;
+              newCave.contributor_name = (userInfo as unknown as User)?.nickname || session.username;
             } catch (error) {
               logger.error(`获取用户昵称失败: ${error.message}`);
             }
           }
 
-          // 6. 创建新回声洞对象
-          const newCave: CaveObject = {
-            cave_id: caveId,
-            elements,
-            contributor_number: session.userId,
-            contributor_name: contributorName
-          };
-
-          // 7. 处理审核流程或直接保存
+          // 6. 处理审核或直接保存
           if (config.enableAudit) {
             pendingData.push(newCave);
             writeJsonData(pendingFilePath, pendingData);
@@ -486,11 +466,12 @@ export async function apply(ctx: Context, config: Config) {
             return '✨ 回声洞已提交审核';
           }
 
-          // 直接保存
           data.push(newCave);
           writeJsonData(caveFilePath, data);
           return `✨ 回声洞添加成功！编号为 [${caveId}]`;
         }
+
+        // ...existing code...
 
         // 查看指定回声洞
         if (options.g) {
