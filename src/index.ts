@@ -45,7 +45,7 @@ interface CaveObject {
 
 // 添加待审核回声洞接口
 interface PendingCave extends CaveObject {
-  groupId?: string;        // 来源群号
+  // groupId 已移除
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -153,9 +153,7 @@ async function saveImages(
 // 审核相关函数
 async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string) {
   const auditMessage = `待审核：\n${content}
-来源：${cave.groupId ? `${cave.groupId}` : '私聊'}
-投稿：${cave.contributor_name} (${cave.contributor_number})`;
-
+投稿：${cave.contributor_number}`;
   for (const managerId of config.manager) {
     try {
       await ctx.bots[0]?.sendPrivateMessage(managerId, auditMessage);
@@ -175,10 +173,9 @@ async function handleSingleCaveAudit(
 ): Promise<boolean> {
   try {
     if (isApprove && data) {
-      // 创建新对象，去除 groupId 字段
-      const { groupId, ...cleanCave } = cave;
-      data.push(cleanCave);
-      logger.info(`审核通过回声洞 [${cave.cave_id}], 来自: ${cave.contributor_name}`);
+      // 直接添加 cave 对象
+      data.push(cave);
+      logger.info(`审核通过回声洞（${cave.cave_id}）`);
     } else if (!isApprove && cave.elements) {
       // 删除被拒绝的图片
       for (const element of cave.elements) {
@@ -187,18 +184,11 @@ async function handleSingleCaveAudit(
           if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
         }
       }
-      logger.info(`拒绝回声洞 [${cave.cave_id}], 来自: ${cave.contributor_name}`);
-    }
-
-    if (cave.groupId) {
-      await ctx.bots[0]?.sendMessage(cave.groupId,
-        isApprove ?
-        `✅ 回声洞 [${cave.cave_id}] 已通过审核` :
-        `❌ 回声洞 [${cave.cave_id}] 未通过审核`);
+      logger.info(`拒绝回声洞（${cave.cave_id}）`);
     }
     return true;
   } catch (error) {
-    logger.error(`处理回声洞 [${cave.cave_id}] 失败: ${error.message}`);
+    logger.error(`处理回声洞（${cave.cave_id}）失败: ${error.message}`);
     return false;
   }
 }
@@ -435,7 +425,7 @@ export async function apply(ctx: Context, config: Config) {
 
           // 显示消息构建函数：处理文本和多张图片显示
           const buildMessage = (cave: CaveObject, imageDir: string): string => {
-            let content = `回声洞 —— [${cave.cave_id}]\n`;
+            let content = `回声洞 ——（${cave.cave_id}）\n`;
 
             for (const element of cave.elements) {
               if (element.type === 'text') {
@@ -460,8 +450,7 @@ export async function apply(ctx: Context, config: Config) {
           // 处理审核流程
             if (config.enableAudit) {
               const pendingCave: PendingCave = {
-                ...newCave,
-                groupId: session.guildId
+                ...newCave
               };
 
               // 保存图片（如果有）
@@ -486,7 +475,7 @@ export async function apply(ctx: Context, config: Config) {
               // 构建审核消息
               await sendAuditMessage(ctx, config, pendingCave, buildMessage(pendingCave, imageDir));
 
-              return '✨ 回声洞已提交审核，请等待审核结果';
+              return '✨ 回声洞已提交审核';
             }
 
           // 非审核模式处理图片
@@ -509,7 +498,7 @@ export async function apply(ctx: Context, config: Config) {
 
         // 显示消息构建函数：处理文本和多张图片显示
         const buildMessage = (cave: CaveObject, imageDir: string): string => {
-          let content = `回声洞 —— [${cave.cave_id}]\n`;
+          let content = `回声洞 ——（${cave.cave_id}）\n`;
 
           for (const element of cave.elements) {
             if (element.type === 'text') {
