@@ -174,8 +174,12 @@ async function handleSingleCaveAudit(
 ): Promise<boolean> {
   try {
     if (isApprove && data) {
-      // 直接添加 cave 对象
-      data.push(cave);
+      // 移除index后再保存到cave.json
+      const caveWithoutIndex = {
+        ...cave,
+        elements: cleanElementsForSave(cave.elements, false) // 不保留index
+      };
+      data.push(caveWithoutIndex);
       logger.info(`审核通过回声洞（${cave.cave_id}）`);
     } else if (!isApprove && cave.elements) {
       // 删除被拒绝的图片
@@ -270,15 +274,14 @@ function buildMessage(cave: CaveObject, imageDir: string): string {
 }
 
 // 在文件顶部添加清理函数
-function cleanElementsForSave(elements: Element[]): Element[] {
-  return elements
-    .sort((a, b) => a.index - b.index)  // 先按 index 排序
-    .map(({ type, content, file, index }) => ({
-      type,
-      index,
-      ...(content && { content }),
-      ...(file && { file })
-    }));
+function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
+  const sorted = elements.sort((a, b) => a.index - b.index);  // 先按 index 排序
+  return sorted.map(({ type, content, file, index }) => ({
+    type,
+    ...(keepIndex && { index }), // 只在需要时保留index
+    ...(content && { content }),
+    ...(file && { file })
+  }));
 }
 
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
@@ -448,20 +451,27 @@ export async function apply(ctx: Context, config: Config) {
 
           const newCave: CaveObject = {
             cave_id: caveId,
-            elements: cleanElementsForSave(elements),
+            elements: cleanElementsForSave(elements, true),
             contributor_number: session.userId,
             contributor_name: contributorName
           };
 
           // 8. 处理审核或直接保存
           if (config.enableAudit) {
-            pendingData.push(newCave);
+            pendingData.push({
+              ...newCave,
+              elements: cleanElementsForSave(elements, true) // 保留index
+            });
             writeJsonData(pendingFilePath, pendingData);
             await sendAuditMessage(ctx, config, newCave, buildMessage(newCave, imageDir));
             return '✨ 回声洞已提交审核';
           }
 
-          data.push(newCave);
+          const caveWithoutIndex = {
+            ...newCave,
+            elements: cleanElementsForSave(elements, false) // 不保留index
+          };
+          data.push(caveWithoutIndex);
           writeJsonData(caveFilePath, data);
           return `✨ 回声洞添加成功！编号为 [${caveId}]`;
         }
