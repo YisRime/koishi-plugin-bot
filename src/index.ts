@@ -342,13 +342,66 @@ export async function apply(ctx: Context, config: Config) {
         // 处理添加回声洞时的审核消息发送
         if (options.a) {
           let imageURLs: string[] = [];
-          let originalContent = '';
+          let originalContent = session.quote ? session.quote.content : session.content;
 
-          // 获取完整消息内容和elements
-          if (session.quote) {
-            originalContent = session.quote.content;
-          } else {
-            originalContent = session.content;
+          const messageElements: Element[] = [];
+
+          // 第一步：标记所有图片位置
+          const imagePositions: number[] = [];
+          if (session.elements) {
+            let position = 0;
+            for (const el of session.elements) {
+              if (el.type === 'image' && 'url' in el) {
+                imageURLs.push(el.url as string);
+                imagePositions.push(position);
+              } else if (el.type === 'text' && 'content' in el.attrs) {
+                position += el.attrs.content.length;
+              }
+            }
+          }
+
+          // 第二步：处理文本并分割
+          let fullText = '';
+          if (session.elements) {
+            for (const el of session.elements) {
+              if (el.type === 'text' && 'content' in el.attrs) {
+                let text = el.attrs.content;
+                // 只处理第一个元素的命令前缀
+                if (!fullText) {
+                  text = text.replace(/^~cave -a\s*/, '');
+                }
+                fullText += text;
+              }
+            }
+          }
+
+          // 第三步：按图片位置分割文本并构建元素数组
+          let lastPos = 0;
+          for (let i = 0; i < imagePositions.length; i++) {
+            const currentPos = imagePositions[i];
+            // 添加图片前的文本
+            const beforeText = fullText.substring(lastPos, currentPos).trim();
+            if (beforeText) {
+              messageElements.push({
+                type: 'text',
+                content: beforeText
+              });
+            }
+            // 添加图片标记
+            messageElements.push({
+              type: 'img',
+              file: '' // 临时占位，后续会替换为实际保存的文件名
+            });
+            lastPos = currentPos;
+          }
+
+          // 添加最后一段文本
+          const remainingText = fullText.substring(lastPos).trim();
+          if (remainingText) {
+            messageElements.push({
+              type: 'text',
+              content: remainingText
+            });
           }
 
           // 检查HTML格式的图片
@@ -388,12 +441,15 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           // 检查内容
-          if (imageURLs.length === 0) {
+          if (imageURLs.length === 0 && !fullText.trim()) {
             return '添加失败：请提供文字内容或图片';
           }
 
           // 创建新回声洞对象
           const elements: Element[] = [];
+
+          // 使用处理好的messageElements
+          elements.push(...messageElements);
 
           const newCave: CaveObject = {
             cave_id: caveId,
@@ -437,11 +493,12 @@ export async function apply(ctx: Context, config: Config) {
               if (imageURLs.length > 0) {
                 try {
                   const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
-                  for (const filename of savedImages) {
-                    elements.push({
-                      type: 'img',
-                      file: filename
-                    });
+                  // 更新之前的图片占位符
+                  let imageIndex = 0;
+                  for (let i = 0; i < messageElements.length; i++) {
+                    if (messageElements[i].type === 'img' && imageIndex < savedImages.length) {
+                      messageElements[i].file = savedImages[imageIndex++];
+                    }
                   }
                 } catch (error) {
                   return '图片保存失败，请稍后重试';
@@ -460,23 +517,11 @@ export async function apply(ctx: Context, config: Config) {
           // 非审核模式处理图片
           if (imageURLs.length > 0) {
             const savedImages = await saveImages(imageURLs, imageDir, caveId, config, ctx);
-            for (let i = 0; i < savedImages.length; i++) {
-              // 找到对应图片在原始消息中的位置
-              const insertIndex = elements.findIndex(el =>
-                el.type === 'text' && i < imageURLs.length
-              );
-              if (insertIndex >= 0) {
-                // 在文本之后插入图片
-                elements.splice(insertIndex + 1, 0, {
-                  type: 'img',
-                  file: savedImages[i]
-                });
-              } else {
-                // 如果找不到对应位置，追加到末尾
-                elements.push({
-                  type: 'img',
-                  file: savedImages[i]
-                });
+            // 更新之前的图片占位符
+            let imageIndex = 0;
+            for (let i = 0; i < messageElements.length; i++) {
+              if (messageElements[i].type === 'img' && imageIndex < savedImages.length) {
+                messageElements[i].file = savedImages[imageIndex++];
               }
             }
           }
