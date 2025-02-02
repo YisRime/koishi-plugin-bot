@@ -149,10 +149,10 @@ async function saveImages(
   for (let i = 0; i < urls.length; i++) {
     try {
       const url = urls[i];
-      const ext = path.extname(url) || '.png';
-      const filename = `${caveId}_${i + 1}${ext}`;
-      const targetPath = path.join(imageDir, filename);
       const processedUrl = processQQImageUrl(url);
+      const ext = url.match(/\.([^./?]+)(?:[?#]|$)/)?.[1] || 'png';
+      const filename = `${caveId}_${i + 1}.${ext}`;
+      const targetPath = path.join(imageDir, filename);
 
       const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
         responseType: 'arraybuffer',
@@ -182,7 +182,8 @@ async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave,
   const auditMessage = `📝 新回声洞待审核 [${cave.cave_id}]
 来源：${cave.groupId ? `群${cave.groupId}` : '私聊'}
 投稿：${cave.contributor_name}
-内容：${content}`;
+内容：
+${content}`;
 
   for (const managerId of config.manager) {
     try {
@@ -403,30 +404,57 @@ export async function apply(ctx: Context, config: Config) {
           let cleanText = '';
           let originalContent = '';
 
-          // 获取完整消息内容
+          // 获取完整消息内容和elements
           if (session.quote) {
             originalContent = session.quote.content;
           } else {
             originalContent = session.content;
           }
 
-          // 获取所有图片URL
-          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
-          if (imgMatches) {
-            imageURLs = imgMatches.map(img => {
-              const match = img.match(/src="([^"]+)"/);
-              return match ? match[1] : null;
-            }).filter(url => url);
-          }
+          const messageElements: Element[] = [];
+          let currentText = '';
 
-          // 检查 elements 中的图片
+          // 处理elements中的内容
           if (session.elements) {
-            const imageElements = session.elements.filter(el => el.type === 'image');
-            imageElements.forEach(el => {
-              if ('url' in el) {
+            for (const el of session.elements) {
+              if (el.type === 'text' && 'content' in el.attrs) {
+                // 移除命令前缀
+                const text = el.attrs.content.replace(/^~cave -a\s*/, '');
+                if (text.trim()) {
+                  currentText += text;
+                }
+              } else if (el.type === 'image' && 'url' in el) {
+                // 如果有累积的文本，先添加文本元素
+                if (currentText.trim()) {
+                  messageElements.push({
+                    type: 'text',
+                    content: currentText.trim()
+                  });
+                  currentText = '';
+                }
                 imageURLs.push(el.url as string);
               }
+            }
+          }
+
+          // 添加最后的文本
+          if (currentText.trim()) {
+            messageElements.push({
+              type: 'text',
+              content: currentText.trim()
             });
+          }
+
+          // 检查HTML格式的图片
+          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
+          if (imgMatches) {
+            const urls = imgMatches
+              .map(img => {
+                const match = img.match(/src="([^"]+)"/);
+                return match ? match[1] : null;
+              })
+              .filter(url => url);
+            imageURLs.push(...urls);
           }
 
           // 去重
