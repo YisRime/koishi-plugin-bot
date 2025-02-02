@@ -29,114 +29,77 @@ export interface Config {
   enableAudit: boolean;    // 是否开启审核
 }
 
+// 修改回声洞数据结构定义
+interface Element {
+  type: 'text' | 'img';
+  content?: string;
+  file?: string;
+}
+
+interface CaveObject {
+  cave_id: number;
+  elements: Element[];
+  contributor_number: string;
+  contributor_name: string;
+}
+
+// 添加待审核回声洞接口
+interface PendingCave extends CaveObject {
+  groupId?: string;        // 来源群号
+}
+
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required().description('管理员账号，用于审核和管理'),
   number: Schema.number().default(60).description('群内回声洞调用冷却时间（秒）'),
   enableAudit: Schema.boolean().default(false).description('是否开启回声洞审核功能'),
 });
 
-// 文本处理相关函数
-function processQQImageUrl(url: string): string {
-  try {
-    // 解码URL
-    const decodedUrl = decodeURIComponent(url);
-
-    // 处理QQ图片链接特殊字符
-    if (decodedUrl.includes('multimedia.nt.qq.com.cn')) {
-      return decodedUrl.replace(/&amp;/g, '&');
-    }
-
-    return url;
-  } catch (error) {
-    logger.error(`处理图片URL失败：${error.message}`);
-    return url;
-  }
-}
-
-// 文件操作相关函数
-// 读取JSON数据文件：验证并返回回声洞数据数组
-function readJsonFile(filePath: string): CaveObject[] {
+// 整合文件操作相关函数
+function readJsonData<T>(filePath: string, validator?: (item: any) => boolean): T[] {
   try {
     const data = fs.readFileSync(filePath, 'utf8');
     const parsed = JSON.parse(data || '[]');
     if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter(item =>
-      item &&
-      typeof item.cave_id === 'number' &&
-      Array.isArray(item.elements) &&
-      item.elements.every(el =>
-        (el.type === 'text' && typeof el.content === 'string') ||
-        (el.type === 'img' && typeof el.file === 'string')
-      ) &&
-      typeof item.contributor_number === 'string' &&
-      typeof item.contributor_name === 'string'
-    );
+    return validator ? parsed.filter(validator) : parsed;
   } catch (error) {
-    logger.error(`读取文件出错 ${filePath}: ${error.message}`);
+    logger.error(`读取文件失败 ${filePath}: ${error.message}`);
     return [];
   }
 }
 
-// 写入JSON数据：验证数据格式并保存到文件
-function writeJsonFile(filePath: string, data: CaveObject[]): void {
-  try {
-    // 数据格式验证
-    const validData = data.filter(item =>
-      item &&
-      typeof item.cave_id === 'number' &&
-      Array.isArray(item.elements) &&
-      item.elements.every(el =>
-        (el.type === 'text' && typeof el.content === 'string') ||
-        (el.type === 'img' && typeof el.file === 'string')
-      ) &&
-      typeof item.contributor_number === 'string' &&
-      typeof item.contributor_name === 'string'
-    );
-    fs.writeFileSync(filePath, JSON.stringify(validData, null, 2), 'utf8');
-  } catch (error) {
-    throw new Error(`写入文件出错: ${error.message}`);
-  }
-}
-
-// 添加待审核数据读写函数
-function readPendingFile(filePath: string): PendingCave[] {
-  try {
-    const data = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(data || '[]');
-  } catch (error) {
-    logger.error(`读取待审核文件失败 ${filePath}: ${error.message}`);
-    return [];
-  }
-}
-
-function writePendingFile(filePath: string, data: PendingCave[]): void {
+function writeJsonData<T>(filePath: string, data: T[]): void {
   try {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
   } catch (error) {
-    logger.error(`写入待审核文件失败: ${error.message}`);
+    logger.error(`写入文件失败: ${error.message}`);
+    throw error;
   }
 }
 
-// 数据处理相关函数
-// 修改随机获取一条回声洞数据的逻辑
-function getRandomObject(data: CaveObject[]): CaveObject | undefined {
-  if (!data || !data.length) return undefined;
-  const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
-  if (!validCaves.length) return undefined;
-  const randomIndex = Math.floor(Math.random() * validCaves.length);
-  return validCaves[randomIndex];
+// 添加文件系统工具函数
+async function ensureDirectory(dir: string): Promise<void> {
+  try {
+    if (!fs.existsSync(dir)) {
+      await fs.promises.mkdir(dir, { recursive: true });
+    }
+  } catch (error) {
+    logger.error(`创建目录失败 ${dir}: ${error.message}`);
+    throw error;
+  }
 }
 
-// 添加获取最大ID的函数
-function getMaxId(data: CaveObject[], pendingData: PendingCave[]): number {
-  const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
-  const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
-  return Math.max(maxDataId, maxPendingId);
+async function ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
+  try {
+    if (!fs.existsSync(filePath)) {
+      await fs.promises.writeFile(filePath, defaultContent, 'utf8');
+    }
+  } catch (error) {
+    logger.error(`创建文件失败 ${filePath}: ${error.message}`);
+    throw error;
+  }
 }
 
 // 图片处理相关函数
-// 修改图片文件保存函数：处理URL并保存多张图片到本地
 async function saveImages(
   urls: string[],
   imageDir: string,
@@ -149,7 +112,18 @@ async function saveImages(
   for (let i = 0; i < urls.length; i++) {
     try {
       const url = urls[i];
-      const processedUrl = processQQImageUrl(url);
+      const processedUrl = (() => {
+        try {
+          const decodedUrl = decodeURIComponent(url);
+          if (decodedUrl.includes('multimedia.nt.qq.com.cn')) {
+            return decodedUrl.replace(/&amp;/g, '&');
+          }
+          return url;
+        } catch {
+          return url;
+        }
+      })();
+
       const ext = url.match(/\.([^./?]+)(?:[?#]|$)/)?.[1] || 'png';
       const filename = `${caveId}_${i + 1}.${ext}`;
       const targetPath = path.join(imageDir, filename);
@@ -177,10 +151,9 @@ async function saveImages(
 }
 
 // 审核相关函数
-// 修改审核消息格式
 async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string) {
-  const auditMessage = `待审核：${content}
-来源：${cave.groupId ? `群${cave.groupId}` : '私聊'}
+  const auditMessage = `待审核：\n${content}
+来源：${cave.groupId ? `${cave.groupId}` : '私聊'}
 投稿：${cave.contributor_name} (${cave.contributor_number})`;
 
   for (const managerId of config.manager) {
@@ -190,25 +163,6 @@ async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave,
       logger.error(`发送审核消息给管理员 ${managerId} 失败: ${error.message}`);
     }
   }
-}
-
-// 修改回声洞数据结构定义
-interface Element {
-  type: 'text' | 'img';
-  content?: string;
-  file?: string;
-}
-
-interface CaveObject {
-  cave_id: number;
-  elements: Element[];
-  contributor_number: string;
-  contributor_name: string;
-}
-
-// 添加待审核回声洞接口
-interface PendingCave extends CaveObject {
-  groupId?: string;        // 来源群号
 }
 
 // 在审核相关函数部分添加新函数
@@ -266,14 +220,14 @@ async function handleAudit(
     if (pendingIndex === -1) return '未找到该待审核回声洞';
 
     const cave = pendingData[pendingIndex];
-    const data = isApprove ? readJsonFile(caveFilePath) : null;
+    const data = isApprove ? readJsonData<CaveObject>(caveFilePath) : null;
 
     const success = await handleSingleCaveAudit(ctx, cave, isApprove, imageDir, data);
     if (!success) return '处理失败，请稍后重试';
 
-    if (isApprove && data) writeJsonFile(caveFilePath, data);
+    if (isApprove && data) writeJsonData(caveFilePath, data);
     pendingData.splice(pendingIndex, 1);
-    writePendingFile(pendingFilePath, pendingData);
+    writeJsonData(pendingFilePath, pendingData);
 
     const remainingCount = pendingData.length;
     if (remainingCount > 0) {
@@ -284,7 +238,7 @@ async function handleAudit(
   }
 
   // 处理批量审核
-  const data = isApprove ? readJsonFile(caveFilePath) : null;
+  const data = isApprove ? readJsonData<CaveObject>(caveFilePath) : null;
   let processedCount = 0;
 
   for (const cave of pendingData) {
@@ -292,35 +246,12 @@ async function handleAudit(
     if (success) processedCount++;
   }
 
-  if (isApprove && data) writeJsonFile(caveFilePath, data);
-  writePendingFile(pendingFilePath, []);
+  if (isApprove && data) writeJsonData(caveFilePath, data);
+  writeJsonData(pendingFilePath, []);
 
   return isApprove ?
     `✅ 已通过 ${processedCount}/${pendingData.length} 条回声洞` :
     `❌ 已拒绝 ${processedCount}/${pendingData.length} 条回声洞`;
-}
-
-// 添加文件系统工具函数
-async function ensureDirectory(dir: string): Promise<void> {
-  try {
-    if (!fs.existsSync(dir)) {
-      await fs.promises.mkdir(dir, { recursive: true });
-    }
-  } catch (error) {
-    logger.error(`创建目录失败 ${dir}: ${error.message}`);
-    throw error;
-  }
-}
-
-async function ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
-  try {
-    if (!fs.existsSync(filePath)) {
-      await fs.promises.writeFile(filePath, defaultContent, 'utf8');
-    }
-  } catch (error) {
-    logger.error(`创建文件失败 ${filePath}: ${error.message}`);
-    throw error;
-  }
 }
 
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
@@ -377,7 +308,7 @@ export async function apply(ctx: Context, config: Config) {
       try {
         // 处理审核命令
         if (options.p || options.d) {
-          const pendingData = readPendingFile(pendingFilePath);
+          const pendingData = readJsonData<PendingCave>(pendingFilePath);
           const isApprove = Boolean(options.p);
 
           // 修改批量审核判断逻辑
@@ -396,12 +327,21 @@ export async function apply(ctx: Context, config: Config) {
           return await handleAudit(ctx, pendingData, isApprove, caveFilePath, imageDir, pendingFilePath, id);
         }
 
-        const data = readJsonFile(caveFilePath);
+        const data = readJsonData<CaveObject>(caveFilePath, item =>
+          item &&
+          typeof item.cave_id === 'number' &&
+          Array.isArray(item.elements) &&
+          item.elements.every(el =>
+            (el.type === 'text' && typeof el.content === 'string') ||
+            (el.type === 'img' && typeof el.file === 'string')
+          ) &&
+          typeof item.contributor_number === 'string' &&
+          typeof item.contributor_name === 'string'
+        );
 
         // 处理添加回声洞时的审核消息发送
         if (options.a) {
           let imageURLs: string[] = [];
-          let cleanText = '';
           let originalContent = '';
 
           // 获取完整消息内容和elements
@@ -409,56 +349,6 @@ export async function apply(ctx: Context, config: Config) {
             originalContent = session.quote.content;
           } else {
             originalContent = session.content;
-          }
-
-          const messageElements: Element[] = [];
-          let currentText = '';
-
-          // 处理elements中的内容
-          if (session.elements) {
-            let lastWasImage = false;
-            for (const el of session.elements) {
-              if (el.type === 'text' && 'content' in el.attrs) {
-                // 移除命令前缀 (只处理第一个元素)
-                let text = el.attrs.content;
-                if (!messageElements.length) {
-                  text = text.replace(/^~cave -a\s*/, '');
-                }
-
-                // 如果前一个是图片元素，作为新的文本元素添加
-                if (lastWasImage) {
-                  if (text.trim()) {
-                    messageElements.push({
-                      type: 'text',
-                      content: text
-                    });
-                  }
-                } else {
-                  // 如果前一个是文本，追加到最后一个文本元素
-                  const lastElement = messageElements[messageElements.length - 1];
-                  if (lastElement && lastElement.type === 'text') {
-                    lastElement.content += text;
-                  } else if (text.trim()) {
-                    messageElements.push({
-                      type: 'text',
-                      content: text
-                    });
-                  }
-                }
-                lastWasImage = false;
-              } else if (el.type === 'image' && 'url' in el) {
-                imageURLs.push(el.url as string);
-                lastWasImage = true;
-              }
-            }
-          }
-
-          // 添加最后的文本
-          if (currentText.trim()) {
-            messageElements.push({
-              type: 'text',
-              content: currentText.trim()
-            });
           }
 
           // 检查HTML格式的图片
@@ -477,15 +367,14 @@ export async function apply(ctx: Context, config: Config) {
           imageURLs = [...new Set(imageURLs)];
 
           // 生成ID
-          const pendingData = readPendingFile(pendingFilePath);
-          const maxId = getMaxId(data, pendingData);
+          const pendingData = readJsonData<PendingCave>(pendingFilePath);
+          // 内联 getMaxId 逻辑
+          const maxId = (() => {
+            const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
+            const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
+            return Math.max(maxDataId, maxPendingId);
+          })();
           const caveId = maxId + 1;
-
-          // 处理文本内容时简化处理
-          cleanText = originalContent
-            .replace(/<img[^>]+>/g, '')    // 移除img标签
-            .replace(/^~cave -a\s*/, '')   // 移除命令前缀
-            .trim();                       // 清理首尾空格
 
           // 获取用户信息
           let contributorName = session.username;
@@ -499,15 +388,12 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           // 检查内容
-          if (imageURLs.length === 0 && !cleanText) {
+          if (imageURLs.length === 0) {
             return '添加失败：请提供文字内容或图片';
           }
 
           // 创建新回声洞对象
           const elements: Element[] = [];
-
-          // 使用处理好的messageElements
-          elements.push(...messageElements);
 
           const newCave: CaveObject = {
             cave_id: caveId,
@@ -563,7 +449,7 @@ export async function apply(ctx: Context, config: Config) {
               }
 
               pendingData.push(pendingCave);
-              writePendingFile(pendingFilePath, pendingData);
+              writeJsonData(pendingFilePath, pendingData);
 
               // 构建审核消息
               await sendAuditMessage(ctx, config, pendingCave, buildMessage(pendingCave, imageDir));
@@ -597,7 +483,7 @@ export async function apply(ctx: Context, config: Config) {
 
           // 保存数据
           data.push(newCave);
-          writeJsonFile(caveFilePath, data);
+          writeJsonData(caveFilePath, data);
           return `✨ 回声洞添加成功！编号为 [${caveId}]`;
         }
 
@@ -655,7 +541,13 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           lastUsed.set(guildId, now);
-          const cave = getRandomObject(data);
+          // 内联 getRandomObject 逻辑
+          const cave = (() => {
+            const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
+            if (!validCaves.length) return undefined;
+            const randomIndex = Math.floor(Math.random() * validCaves.length);
+            return validCaves[randomIndex];
+          })();
           if (!cave) return '获取回声洞失败';
 
           return buildMessage(cave, imageDir);
@@ -696,7 +588,7 @@ export async function apply(ctx: Context, config: Config) {
           }
 
           data.splice(index, 1);
-          writeJsonFile(caveFilePath, data);
+          writeJsonData(caveFilePath, data);
           return `✅ 已删除回声洞 [${caveId}]`;
         }
 
