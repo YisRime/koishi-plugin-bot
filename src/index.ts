@@ -341,93 +341,78 @@ export async function apply(ctx: Context, config: Config) {
 
         // 处理添加回声洞时的审核消息发送
         if (options.a) {
-          let imageURLs: string[] = [];
-          let originalContent = session.quote ? session.quote.content : session.content;
+          // 1. 提取和验证基础信息
+          const rawElements = session.quote?.elements || session.elements || [];
+          const originalContent = session.quote?.content || session.content;
 
+          // 2. 处理消息内容
+          let cleanContent = '';
+          const imageURLs: string[] = [];
           const messageElements: Element[] = [];
 
-          // 第一步：标记所有图片位置
-          const imagePositions: number[] = [];
-          if (session.elements) {
-            let position = 0;
-            for (const el of session.elements) {
-              if (el.type === 'image' && 'url' in el) {
-                imageURLs.push(el.url as string);
-                imagePositions.push(position);
-              } else if (el.type === 'text' && 'content' in el.attrs) {
-                position += el.attrs.content.length;
-              }
-            }
-          }
-
-          // 第二步：处理文本并分割
-          let fullText = '';
-          if (session.elements) {
-            for (const el of session.elements) {
+          // 3. 处理引用消息和当前消息的元素
+          const processElements = (elements: any[]) => {
+            for (const el of elements) {
               if (el.type === 'text' && 'content' in el.attrs) {
                 let text = el.attrs.content;
                 // 只处理第一个元素的命令前缀
-                if (!fullText) {
+                if (messageElements.length === 0) {
                   text = text.replace(/^~cave -a\s*/, '');
                 }
-                fullText += text;
+                text = processSpecialChars(text);
+                if (text.trim()) {
+                  messageElements.push({
+                    type: 'text',
+                    content: text.trim()
+                  });
+                }
+              } else if (el.type === 'image' && 'url' in el) {
+                imageURLs.push(el.url as string);
               }
             }
+          };
+
+          // 处理引用消息
+          if (session.quote) {
+            processElements(session.quote.elements || []);
           }
+          // 处理当前消息
+          processElements(session.elements || []);
 
-          // 第三步：按图片位置分割文本并构建元素数组
-          let lastPos = 0;
-          for (let i = 0; i < imagePositions.length; i++) {
-            const currentPos = imagePositions[i];
-            // 添加图片前的文本
-            const beforeText = fullText.substring(lastPos, currentPos).trim();
-            if (beforeText) {
-              messageElements.push({
-                type: 'text',
-                content: beforeText
-              });
-            }
-            // 添加图片标记
-            messageElements.push({
-              type: 'img',
-              file: '' // 临时占位，后续会替换为实际保存的文件名
-            });
-            lastPos = currentPos;
-          }
+          // 处理HTML格式的图片
+          const htmlImages = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
+          htmlImages.forEach(img => {
+            const url = img.match(/src="([^"]+)"/)?.[1];
+            if (url) imageURLs.push(url);
+          });
 
-          // 添加最后一段文本
-          const remainingText = fullText.substring(lastPos).trim();
-          if (remainingText) {
-            messageElements.push({
-              type: 'text',
-              content: remainingText
-            });
-          }
-
-          // 检查HTML格式的图片
-          const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g);
-          if (imgMatches) {
-            const urls = imgMatches
-              .map(img => {
-                const match = img.match(/src="([^"]+)"/);
-                return match ? match[1] : null;
-              })
-              .filter(url => url);
-            imageURLs.push(...urls);
-          }
-
-          // 去重
-          imageURLs = [...new Set(imageURLs)];
-
-          // 生成ID
+          // 4. 生成ID和保存图片
           const pendingData = readJsonData<PendingCave>(pendingFilePath);
-          // 内联 getMaxId 逻辑
-          const maxId = (() => {
+          const caveId = (() => {
             const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
             const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
-            return Math.max(maxDataId, maxPendingId);
+            return Math.max(maxDataId, maxPendingId) + 1;
           })();
-          const caveId = maxId + 1;
+
+          // 5. 保存图片
+          if (imageURLs.length > 0) {
+            try {
+              const savedFiles = await saveImages(imageURLs, imageDir, caveId, config, ctx);
+              for (const fileName of savedFiles) {
+                messageElements.push({
+                  type: 'img',
+                  file: fileName
+                });
+              }
+            } catch (error) {
+              return '图片保存失败，请稍后重试';
+            }
+          }
+
+          // 6. 验证内容
+          if (messageElements.length === 0) {
+            return '添加失败：请提供文字内容或图片';
+          }
 
           // 获取用户信息
           let contributorName = session.username;
@@ -440,20 +425,10 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
 
-          // 检查内容
-          if (imageURLs.length === 0 && !fullText.trim()) {
-            return '添加失败：请提供文字内容或图片';
-          }
-
-          // 创建新回声洞对象
-          const elements: Element[] = [];
-
-          // 使用处理好的messageElements
-          elements.push(...messageElements);
-
+          // 8. 创建新回声洞对象
           const newCave: CaveObject = {
             cave_id: caveId,
-            elements,
+            elements: messageElements,
             contributor_number: session.userId,
             contributor_name: contributorName
           };
@@ -643,4 +618,13 @@ export async function apply(ctx: Context, config: Config) {
         return '操作失败，请稍后重试';
       }
     });
+}
+
+// 添加消息处理辅助函数
+function processSpecialChars(text: string): string {
+  return text
+    .replace(/\\n/g, '\n')         // 处理显式换行符
+    .replace(/\n+/g, '\n')         // 规范化换行
+    .replace(/\s+/g, ' ')          // 规范化空格
+    .trim();
 }
