@@ -269,6 +269,16 @@ function buildMessage(cave: CaveObject, imageDir: string): string {
   return content + `——${cave.contributor_name}`;
 }
 
+// 在文件顶部添加清理函数
+function cleanElementsForSave(elements: Element[]): Element[] {
+  return elements.map(({ type, content, file, index }) => ({
+    type,
+    index,
+    ...(content && { content }),
+    ...(file && { file })
+  }));
+}
+
 // 插件主函数：提供回声洞的添加、查看、删除和随机功能
 export async function apply(ctx: Context, config: Config) {
   // 初始化目录结构和文件
@@ -436,7 +446,7 @@ export async function apply(ctx: Context, config: Config) {
 
           const newCave: CaveObject = {
             cave_id: caveId,
-            elements,
+            elements: cleanElementsForSave(elements),
             contributor_number: session.userId,
             contributor_name: contributorName
           };
