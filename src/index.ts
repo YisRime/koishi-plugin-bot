@@ -359,7 +359,7 @@ export async function apply(ctx: Context, config: Config) {
             (typeof options.p === 'string' ? options.p : '') ||
             (typeof options.d === 'string' ? options.d : ''));
 
-          if (isNaN(id)) return '请输入正确的回声洞编号';
+          if (isNaN(id)) return '请输入正确的回声洞序号';
 
           return await handleAudit(ctx, pendingData, isApprove, caveFilePath, imageDir, pendingFilePath, id);
         }
@@ -386,7 +386,7 @@ export async function apply(ctx: Context, config: Config) {
 
           // 处理文本内容
           const textParts = originalContent
-            .replace(/^~cave -a\s*/, '')
+            .replace(/^.cave -a\s*/, '')
             .split(/<img[^>]+>/g)
             .map(text => text.trim())
             .filter(text => text)
@@ -473,7 +473,7 @@ export async function apply(ctx: Context, config: Config) {
             });
             writeJsonData(pendingFilePath, pendingData);
             await sendAuditMessage(ctx, config, newCave, buildMessage(newCave, imageDir));
-            return `✨ 已提交审核，编号为 [${caveId}]`;
+            return `✨ 已提交审核，序号为 (${caveId})`;
           }
 
           // 直接保存内容
@@ -483,19 +483,19 @@ export async function apply(ctx: Context, config: Config) {
           };
           data.push(caveWithoutIndex);
           writeJsonData(caveFilePath, data);
-          return `✨ 添加成功！编号为 [${caveId}]`;
+          return `✨ 添加成功！序号为 (${caveId})`;
         }
 
         // 处理查看操作
         if (options.g) {
           const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
           if (isNaN(caveId)) {
-            return '请输入正确的回声洞编号';
+            return '请输入正确的回声洞序号';
           }
 
           const cave = data.find(item => item.cave_id === caveId);
           if (!cave) {
-            return '未找到该编号的回声洞';
+            return '未找到该序号的回声洞';
           }
 
           return buildMessage(cave, imageDir);
@@ -515,7 +515,7 @@ export async function apply(ctx: Context, config: Config) {
 
           if (!isManager && now - lastCall < config.number * 1000) {
             const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
-            return `冷却中...请${waitTime}秒后再试`;
+            return `群聊冷却中...请${waitTime}秒后再试`;
           }
 
           // 更新最后使用时间
@@ -538,7 +538,7 @@ export async function apply(ctx: Context, config: Config) {
         if (options.r) {
           const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
           if (isNaN(caveId)) {
-            return '请输入正确的回声洞编号';
+            return '请输入正确的回声洞序号';
           }
 
           // 检查回声洞
@@ -547,7 +547,7 @@ export async function apply(ctx: Context, config: Config) {
           const pendingIndex = pendingData.findIndex(item => item.cave_id === caveId);
 
           if (index === -1 && pendingIndex === -1) {
-            return '未找到该编号的回声洞';
+            return '未找到该序号的回声洞';
           }
 
           let targetCave: CaveObject;
