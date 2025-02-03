@@ -445,9 +445,26 @@ export async function apply(ctx: Context, config: Config) {
           const elements: Element[] = [];
           const imageUrls: string[] = [];
 
-          // 处理文本内容
+          // 处理文本内容：同时支持 prefix 和 nickname
+          const prefixes = Array.isArray(session.app.config.prefix)
+            ? session.app.config.prefix
+            : [session.app.config.prefix];
+
+          const nicknames = Array.isArray(session.app.config.nickname)
+            ? session.app.config.nickname
+            : session.app.config.nickname ? [session.app.config.nickname] : [];
+
+          // 合并所有可能的触发前缀
+          const allTriggers = [...prefixes, ...nicknames];
+
+          const triggerPattern = allTriggers
+            .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            .join('|');
+
+          const commandPattern = new RegExp(`^(?:${triggerPattern})?\\s*cave -a\\s*`);
+
           const textParts = originalContent
-            .replace(/^.cave -a\s*/, '')
+            .replace(commandPattern, '')
             .split(/<img[^>]+>/g)
             .map(text => text.trim())
             .filter(text => text)
@@ -646,11 +663,11 @@ export async function apply(ctx: Context, config: Config) {
           if (isPending) {
             pendingData.splice(pendingIndex, 1);
             writeJsonData(pendingFilePath, pendingData);
-            return `✅ 已删除待审核回声洞 [${caveId}]`;
+            return `✅ 已删除待审核回声洞 （${caveId}）`;
           } else {
             data.splice(index, 1);
             writeJsonData(caveFilePath, data);
-            return `✅ 已删除回声洞 [${caveId}]`;
+            return `✅ 已删除回声洞 （${caveId}）`;
           }
         }
 
