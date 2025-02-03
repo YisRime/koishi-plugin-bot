@@ -344,36 +344,47 @@ export async function apply(ctx: Context, config: Config) {
       }
     })
     .action(async ({ session, options }, ...content) => {
-      // 添加查询投稿统计逻辑
+      // 修改查询投稿统计逻辑
       if (options.l !== undefined) {
-        // 读取现有回声洞数据
         const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
         const caveDir = path.join(ctx.baseDir, 'data', 'cave');
         const caveData = readJsonData<CaveObject>(caveFilePath);
         const stats: Record<string, number[]> = {};
         for (const cave of caveData) {
+          // 过滤投稿者为 "10000" 的回声洞
+          if (cave.contributor_number === '10000') continue;
           if (!stats[cave.contributor_number]) {
             stats[cave.contributor_number] = [];
           }
           stats[cave.contributor_number].push(cave.cave_id);
         }
-        // 保存统计数据到 contributor_stats.json 文件
-        const statsFilePath = path.join(caveDir, 'contributor_stats.json');
+        // 保存统计数据到 stat.json 文件
+        const statFilePath = path.join(caveDir, 'stat.json');
         try {
-          fs.writeFileSync(statsFilePath, JSON.stringify(stats, null, 2), 'utf8');
+          fs.writeFileSync(statFilePath, JSON.stringify(stats, null, 2), 'utf8');
         } catch (error) {
           logger.error(`写入投稿统计失败: ${error.message}`);
         }
-        // 如果指定投稿者ID（且不为 'all'），则返回该投稿者的统计结果，否则返回所有统计信息
+        // 格式化显示函数，每行只输出10个序号
+        function formatIds(ids: number[]): string {
+          let lines = [];
+          for (let i = 0; i < ids.length; i += 10) {
+            lines.push(ids.slice(i, i + 10).join(', '));
+          }
+          return lines.join('\n');
+        }
+        // 根据是否指定投稿者ID显示结果
         if (typeof options.l === 'string' && options.l !== 'all') {
           const contributorId = options.l;
           if (stats[contributorId]) {
-            return `投稿者 ${contributorId} 的回声洞序号: ${stats[contributorId].join(', ')}`;
+            return `投稿者 ${contributorId} 的回声洞序号:\n` + formatIds(stats[contributorId]);
           } else {
             return `未找到投稿者 ${contributorId}`;
           }
         }
-        return `投稿统计:\n${JSON.stringify(stats, null, 2)}`;
+        return '投稿统计:\n' + Object.entries(stats)
+          .map(([cid, ids]) => `投稿者 ${cid} 的回声洞序号:\n` + formatIds(ids))
+          .join('\n');
       }
       try {
         // 处理审核相关操作
