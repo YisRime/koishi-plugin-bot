@@ -353,6 +353,7 @@ export async function apply(ctx: Context, config: Config) {
           if (!stats[cave.contributor_number]) stats[cave.contributor_number] = [];
           stats[cave.contributor_number].push(cave.cave_id);
         }
+
         // 保存统计文件
         const statFilePath = path.join(caveDir, 'stat.json');
         try {
@@ -360,6 +361,7 @@ export async function apply(ctx: Context, config: Config) {
         } catch (error) {
           logger.error(`写入投稿统计失败: ${error.message}`);
         }
+
         // 格式化函数
         function formatIds(ids: number[]): string {
           const lines: string[] = [];
@@ -368,16 +370,30 @@ export async function apply(ctx: Context, config: Config) {
           }
           return lines.join('\n');
         }
-        // 根据参数判断：若传入数字，则查询指定投稿者，否则查询所有
-        const lParam = options.l && String(options.l).trim() || '';
-        if (lParam !== '' && !Number.isNaN(Number(lParam))) {
+
+        // 获取查询参数
+        let queryId: string | null = null;
+
+        // 优先检查 options.l 是否为数字字符串
+        if (typeof options.l === 'string') {
+          const match = String(options.l).match(/\d+/);
+          if (match) queryId = match[0];
+        }
+        // 如果 options.l 不是数字，检查 content 中是否包含数字
+        else if (!queryId && content.length > 0) {
+          const numberMatch = content.join(' ').match(/\d+/);
+          if (numberMatch) {
+            queryId = numberMatch[0];
+          }
+        }
+
+        if (queryId) {
           // 查询指定投稿者
-          const contributorId = lParam;
-          if (stats[contributorId]) {
-            const count = stats[contributorId].length;
-            return `${contributorId} 共计投稿 ${count} 项回声洞:\n` + formatIds(stats[contributorId]);
+          if (stats[queryId]) {
+            const count = stats[queryId].length;
+            return `${queryId} 共计投稿 ${count} 项回声洞:\n` + formatIds(stats[queryId]);
           } else {
-            return `未找到投稿者 ${contributorId}`;
+            return `未找到投稿者 ${queryId}`;
           }
         } else {
           // 查询所有
