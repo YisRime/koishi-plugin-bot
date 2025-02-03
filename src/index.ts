@@ -321,9 +321,8 @@ export async function apply(ctx: Context, config: Config) {
 
   // 命令处理主函数
   ctx.command('cave', '回声洞')
-    .usage('支持添加、抽取、查看回声洞；查询投稿统计使用 cave -l [投稿者ID]，不传则查询全部')
-    .example('cave -l all        查询所有投稿统计')
-    .example('cave -l 123456     查询指定投稿者的投稿统计')
+    .usage('支持添加、抽取、查看、查询回声洞')
+    .example('cave -l x      查询某投稿者投稿')
     .example('cave           随机抽取回声洞')
     .example('cave -a 内容   添加新回声洞')
     .example('cave -g x      查看指定回声洞')
@@ -336,7 +335,7 @@ export async function apply(ctx: Context, config: Config) {
     .option('p', '通过审核', { type: 'string' })
     .option('d', '拒绝审核', { type: 'string' })
     .option('l', '查询投稿统计', { type: 'string' })
-    // 仅对 -p 和 -d 指令进行权限检查，其它指令（例如 -a）不再限制
+    // 仅对 -l、-p 和 -d 指令进行权限检查
     .before(async ({ session, options }) => {
       if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
         return '只有管理员才能执行此操作';
@@ -344,26 +343,24 @@ export async function apply(ctx: Context, config: Config) {
     })
     .action(async ({ session, options }, ...content) => {
       if (options.l !== undefined) {
+        // 获取统计数据
         const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
         const caveDir = path.join(ctx.baseDir, 'data', 'cave');
         const caveData = readJsonData<CaveObject>(caveFilePath);
         const stats: Record<string, number[]> = {};
         for (const cave of caveData) {
-          // 过滤投稿者为 "10000" 的回声洞
           if (cave.contributor_number === '10000') continue;
-          if (!stats[cave.contributor_number]) {
-            stats[cave.contributor_number] = [];
-          }
+          if (!stats[cave.contributor_number]) stats[cave.contributor_number] = [];
           stats[cave.contributor_number].push(cave.cave_id);
         }
-        // 保存统计数据到 stat.json 文件
+        // 保存统计文件
         const statFilePath = path.join(caveDir, 'stat.json');
         try {
           fs.writeFileSync(statFilePath, JSON.stringify(stats, null, 2), 'utf8');
         } catch (error) {
           logger.error(`写入投稿统计失败: ${error.message}`);
         }
-        // 格式化显示函数，每行只输出10个序号
+        // 格式化函数
         function formatIds(ids: number[]): string {
           const lines: string[] = [];
           for (let i = 0; i < ids.length; i += 10) {
@@ -371,9 +368,11 @@ export async function apply(ctx: Context, config: Config) {
           }
           return lines.join('\n');
         }
-        // 如果传入参数 (且不为 "all")，查询指定投稿者
-        if (typeof options.l === 'string' && options.l !== 'all') {
-          const contributorId = options.l;
+        // 根据参数判断：若传入数字，则查询指定投稿者，否则查询所有
+        const lParam = options.l && String(options.l).trim() || '';
+        if (lParam !== '' && !Number.isNaN(Number(lParam))) {
+          // 查询指定投稿者
+          const contributorId = lParam;
           if (stats[contributorId]) {
             const count = stats[contributorId].length;
             return `${contributorId} 共计投稿 ${count} 项回声洞:\n` + formatIds(stats[contributorId]);
@@ -381,7 +380,7 @@ export async function apply(ctx: Context, config: Config) {
             return `未找到投稿者 ${contributorId}`;
           }
         } else {
-          // 查询所有投稿投稿统计
+          // 查询所有
           let total = 0;
           const lines = Object.entries(stats).map(([cid, ids]) => {
             total += ids.length;
