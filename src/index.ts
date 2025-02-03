@@ -321,7 +321,9 @@ export async function apply(ctx: Context, config: Config) {
 
   // 命令处理主函数
   ctx.command('cave', '回声洞')
-    .usage('支持添加、抽取以及查看回声洞')
+    .usage('支持添加、抽取、查看回声洞；查询投稿统计使用 cave -l [投稿者ID]，不传则查询全部')
+    .example('cave -l all        查询所有投稿统计')
+    .example('cave -l 123456     查询指定投稿者的投稿统计')
     .example('cave           随机抽取回声洞')
     .example('cave -a 内容   添加新回声洞')
     .example('cave -g x      查看指定回声洞')
@@ -333,7 +335,7 @@ export async function apply(ctx: Context, config: Config) {
     .option('r', '删除回声洞', { type: 'string' })
     .option('p', '通过审核', { type: 'string' })
     .option('d', '拒绝审核', { type: 'string' })
-
+    .option('l', '查询投稿统计', { type: 'string' })
     // 权限检查：管理员权限
     .before(async ({ session, options }) => {
       if ((options.p || options.d)
@@ -342,6 +344,37 @@ export async function apply(ctx: Context, config: Config) {
       }
     })
     .action(async ({ session, options }, ...content) => {
+      // 添加查询投稿统计逻辑
+      if (options.l !== undefined) {
+        // 读取现有回声洞数据
+        const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+        const caveDir = path.join(ctx.baseDir, 'data', 'cave');
+        const caveData = readJsonData<CaveObject>(caveFilePath);
+        const stats: Record<string, number[]> = {};
+        for (const cave of caveData) {
+          if (!stats[cave.contributor_number]) {
+            stats[cave.contributor_number] = [];
+          }
+          stats[cave.contributor_number].push(cave.cave_id);
+        }
+        // 保存统计数据到 contributor_stats.json 文件
+        const statsFilePath = path.join(caveDir, 'contributor_stats.json');
+        try {
+          fs.writeFileSync(statsFilePath, JSON.stringify(stats, null, 2), 'utf8');
+        } catch (error) {
+          logger.error(`写入投稿统计失败: ${error.message}`);
+        }
+        // 如果指定投稿者ID（且不为 'all'），则返回该投稿者的统计结果，否则返回所有统计信息
+        if (typeof options.l === 'string' && options.l !== 'all') {
+          const contributorId = options.l;
+          if (stats[contributorId]) {
+            return `投稿者 ${contributorId} 的回声洞序号: ${stats[contributorId].join(', ')}`;
+          } else {
+            return `未找到投稿者 ${contributorId}`;
+          }
+        }
+        return `投稿统计:\n${JSON.stringify(stats, null, 2)}`;
+      }
       try {
         // 处理审核相关操作
         if (options.p || options.d) {
