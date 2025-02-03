@@ -279,7 +279,7 @@ function buildMessage(cave: CaveObject, imageDir: string): string {
   }
 
   // 添加署名
-  return content + `——${cave.contributor_name}`;
+  return content + `—— ${cave.contributor_name}`;
 }
 
 // 在文件顶部添加清理函数
@@ -336,15 +336,13 @@ export async function apply(ctx: Context, config: Config) {
     .option('p', '通过审核', { type: 'string' })
     .option('d', '拒绝审核', { type: 'string' })
     .option('l', '查询投稿统计', { type: 'string' })
-    // 权限检查：管理员权限
+    // 仅对 -p 和 -d 指令进行权限检查，其它指令（例如 -a）不再限制
     .before(async ({ session, options }) => {
-      if ((options.p || options.d)
-          && !config.manager.includes(session.userId)) {
+      if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
         return '只有管理员才能执行此操作';
       }
     })
     .action(async ({ session, options }, ...content) => {
-      // 修改查询投稿统计逻辑
       if (options.l !== undefined) {
         const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
         const caveDir = path.join(ctx.baseDir, 'data', 'cave');
@@ -367,24 +365,30 @@ export async function apply(ctx: Context, config: Config) {
         }
         // 格式化显示函数，每行只输出10个序号
         function formatIds(ids: number[]): string {
-          let lines = [];
+          const lines: string[] = [];
           for (let i = 0; i < ids.length; i += 10) {
             lines.push(ids.slice(i, i + 10).join(', '));
           }
           return lines.join('\n');
         }
-        // 根据是否指定投稿者ID显示结果
+        // 如果传入参数 (且不为 "all")，查询指定投稿者
         if (typeof options.l === 'string' && options.l !== 'all') {
           const contributorId = options.l;
           if (stats[contributorId]) {
-            return `投稿者 ${contributorId} 的回声洞序号:\n` + formatIds(stats[contributorId]);
+            const count = stats[contributorId].length;
+            return `${contributorId} 共计投稿 ${count} 项回声洞:\n` + formatIds(stats[contributorId]);
           } else {
             return `未找到投稿者 ${contributorId}`;
           }
+        } else {
+          // 查询所有投稿投稿统计
+          let total = 0;
+          const lines = Object.entries(stats).map(([cid, ids]) => {
+            total += ids.length;
+            return `${cid} 共计投稿 ${ids.length} 项回声洞:\n` + formatIds(ids);
+          });
+          return `共计投稿 ${total} 项回声洞:\n` + lines.join('\n');
         }
-        return '投稿统计:\n' + Object.entries(stats)
-          .map(([cid, ids]) => `投稿者 ${cid} 的回声洞序号:\n` + formatIds(ids))
-          .join('\n');
       }
       try {
         // 处理审核相关操作
