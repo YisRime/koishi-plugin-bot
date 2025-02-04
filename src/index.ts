@@ -188,12 +188,14 @@ async function saveMedia(
           const parsed = path.extname(suggestion).slice(1);
           if (parsed) ext = parsed;
         }
-        const filename = `${caveId}_audio_${i + 1}.${ext}`;
+        // 修改文件名格式与图片一致
+        const filename = `${caveId}_${i + 1}.${ext}`;
         const targetPath = path.join(resourceDir, filename);
-        fs.copyFileSync(srcPath, targetPath);
+        await fs.promises.copyFile(srcPath, targetPath);
         savedFiles.push(filename);
       } catch (error) {
         logger.error(`保存音频失败: ${error.message}`);
+        throw error;
       }
     }
   } else {
@@ -234,9 +236,8 @@ async function saveMedia(
           }
         }
 
-        const filename = mediaType === 'video'
-          ? `${caveId}_video_${i + 1}.${ext}`
-          : `${caveId}_${i + 1}.${ext}`;
+        // 修改文件名格式与图片一致
+        const filename = `${caveId}_${i + 1}.${ext}`;
         const targetPath = path.join(resourceDir, filename);
 
         const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
@@ -395,7 +396,6 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
       audioElements.push({ file: element.file });
     }
   }
-  content += `—— ${cave.contributor_name}`;
   if (session) {
     // 先发送文字内容
     session.send(content);
@@ -425,8 +425,11 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
         logger.error(`发送音频失败: ${error.message}`);
       }
     }
+    // 最后发送署名
+    session.send(`—— ${cave.contributor_name}`);
     return '';
   }
+  content += `—— ${cave.contributor_name}`;
   return content;
 }
 
