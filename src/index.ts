@@ -17,6 +17,7 @@ export const Config: Schema<Config> = Schema.object({
   allowVideo: Schema.boolean().default(true).description('是否允许用户添加视频'),
   allowAudio: Schema.boolean().default(true).description('是否允许用户添加音频'),
   videoMaxSize: Schema.number().default(10).description('允许添加的视频最大大小（MB）'),
+  imageMaxSize: Schema.number().default(5).description('允许添加的图片最大大小（MB）')  // 新增配置项
 });
 
 // 插件主函数：初始化和命令注册
@@ -75,6 +76,7 @@ export interface Config {
   allowVideo: boolean;
   allowAudio: boolean;
   videoMaxSize: number;
+  imageMaxSize: number;  // 新增属性
 }
 
 // 定义数据类型接口
@@ -159,146 +161,106 @@ async function getUrlExtension(url: string, ctx: Context, defaultExt: string): P
   return defaultExt;
 }
 
-// 修改 saveMedia：替换获取扩展名的逻辑
+// 删除原有 saveImage 与 saveVideo 函数，并合并成 saveMedia 函数，只处理图片和视频
 async function saveMedia(
   urls: string[],
   fileSuggestions: (string | undefined)[],
-  resourceDir: string, // 修改参数名
+  resourceDir: string,
   caveId: number,
   config: Config,
   ctx: Context,
-  mediaType: 'img' | 'video' | 'audio'
+  mediaType: 'img' | 'video'
 ): Promise<string[]> {
   const savedFiles: string[] = [];
-  const defaults = {
-    img: { ext: 'png', accept: 'image/*' },
-    video: { ext: 'mp4', accept: 'video/*' },
-    audio: { ext: 'amr' }
-  }[mediaType];
-
-  if (mediaType === 'audio') {
-    // 覆写音频逻辑：先加载到内存中再写入本地
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
+  const defaults = mediaType === 'img'
+    ? { ext: 'png', accept: 'image/*', maxSize: config.imageMaxSize }
+    : { ext: 'mp4', accept: 'video/*', maxSize: config.videoMaxSize };
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const url = urls[i];
+      const processedUrl = (() => {
+        try {
+          const decodedUrl = decodeURIComponent(url);
+          return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
+        } catch {
+          return url;
         }
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-        let buffer: Buffer;
-        if (url.startsWith('file://')) {
-          const localPath = url.slice(7);
-          buffer = await fs.promises.readFile(localPath);
-        } else {
-          const response = await ctx.http.get<ArrayBuffer>(url, {
-            responseType: 'arraybuffer',
-            timeout: 30000
-          });
-          buffer = Buffer.from(response);
-        }
-        await fs.promises.writeFile(targetPath, buffer);
-        savedFiles.push(filename);
-      } catch (error) {
-        logger.error(`保存音频失败: ${error.message}`);
-        throw error;
+      })();
+      let ext = defaults.ext;
+      const suggestion = fileSuggestions[i];
+      if (suggestion) {
+        const parsed = path.extname(suggestion).slice(1);
+        if (parsed) ext = parsed;
+      } else {
+        ext = await getUrlExtension(processedUrl, ctx, defaults.ext);
       }
+      const filename = `${caveId}_${i + 1}.${ext}`;
+      const targetPath = path.join(resourceDir, filename);
+      const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          'Accept': defaults.accept,
+          'Referer': 'https://qq.com'
+        }
+      });
+      const fileBuffer = Buffer.from(buffer);
+      if (fileBuffer.byteLength > defaults.maxSize * 1024 * 1024) {
+        if (fs.existsSync(targetPath)) {
+          await fs.promises.unlink(targetPath);
+        }
+        logger.error(`${mediaType === 'img' ? '图片' : '视频'}超出大小限制 (${defaults.maxSize}MB)`);
+        throw new Error(`${mediaType === 'img' ? '图片' : '视频'}超出大小限制 (${defaults.maxSize}MB)`);
+      }
+      await fs.promises.writeFile(targetPath, fileBuffer);
+      savedFiles.push(filename);
+    } catch (error) {
+      logger.error(`保存${mediaType === 'img' ? '图片' : '视频'}失败: ${error.message}`);
+      throw error;
     }
-  } else if (mediaType === 'video') {
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        const processedUrl = (() => {
-          try {
-            const decodedUrl = decodeURIComponent(url);
-            return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-          } catch {
-            return url;
-          }
-        })();
+  }
+  return savedFiles;
+}
 
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
-        } else {
-          ext = await getUrlExtension(processedUrl, ctx, defaults.ext);
-        }
-
-        // 计算目标文件路径
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-
-        // 下载视频后比较实际文件大小
-        const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
-          responseType: 'arraybuffer',
-          timeout: 30000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Accept': defaults.accept,
-            'Referer': 'https://qq.com'
-          }
-        });
-        const fileBuffer = Buffer.from(buffer);
-        if (fileBuffer.byteLength > config.videoMaxSize * 1024 * 1024) {
-          // 如目标文件已存在则删除(防止残留文件)
-          if (fs.existsSync(targetPath)) {
-            await fs.promises.unlink(targetPath);
-          }
-          logger.error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
-          throw new Error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
-        }
-        await fs.promises.writeFile(targetPath, fileBuffer);
-        savedFiles.push(filename);
-      } catch (error) {
-        logger.error(`保存视频失败: ${error.message}`);
-        throw error;
+// 新增：保存音频
+async function saveAudio(
+  urls: string[],
+  fileSuggestions: (string | undefined)[],
+  resourceDir: string,
+  caveId: number,
+  config: Config,
+  ctx: Context
+): Promise<string[]> {
+  const savedFiles: string[] = [];
+  const defaults = { ext: 'amr' };
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const url = urls[i];
+      let ext = defaults.ext;
+      const suggestion = fileSuggestions[i];
+      if (suggestion) {
+        const parsed = path.extname(suggestion).slice(1);
+        if (parsed) ext = parsed;
       }
-    }
-  } else {
-    // 对于图片，保持原有逻辑（HTTP下载）
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        const processedUrl = (() => {
-          try {
-            const decodedUrl = decodeURIComponent(url);
-            return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-          } catch {
-            return url;
-          }
-        })();
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
-        } else {
-          ext = await getUrlExtension(processedUrl, ctx, defaults.ext);
-        }
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-        const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
+      const filename = `${caveId}_${i + 1}.${ext}`;
+      const targetPath = path.join(resourceDir, filename);
+      let buffer: Buffer;
+      if (url.startsWith('file://')) {
+        const localPath = url.slice(7);
+        buffer = await fs.promises.readFile(localPath);
+      } else {
+        const response = await ctx.http.get<ArrayBuffer>(url, {
           responseType: 'arraybuffer',
-          timeout: 30000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Accept': defaults.accept,
-            'Referer': 'https://qq.com'
-          }
+          timeout: 30000
         });
-        if (buffer && buffer.byteLength > 0) {
-          await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-          savedFiles.push(filename);
-        }
-      } catch (error) {
-        logger.error(`保存图片失败: ${error.message}`);
-        throw error;
+        buffer = Buffer.from(response);
       }
+      await fs.promises.writeFile(targetPath, buffer);
+      savedFiles.push(filename);
+    } catch (error) {
+      logger.error(`保存音频失败: ${error.message}`);
+      throw error;
     }
   }
   return savedFiles;
@@ -438,8 +400,6 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
     }
   }
   if (session) {
-    // 先发送文字内容
-    session.send(content);
     // 依次发送视频消息
     for (const video of videoElements) {
       try {
@@ -466,8 +426,6 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
         logger.error(`发送音频失败: ${error.message}`);
       }
     }
-    // 最后发送署名
-    session.send(`—— ${cave.contributor_name}`);
     return '';
   }
   content += `—— ${cave.contributor_name}`;
@@ -554,7 +512,7 @@ export async function handleCaveAction(
         total += ids.length;
         return `${cid} 共计投稿 ${ids.length} 项回声洞:\n` + formatIds(ids);
       });
-      return `共计投稿 ${total} 项回声洞:\n` + lines.join('\n');
+      return `回声洞共计投稿 ${total} 项:\n` + lines.join('\n');
     }
   }
 
@@ -814,7 +772,7 @@ export async function handleCaveAction(
     if (audioUrls.length > 0) {
       try {
         const fileSuggestions = audioElements.map(el => el.fileAttr);
-        savedAudios = await saveMedia(audioUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'audio');
+        savedAudios = await saveAudio(audioUrls, fileSuggestions, resourceDir, caveId, config, ctx);
       } catch (error) {
         logger.error(`保存音频失败: ${error.message}`);
       }
