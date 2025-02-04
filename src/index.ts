@@ -559,39 +559,65 @@ function sendMediaSection(
   }
 }
 
-// ---------------- 修改 buildMessage 函数 ----------------
+// 修改 buildMessage 函数，统一发送逻辑
 function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
   let text = ""; // 收集纯文本和图片部分
-  const videoElements: { file: string }[] = [];
-  const audioElements: { file: string }[] = [];
+  const mediaElements: { type: 'video' | 'audio' | 'img', file: string }[] = [];
+
+  // 收集所有元素
   for (const element of cave.elements) {
     if (element.type === 'text') {
-      text += element.content + '\n';
-    } else if (element.type === 'img' && element.file) {
-      try {
-        const fullImagePath = path.join(resourceDir, element.file);
-        if (fs.existsSync(fullImagePath)) {
-          const imageBuffer = fs.readFileSync(fullImagePath);
-          const base64Image = imageBuffer.toString('base64');
-          text += h('image', { src: `data:image/png;base64,${base64Image}` }) + '\n';
-        }
-      } catch (error) {
-        logger.error(`读取图片失败: ${error.message}`);
-      }
-    } else if (element.type === 'video' && element.file) {
-      videoElements.push({ file: element.file });
-    } else if (element.type === 'audio' && element.file) {
-      audioElements.push({ file: element.file });
+      text += element.content;
+    } else if ((element.type === 'img' || element.type === 'video' || element.type === 'audio') && element.file) {
+      mediaElements.push({ type: element.type, file: element.file });
     }
   }
-  if (session) {
-    sendMediaSection(session, resourceDir, cave, 'video', videoElements);
-    sendMediaSection(session, resourceDir, cave, 'audio', audioElements);
-    if (text.trim()) session.send(text);
-    return '';
+
+  // 如果是直接返回文本（无session）
+  if (!session) {
+    return text + `—— ${cave.contributor_name}`;
   }
-  text += `—— ${cave.contributor_name}`;
-  return text;
+
+  // 构建完整消息，包括图片、文本、作者
+  let fullMessage = '';
+  let hasMedia = false;
+
+  // 添加媒体内容
+  for (const media of mediaElements) {
+    try {
+      const fullPath = path.join(resourceDir, media.file);
+      if (fs.existsSync(fullPath)) {
+        const mediaBuffer = fs.readFileSync(fullPath);
+        const base64 = mediaBuffer.toString('base64');
+        const type = media.type === 'video' ? 'video/mp4' :
+                    media.type === 'audio' ? 'audio/amr' : 'image/png';
+
+        if (media.type === 'img') {
+          // 图片直接添加到文本中
+          fullMessage += h('image', { src: `data:${type};base64,${base64}` }) + '\n';
+        } else {
+          // 视频和音频需要单独发送
+          hasMedia = true;
+          const header = `回声洞 ——（${cave.cave_id}）\n（↓${media.type === 'video' ? '视频' : '音频'}↓）\n—— ${cave.contributor_name}`;
+          session.send(header);
+          session.send(h(media.type, { src: `data:${type};base64,${base64}` }));
+        }
+      }
+    } catch (error) {
+      logger.error(`处理${media.type}失败: ${error.message}`);
+    }
+  }
+
+  // 添加文本内容
+  if (text.trim() || fullMessage) {
+    fullMessage = '回声洞 ——（${cave.cave_id}）\n' + text + fullMessage;
+    if (!hasMedia) { // 只有在没有视频/音频时才添加作者信息
+      fullMessage += `—— ${cave.contributor_name}`;
+    }
+    session.send(fullMessage);
+  }
+
+  return '';
 }
 
 // ================ 初始化函数 =================
