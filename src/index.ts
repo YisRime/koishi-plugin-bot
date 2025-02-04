@@ -17,6 +17,7 @@ export const Config: Schema<Config> = Schema.object({
   allowVideo: Schema.boolean().default(true).description('是否允许用户添加视频'),
   allowAudio: Schema.boolean().default(true).description('是否允许用户添加音频'),
   videoMaxSize: Schema.number().default(10).description('允许添加的视频最大大小（MB）'),
+  imageMaxSize: Schema.number().default(4).description('允许添加的图片最大大小（MB）'),
 });
 
 // 插件主函数：初始化和命令注册
@@ -75,6 +76,7 @@ export interface Config {
   allowVideo: boolean;
   allowAudio: boolean;
   videoMaxSize: number;
+  imageMaxSize: number;
 }
 
 // 定义数据类型接口
@@ -291,6 +293,14 @@ async function saveMedia(
             'Referer': 'https://qq.com'
           }
         });
+        // 新增：图片大小限制检查
+        if (buffer.byteLength > config.imageMaxSize * 1024 * 1024) {
+          if (fs.existsSync(targetPath)) {
+            await fs.promises.unlink(targetPath);
+          }
+          logger.error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
+          throw new Error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
+        }
         if (buffer && buffer.byteLength > 0) {
           await fs.promises.writeFile(targetPath, Buffer.from(buffer));
           savedFiles.push(filename);
@@ -414,19 +424,19 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
 
 // ---------------- 修改 buildMessage 函数 ----------------
 function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
-  let content = `回声洞 ——（${cave.cave_id}）\n`;
+  let text = ""; // 收集纯文本和图片部分
   const videoElements: { file: string }[] = [];
-  const audioElements: { file: string }[] = []; // 新增集合用于存放音频元素
+  const audioElements: { file: string }[] = [];
   for (const element of cave.elements) {
     if (element.type === 'text') {
-      content += element.content + '\n';
+      text += element.content + '\n';
     } else if (element.type === 'img' && element.file) {
       try {
         const fullImagePath = path.join(resourceDir, element.file);
         if (fs.existsSync(fullImagePath)) {
           const imageBuffer = fs.readFileSync(fullImagePath);
           const base64Image = imageBuffer.toString('base64');
-          content += h('image', { src: `data:image/png;base64,${base64Image}` }) + '\n';
+          text += h('image', { src: `data:image/png;base64,${base64Image}` }) + '\n';
         }
       } catch (error) {
         logger.error(`读取图片失败: ${error.message}`);
@@ -438,40 +448,42 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
     }
   }
   if (session) {
-    // 先发送文字内容
-    session.send(content);
-    // 依次发送视频消息
-    for (const video of videoElements) {
-      try {
-        const fullVideoPath = path.join(resourceDir, video.file);
-        if (fs.existsSync(fullVideoPath)) {
-          const videoBuffer = fs.readFileSync(fullVideoPath);
-          const base64Video = videoBuffer.toString('base64');
-          session.send(h('video', { src: `data:video/mp4;base64,${base64Video}` }));
+    // 若存在音视频，则先发送头部消息，再发送媒体内容
+    if (videoElements.length > 0 || audioElements.length > 0) {
+      const header = `回声洞 ——（${cave.cave_id}）\n—— ${cave.contributor_name}`;
+      session.send(header);
+      for (const video of videoElements) {
+        try {
+          const fullVideoPath = path.join(resourceDir, video.file);
+          if (fs.existsSync(fullVideoPath)) {
+            const videoBuffer = fs.readFileSync(fullVideoPath);
+            const base64Video = videoBuffer.toString('base64');
+            session.send(h('video', { src: `data:video/mp4;base64,${base64Video}` }));
+          }
+        } catch (error) {
+          logger.error(`发送视频失败: ${error.message}`);
         }
-      } catch (error) {
-        logger.error(`发送视频失败: ${error.message}`);
       }
-    }
-    // 新增：依次发送音频消息
-    for (const audio of audioElements) {
-      try {
-        const fullAudioPath = path.join(resourceDir, audio.file);
-        if (fs.existsSync(fullAudioPath)) {
-          const audioBuffer = fs.readFileSync(fullAudioPath);
-          const base64Audio = audioBuffer.toString('base64');
-          session.send(h('audio', { src: `data:audio/amr;base64,${base64Audio}` }));
+      for (const audio of audioElements) {
+        try {
+          const fullAudioPath = path.join(resourceDir, audio.file);
+          if (fs.existsSync(fullAudioPath)) {
+            const audioBuffer = fs.readFileSync(fullAudioPath);
+            const base64Audio = audioBuffer.toString('base64');
+            session.send(h('audio', { src: `data:audio/amr;base64,${base64Audio}` }));
+          }
+        } catch (error) {
+          logger.error(`发送音频失败: ${error.message}`);
         }
-      } catch (error) {
-        logger.error(`发送音频失败: ${error.message}`);
       }
+      return '';
     }
-    // 最后发送署名
-    session.send(`—— ${cave.contributor_name}`);
+    // 否则，发送原有内容（图片内嵌，并单独发送署名）
+    session.send(text);
     return '';
   }
-  content += `—— ${cave.contributor_name}`;
-  return content;
+  text += `—— ${cave.contributor_name}`;
+  return text;
 }
 
 // ================ 初始化函数 =================
