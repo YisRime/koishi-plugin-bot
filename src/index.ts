@@ -561,7 +561,7 @@ function sendMediaSection(
 
 // 修改 buildMessage 函数，统一发送逻辑
 function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
-  let text = ""; // 收集纯文本和图片部分
+  let text = "'回声洞 ——（${cave.cave_id}）\n'"; // 收集纯文本和图片部分
   const mediaElements: { type: 'video' | 'audio' | 'img', file: string }[] = [];
 
   // 收集所有元素
@@ -610,7 +610,7 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
 
   // 添加文本内容
   if (text.trim() || fullMessage) {
-    fullMessage = '回声洞 ——（${cave.cave_id}）\n' + text + fullMessage;
+    fullMessage = text + fullMessage;
     if (!hasMedia) { // 只有在没有视频/音频时才添加作者信息
       fullMessage += `—— ${cave.contributor_name}`;
     }
