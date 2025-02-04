@@ -161,36 +161,124 @@ async function getUrlExtension(url: string, ctx: Context, defaultExt: string): P
   return defaultExt;
 }
 
-// 新增辅助函数：处理音频文件的读取逻辑
-// 修改 fetchAudioBuffer 函数，直接从消息对象获取数据
-async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: Context): Promise<Buffer> {
-  // 处理 QQ 音频消息对象
-  if (typeof url === 'object' && url.type === 'audio') {
-    try {
-      // 1. 先尝试直接从消息元素获取数据
-      if (url.data) {
-        return Buffer.from(url.data);
-      }
+// 新增辅助函数：统一处理URL解码
+function processUrl(url: string): string {
+  try {
+    const decoded = decodeURIComponent(url);
+    return decoded.includes('multimedia.nt.qq.com.cn') ? decoded.replace(/&amp;/g, '&') : url;
+  } catch {
+    return url;
+  }
+}
 
-      // 2. 如果消息对象中有原始数据，直接使用
-      if (url.rawMessage && url.rawMessage.data) {
-        return Buffer.from(url.rawMessage.data);
-      }
+// 新增：获取音频文件路径的辅助函数
+function getAudioPath(url: any): string | null {
+  if (typeof url === 'object' && url !== null) {
+    // 尝试获取各种可能的路径
+    const possiblePaths = [
+      url.attrs?.path,
+      url.attrs?.file,
+      url.path,
+      url.file,
+    ].filter(Boolean);
 
-      // 3. 尝试通过 session API 获取语音数据
-      if (url.session && url.session.bot) {
-        const audioData = await url.session.bot.getAudio?.(url);
-        if (audioData) {
-          return Buffer.from(audioData);
-        }
+    // 尝试每个路径
+    for (const path of possiblePaths) {
+      if (path && typeof path === 'string' && fs.existsSync(path)) {
+        return path;
       }
-      throw new Error('无法获取音频数据');
-    } catch (error) {
-      logger.error(`获取音频数据失败: ${error.message}`);
-      throw error;
     }
   }
-  throw new Error('不支持的音频格式');
+  return null;
+}
+
+// 修改 fetchAudioBuffer 函数，确保所有 URL 都经过 processUrl 处理
+async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: Context): Promise<Buffer> {
+  try {
+    // 1. 如果传入的是 Buffer，直接返回
+    if (Buffer.isBuffer(url)) {
+      return url;
+    }
+
+    // 2. 如果有建议的文件路径，尝试读取
+    if (suggestion && fs.existsSync(suggestion)) {
+      return await fs.promises.readFile(suggestion);
+    }
+
+    // 3. 如果是对象，尝试从对象中获取数据
+    if (typeof url === 'object' && url !== null) {
+      // 尝试直接获取 buffer 数据
+      if (url.data && Buffer.isBuffer(url.data)) {
+        return url.data;
+      }
+
+      // 尝试获取消息中的音频文件路径
+      const audioPath = getAudioPath(url);
+      if (audioPath) {
+        return await fs.promises.readFile(audioPath);
+      }
+
+      // 尝试从 rawMessage 中获取数据
+      if (url.rawMessage?.data && Buffer.isBuffer(url.rawMessage.data)) {
+        return url.rawMessage.data;
+      }
+
+      // 从消息内容中解析 base64 数据
+      if (url.content && typeof url.content === 'string') {
+        const content = processUrl(url.content);
+        if (content.startsWith('base64://')) {
+          return Buffer.from(content.slice(9), 'base64');
+        }
+      }
+
+      // 尝试获取音频 URL
+      const rawUrl = url.url || url.src || url.attrs?.url || url.attrs?.src;
+      if (rawUrl && typeof rawUrl === 'string') {
+        const processedUrl = processUrl(rawUrl);
+        if (processedUrl.startsWith('http')) {
+          const response = await ctx.http.get<ArrayBuffer>(processedUrl, {
+            responseType: 'arraybuffer',
+            timeout: 30000
+          });
+          return Buffer.from(response);
+        }
+        if (fs.existsSync(processedUrl)) {
+          return await fs.promises.readFile(processedUrl);
+        }
+      }
+
+      // 如果对象包含 session 和 bot，尝试通过 API 获取
+      if (url.session?.bot && typeof url.session.bot.getAudio === 'function') {
+        const audioData = await url.session.bot.getAudio(url);
+        if (audioData) {
+          return Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+        }
+      }
+    }
+
+    // 4. 如果是字符串路径，确保经过 processUrl 处理
+    if (typeof url === 'string') {
+      const processedUrl = processUrl(url);
+      if (fs.existsSync(processedUrl)) {
+        return await fs.promises.readFile(processedUrl);
+      }
+      if (processedUrl.startsWith('http')) {
+        const response = await ctx.http.get<ArrayBuffer>(processedUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30000
+        });
+        return Buffer.from(response);
+      }
+      if (processedUrl.startsWith('base64://')) {
+        return Buffer.from(processedUrl.slice(9), 'base64');
+      }
+    }
+
+    throw new Error('无法获取音频数据');
+  } catch (error) {
+    logger.error(`获取音频数据失败: ${error.message}`);
+    throw error;
+  }
 }
 
 // 修改：通用的媒体文件大小检查函数，增加预检查功能
@@ -301,7 +389,7 @@ async function saveMedia(
           throw new Error('无法获取媒体URL');
         }
 
-        const response = await ctx.http.get<ArrayBuffer>(actualUrl, {
+        const response = await ctx.http.get<ArrayBuffer>(processUrl(actualUrl), {
           responseType: 'arraybuffer',
           timeout: 30000,
           headers: mediaType === 'img' || mediaType === 'video' ? {
