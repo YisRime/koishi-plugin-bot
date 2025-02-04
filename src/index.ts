@@ -448,10 +448,10 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
     }
   }
   if (session) {
-    // 若存在音视频，则先发送头部消息，再发送媒体内容
-    if (videoElements.length > 0 || audioElements.length > 0) {
-      const header = `回声洞 ——（${cave.cave_id}）\n—— ${cave.contributor_name}`;
-      session.send(header);
+    // 分开处理视频媒体
+    if (videoElements.length > 0) {
+      const videoHeader = `回声洞 ——（${cave.cave_id}）\n(视频)\n—— ${cave.contributor_name}`;
+      session.send(videoHeader);
       for (const video of videoElements) {
         try {
           const fullVideoPath = path.join(resourceDir, video.file);
@@ -464,6 +464,11 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
           logger.error(`发送视频失败: ${error.message}`);
         }
       }
+    }
+    // 分开处理音频媒体
+    if (audioElements.length > 0) {
+      const audioHeader = `回声洞 ——（${cave.cave_id}）\n(音频)\n—— ${cave.contributor_name}`;
+      session.send(audioHeader);
       for (const audio of audioElements) {
         try {
           const fullAudioPath = path.join(resourceDir, audio.file);
@@ -476,10 +481,9 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
           logger.error(`发送音频失败: ${error.message}`);
         }
       }
-      return '';
     }
-    // 否则，发送原有内容（图片内嵌，并单独发送署名）
-    session.send(text);
+    // 发送文本内容（以及图片内嵌）
+    if (text.trim()) session.send(text);
     return '';
   }
   text += `—— ${cave.contributor_name}`;
