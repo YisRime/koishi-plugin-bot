@@ -194,43 +194,12 @@ async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: C
           return Buffer.from(audioData);
         }
       }
-
-      // 4. 如果有临时文件路径，尝试读取
-      if (url.attrs && url.attrs.path) {
-        const tempPath = url.attrs.path;
-        if (fs.existsSync(tempPath)) {
-          return await fs.promises.readFile(tempPath);
-        }
-      }
-
       throw new Error('无法获取音频数据');
     } catch (error) {
       logger.error(`获取音频数据失败: ${error.message}`);
       throw error;
     }
   }
-
-  // 处理字符串 URL
-  if (typeof url === 'string') {
-    if (url.startsWith('data:audio')) {
-      // 处理 base64 编码的音频数据
-      const base64Data = url.split(',')[1];
-      return Buffer.from(base64Data, 'base64');
-    }
-
-    // 处理 HTTP URL
-    try {
-      const response = await ctx.http.get<ArrayBuffer>(url, {
-        responseType: 'arraybuffer',
-        timeout: 30000
-      });
-      return Buffer.from(response);
-    } catch (error) {
-      logger.error(`下载音频失败: ${error.message}`);
-      throw error;
-    }
-  }
-
   throw new Error('不支持的音频格式');
 }
 
