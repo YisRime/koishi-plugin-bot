@@ -375,10 +375,10 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
 }
 
 // ---------------- 修改 buildMessage 函数 ----------------
-function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
+function buildMessage(cave: CaveObject, resourceDir: string): string {
   let content = `回声洞 ——（${cave.cave_id}）\n`;
   const videoElements: { file: string }[] = [];
-  const audioElements: { file: string }[] = []; // 新增集合用于存放音频元素
+  const audioElements: { file: string }[] = []; // 用于记录音频元素
   for (const element of cave.elements) {
     if (element.type === 'text') {
       content += element.content + '\n';
@@ -399,34 +399,9 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
       audioElements.push({ file: element.file });
     }
   }
-  if (session) {
-    // 依次发送视频消息
-    for (const video of videoElements) {
-      try {
-        const fullVideoPath = path.join(resourceDir, video.file);
-        if (fs.existsSync(fullVideoPath)) {
-          const videoBuffer = fs.readFileSync(fullVideoPath);
-          const base64Video = videoBuffer.toString('base64');
-          session.send(h('video', { src: `data:video/mp4;base64,${base64Video}` }));
-        }
-      } catch (error) {
-        logger.error(`发送视频失败: ${error.message}`);
-      }
-    }
-    // 新增：依次发送音频消息
-    for (const audio of audioElements) {
-      try {
-        const fullAudioPath = path.join(resourceDir, audio.file);
-        if (fs.existsSync(fullAudioPath)) {
-          const audioBuffer = fs.readFileSync(fullAudioPath);
-          const base64Audio = audioBuffer.toString('base64');
-          session.send(h('audio', { src: `data:audio/amr;base64,${base64Audio}` }));
-        }
-      } catch (error) {
-        logger.error(`发送音频失败: ${error.message}`);
-      }
-    }
-    return '';
+  // 如果存在视频或音频，追加说明文字
+  if (videoElements.length > 0 || audioElements.length > 0) {
+    content = content.replace(/\n$/, '\n【视频/音频将单独发送，请注意查收】\n');
   }
   content += `—— ${cave.contributor_name}`;
   return content;
@@ -542,7 +517,8 @@ export async function handleCaveAction(
       item.elements.every(el =>
         (el.type === 'text' && typeof el.content === 'string') ||
         (el.type === 'img' && typeof el.file === 'string') ||
-        (el.type === 'video' && typeof el.file === 'string')
+        (el.type === 'video' && typeof el.file === 'string') ||
+        (el.type === 'audio' && typeof el.file === 'string')
       ) &&
       typeof item.contributor_number === 'string' &&
       typeof item.contributor_name === 'string'
@@ -550,8 +526,37 @@ export async function handleCaveAction(
     const cave = data.find(item => item.cave_id === caveId);
     if (!cave) return '未找到该序号的回声洞';
 
-    // 调用 buildMessage 时传入 session 以发送视频
-    return buildMessage(cave, resourceDir, session);
+    // 使用新的 buildMessage 构建文本消息
+    const caveContent = buildMessage(cave, resourceDir);
+
+    // 单独发送视频和音频消息
+    const videoElements = cave.elements.filter(el => el.type === 'video' && el.file);
+    for (const video of videoElements) {
+      try {
+        const fullVideoPath = path.join(resourceDir, video.file);
+        if (fs.existsSync(fullVideoPath)) {
+          const videoBuffer = fs.readFileSync(fullVideoPath);
+          const base64Video = videoBuffer.toString('base64');
+          session.send(h('video', { src: `data:video/mp4;base64,${base64Video}` }));
+        }
+      } catch (error) {
+        logger.error(`发送视频失败: ${error.message}`);
+      }
+    }
+    const audioElements = cave.elements.filter(el => el.type === 'audio' && el.file);
+    for (const audio of audioElements) {
+      try {
+        const fullAudioPath = path.join(resourceDir, audio.file);
+        if (fs.existsSync(fullAudioPath)) {
+          const audioBuffer = fs.readFileSync(fullAudioPath);
+          const base64Audio = audioBuffer.toString('base64');
+          session.send(h('audio', { src: `data:audio/amr;base64,${base64Audio}` }));
+        }
+      } catch (error) {
+        logger.error(`发送音频失败: ${error.message}`);
+      }
+    }
+    return caveContent;
   }
 
   // 提取随机抽取的函数（不带 -a, -g, -r 及审核指令）
