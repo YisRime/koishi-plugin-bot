@@ -171,6 +171,83 @@ function processUrl(url: string): string {
   }
 }
 
+// 新增辅助函数：处理音频文件的读取逻辑
+// 修改 fetchAudioBuffer 函数
+async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: Context): Promise<Buffer> {
+  // 处理QQ音频消息对象
+  if (typeof url === 'object') {
+    // 先尝试从元素属性中获取文件路径
+    if (url.attrs) {
+      // 尝试直接获取音频文件的完整路径
+      if (url.attrs.path && fs.existsSync(url.attrs.path)) {
+        return await fs.promises.readFile(url.attrs.path);
+      }
+      // 尝试从message目录下读取
+      const possiblePaths = [
+        url.attrs.path,
+        path.join(process.env.HOME || process.env.USERPROFILE || '', '.config', 'QQ', url.attrs.path),
+        url.attrs.file && path.resolve(url.attrs.file),
+        url.attrs.src && path.resolve(url.attrs.src)
+      ].filter(Boolean);
+
+      for (const filePath of possiblePaths) {
+        if (filePath && fs.existsSync(filePath)) {
+          return await fs.promises.readFile(filePath);
+        }
+      }
+
+      // 如果有 src 属性且是网络URL，尝试下载
+      if (url.attrs.src && url.attrs.src.startsWith('http')) {
+        try {
+          const response = await ctx.http.get<ArrayBuffer>(url.attrs.src, {
+            responseType: 'arraybuffer',
+            timeout: 30000
+          });
+          return Buffer.from(response);
+        } catch (error) {
+          logger.error(`下载音频失败: ${error.message}`);
+          throw error;
+        }
+      }
+    }
+    throw new Error('无法从消息对象中获取音频文件');
+  }
+
+  // 处理字符串URL
+  if (typeof url === 'string') {
+    // 检查建议的文件路径
+    if (suggestion && fs.existsSync(suggestion)) {
+      return await fs.promises.readFile(suggestion);
+    }
+    // 处理 file:// 协议
+    if (url.startsWith('file://')) {
+      const filePath = url.slice(7);
+      if (fs.existsSync(filePath)) {
+        return await fs.promises.readFile(filePath);
+      }
+    }
+    // 检查是否是本地文件路径
+    if (fs.existsSync(url)) {
+      return await fs.promises.readFile(url);
+    }
+    // 尝试HTTP下载
+    if (url.startsWith('http')) {
+      try {
+        const response = await ctx.http.get<ArrayBuffer>(url, {
+          responseType: 'arraybuffer',
+          timeout: 30000
+        });
+        return Buffer.from(response);
+      } catch (error) {
+        logger.error(`下载音频失败: ${error.message}`);
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('无法获取音频文件');
+}
+
 // 修改 saveMedia：替换获取扩展名的逻辑
 async function saveMedia(
   urls: string[],
@@ -203,8 +280,9 @@ async function saveMedia(
       const targetPath = path.join(resourceDir, filename);
 
       let buffer: Buffer;
-      if (mediaType === 'audio' && url.startsWith('file://')) {
-        buffer = await fs.promises.readFile(url.slice(7));
+      if (mediaType === 'audio') {
+        // 调用辅助函数 fetchAudioBuffer 来获取音频数据
+        buffer = await fetchAudioBuffer(url, suggestion, ctx);
       } else {
         const response = await ctx.http.get<ArrayBuffer>(url, {
           responseType: 'arraybuffer',
@@ -355,7 +433,7 @@ function sendMediaSection(
   mediaElements: { file: string }[]
 ): void {
   if (mediaElements.length === 0) return;
-  const header = `回声洞 ——（${cave.cave_id}）\n(${mediaType === 'video' ? '视频' : '音频'})\n—— ${cave.contributor_name}`;
+  const header = `回声洞 ——（${cave.cave_id}）\n（↓${mediaType === 'video' ? '视频' : '音频'}↓）\n—— ${cave.contributor_name}`;
   session.send(header);
   for (const media of mediaElements) {
     try {
@@ -709,6 +787,7 @@ async function processAdd(): Promise<string> {
   const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
   const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
   const caveId = Math.max(maxDataId, maxPendingId) + 1;
+
   let savedImages: string[] = [];
   if (imageUrls.length > 0) {
     try {
@@ -716,8 +795,10 @@ async function processAdd(): Promise<string> {
       savedImages = await saveMedia(imageUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'img');
     } catch (error) {
       logger.error(`保存图片失败: ${error.message}`);
+      return `添加失败：保存图片失败: ${error.message}`;
     }
   }
+
   let savedVideos: string[] = [];
   if (videoUrls.length > 0) {
     try {
@@ -727,6 +808,7 @@ async function processAdd(): Promise<string> {
       return `添加失败：超出 ${config.videoMaxSize}MB 限制`;
     }
   }
+
   let savedAudios: string[] = [];
   if (audioUrls.length > 0) {
     try {
@@ -734,6 +816,7 @@ async function processAdd(): Promise<string> {
       savedAudios = await saveMedia(audioUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'audio');
     } catch (error) {
       logger.error(`保存音频失败: ${error.message}`);
+      return `添加失败：保存音频失败: ${error.message}`;
     }
   }
 
