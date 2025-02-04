@@ -161,16 +161,6 @@ async function getUrlExtension(url: string, ctx: Context, defaultExt: string): P
   return defaultExt;
 }
 
-// 新增辅助函数：统一处理URL解码
-function processUrl(url: string): string {
-  try {
-    const decoded = decodeURIComponent(url);
-    return decoded.includes('multimedia.nt.qq.com.cn') ? decoded.replace(/&amp;/g, '&') : url;
-  } catch {
-    return url;
-  }
-}
-
 // 新增辅助函数：处理音频文件的读取逻辑
 // 修改 fetchAudioBuffer 函数，直接从消息对象获取数据
 async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: Context): Promise<Buffer> {
@@ -203,11 +193,52 @@ async function fetchAudioBuffer(url: any, suggestion: string | undefined, ctx: C
   throw new Error('不支持的音频格式');
 }
 
-// 修改 saveMedia：替换获取扩展名的逻辑
+// 修改：通用的媒体文件大小检查函数，增加预检查功能
+function checkMediaSize(mediaType: 'img' | 'video', config: Config, fileSize?: number, buffer?: Buffer): void {
+  const maxSize = mediaType === 'img' ? config.imageMaxSize : config.videoMaxSize;
+  const mediaTypeName = mediaType === 'img' ? '图片' : '视频';
+
+  // 如果提供了 fileSize，优先使用它进行检查
+  if (fileSize !== undefined) {
+    const sizeInMB = fileSize / (1024 * 1024);
+    if (sizeInMB > maxSize) {
+      logger.error(`${mediaTypeName}超出大小限制 (${maxSize}MB), 当前大小: ${sizeInMB.toFixed(2)}MB`);
+      throw new Error(`${mediaTypeName}超出大小限制 (${maxSize}MB)`);
+    }
+    return;
+  }
+
+  // 如果没有 fileSize 但有 buffer，使用 buffer 检查
+  if (buffer) {
+    const sizeInMB = buffer.byteLength / (1024 * 1024);
+    if (sizeInMB > maxSize) {
+      logger.error(`${mediaTypeName}超出大小限制 (${maxSize}MB), 当前大小: ${sizeInMB.toFixed(2)}MB`);
+      throw new Error(`${mediaTypeName}超出大小限制 (${maxSize}MB)`);
+    }
+  }
+}
+
+// 新增类型定义，用于处理消息对象
+interface MediaElement {
+  type?: string;
+  attrs?: {
+    url?: string;
+    src?: string;
+    file?: string;
+    path?: string;
+    fileSize?: number;
+    size?: number;
+  };
+  size?: number;
+  url?: string;
+  src?: string;
+}
+
+// 修改 saveMedia 函数，添加类型安全检查和错误处理
 async function saveMedia(
-  urls: string[],
+  urls: (string | MediaElement)[],
   fileSuggestions: (string | undefined)[],
-  resourceDir: string, // 修改参数名
+  resourceDir: string,
   caveId: number,
   config: Config,
   ctx: Context,
@@ -222,49 +253,84 @@ async function saveMedia(
 
   for (let i = 0; i < urls.length; i++) {
     try {
-      const url = processUrl(urls[i]);
+      const url = urls[i];
       let ext = defaults.ext;
       const suggestion = fileSuggestions[i];
+
+      // 处理扩展名
       if (suggestion) {
         const parsed = path.extname(suggestion).slice(1);
         if (parsed) ext = parsed;
-      } else if (mediaType !== 'audio') {
-        ext = await getUrlExtension(url, ctx, defaults.ext);
       }
+
+      // 处理对象类型的 URL
+      if (typeof url === 'object' && url !== null) {
+        // 预先检查文件大小
+        if (mediaType === 'img' || mediaType === 'video') {
+          const fileSize = Number(
+            url.attrs?.fileSize ||
+            url.attrs?.size ||
+            url.size ||
+            0
+          );
+          if (fileSize > 0) {
+            checkMediaSize(mediaType, config, fileSize);
+          }
+        }
+
+        // 获取实际 URL
+        if (mediaType !== 'audio') {
+          const actualUrl = url.attrs?.url || url.attrs?.src || url.url || url.src;
+          if (actualUrl && typeof actualUrl === 'string') {
+            ext = await getUrlExtension(actualUrl, ctx, defaults.ext);
+          }
+        }
+      }
+
       const filename = `${caveId}_${i + 1}.${ext}`;
       const targetPath = path.join(resourceDir, filename);
 
       let buffer: Buffer;
       if (mediaType === 'audio') {
-        // 调用辅助函数 fetchAudioBuffer 来获取音频数据
         buffer = await fetchAudioBuffer(url, suggestion, ctx);
       } else {
-        const response = await ctx.http.get<ArrayBuffer>(url, {
+        const actualUrl = typeof url === 'string' ? url :
+          url.attrs?.url || url.attrs?.src || url.url || url.src;
+
+        if (!actualUrl) {
+          throw new Error('无法获取媒体URL');
+        }
+
+        const response = await ctx.http.get<ArrayBuffer>(actualUrl, {
           responseType: 'arraybuffer',
           timeout: 30000,
           headers: mediaType === 'img' || mediaType === 'video' ? {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-              'Accept': defaults.accept,
-              'Referer': 'https://qq.com'
-            } : {}
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept': defaults.accept,
+            'Referer': 'https://qq.com'
+          } : {}
         });
         buffer = Buffer.from(response);
+
+        // 如果没有预先检查过大小，使用 buffer 检查
+        if ((mediaType === 'img' || mediaType === 'video') &&
+            typeof url === 'object' &&
+            !url.attrs?.fileSize) {
+          checkMediaSize(mediaType, config, undefined, buffer);
+        }
       }
-      // 针对图片和视频进行大小检查
-      if (mediaType === 'img' && buffer.byteLength > config.imageMaxSize * 1024 * 1024) {
-        if (fs.existsSync(targetPath)) await fs.promises.unlink(targetPath);
-        logger.error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
-        throw new Error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
-      }
-      if (mediaType === 'video' && buffer.byteLength > config.videoMaxSize * 1024 * 1024) {
-        if (fs.existsSync(targetPath)) await fs.promises.unlink(targetPath);
-        logger.error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
-        throw new Error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
+
+      // 保存文件
+      if (fs.existsSync(targetPath)) {
+        await fs.promises.unlink(targetPath);
       }
       await fs.promises.writeFile(targetPath, buffer);
       savedFiles.push(filename);
+
+      logger.success(`${mediaType}文件保存成功: ${filename}`);
     } catch (error) {
-      logger.error(`保存${mediaType === 'img'? '图片': mediaType === 'video' ? '视频' : '音频'}失败: ${error.message}`);
+      const mediaTypeName = mediaType === 'img' ? '图片' : mediaType === 'video' ? '视频' : '音频';
+      logger.error(`保存${mediaTypeName}失败: ${error.message}`);
       throw error;
     }
   }
