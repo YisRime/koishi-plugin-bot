@@ -161,6 +161,16 @@ async function getUrlExtension(url: string, ctx: Context, defaultExt: string): P
   return defaultExt;
 }
 
+// 新增辅助函数：统一处理URL解码
+function processUrl(url: string): string {
+  try {
+    const decoded = decodeURIComponent(url);
+    return decoded.includes('multimedia.nt.qq.com.cn') ? decoded.replace(/&amp;/g, '&') : url;
+  } catch {
+    return url;
+  }
+}
+
 // 修改 saveMedia：替换获取扩展名的逻辑
 async function saveMedia(
   urls: string[],
@@ -178,137 +188,51 @@ async function saveMedia(
     audio: { ext: 'amr' }
   }[mediaType];
 
-  if (mediaType === 'audio') {
-    // 覆写音频逻辑：先加载到内存中再写入本地
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
-        }
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-        let buffer: Buffer;
-        if (url.startsWith('file://')) {
-          const localPath = url.slice(7);
-          buffer = await fs.promises.readFile(localPath);
-        } else {
-          const response = await ctx.http.get<ArrayBuffer>(url, {
-            responseType: 'arraybuffer',
-            timeout: 30000
-          });
-          buffer = Buffer.from(response);
-        }
-        await fs.promises.writeFile(targetPath, buffer);
-        savedFiles.push(filename);
-      } catch (error) {
-        logger.error(`保存音频失败: ${error.message}`);
-        throw error;
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const url = processUrl(urls[i]);
+      let ext = defaults.ext;
+      const suggestion = fileSuggestions[i];
+      if (suggestion) {
+        const parsed = path.extname(suggestion).slice(1);
+        if (parsed) ext = parsed;
+      } else if (mediaType !== 'audio') {
+        ext = await getUrlExtension(url, ctx, defaults.ext);
       }
-    }
-  } else if (mediaType === 'video') {
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        const processedUrl = (() => {
-          try {
-            const decodedUrl = decodeURIComponent(url);
-            return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-          } catch {
-            return url;
-          }
-        })();
+      const filename = `${caveId}_${i + 1}.${ext}`;
+      const targetPath = path.join(resourceDir, filename);
 
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
-        } else {
-          ext = await getUrlExtension(processedUrl, ctx, defaults.ext);
-        }
-
-        // 计算目标文件路径
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-
-        // 下载视频后比较实际文件大小
-        const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
+      let buffer: Buffer;
+      if (mediaType === 'audio' && url.startsWith('file://')) {
+        buffer = await fs.promises.readFile(url.slice(7));
+      } else {
+        const response = await ctx.http.get<ArrayBuffer>(url, {
           responseType: 'arraybuffer',
           timeout: 30000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Accept': defaults.accept,
-            'Referer': 'https://qq.com'
-          }
+          headers: mediaType === 'img' || mediaType === 'video' ? {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+              'Accept': defaults.accept,
+              'Referer': 'https://qq.com'
+            } : {}
         });
-        const fileBuffer = Buffer.from(buffer);
-        if (fileBuffer.byteLength > config.videoMaxSize * 1024 * 1024) {
-          // 如目标文件已存在则删除(防止残留文件)
-          if (fs.existsSync(targetPath)) {
-            await fs.promises.unlink(targetPath);
-          }
-          logger.error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
-          throw new Error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
-        }
-        await fs.promises.writeFile(targetPath, fileBuffer);
-        savedFiles.push(filename);
-      } catch (error) {
-        logger.error(`保存视频失败: ${error.message}`);
-        throw error;
+        buffer = Buffer.from(response);
       }
-    }
-  } else {
-    // 对于图片，保持原有逻辑（HTTP下载）
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        const url = urls[i];
-        const processedUrl = (() => {
-          try {
-            const decodedUrl = decodeURIComponent(url);
-            return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-          } catch {
-            return url;
-          }
-        })();
-        let ext = defaults.ext;
-        const suggestion = fileSuggestions[i];
-        if (suggestion) {
-          const parsed = path.extname(suggestion).slice(1);
-          if (parsed) ext = parsed;
-        } else {
-          ext = await getUrlExtension(processedUrl, ctx, defaults.ext);
-        }
-        const filename = `${caveId}_${i + 1}.${ext}`;
-        const targetPath = path.join(resourceDir, filename);
-        const buffer = await ctx.http.get<ArrayBuffer>(processedUrl, {
-          responseType: 'arraybuffer',
-          timeout: 30000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-            'Accept': defaults.accept,
-            'Referer': 'https://qq.com'
-          }
-        });
-        // 新增：图片大小限制检查
-        if (buffer.byteLength > config.imageMaxSize * 1024 * 1024) {
-          if (fs.existsSync(targetPath)) {
-            await fs.promises.unlink(targetPath);
-          }
-          logger.error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
-          throw new Error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
-        }
-        if (buffer && buffer.byteLength > 0) {
-          await fs.promises.writeFile(targetPath, Buffer.from(buffer));
-          savedFiles.push(filename);
-        }
-      } catch (error) {
-        logger.error(`保存图片失败: ${error.message}`);
-        throw error;
+      // 针对图片和视频进行大小检查
+      if (mediaType === 'img' && buffer.byteLength > config.imageMaxSize * 1024 * 1024) {
+        if (fs.existsSync(targetPath)) await fs.promises.unlink(targetPath);
+        logger.error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
+        throw new Error(`图片超出大小限制 (${config.imageMaxSize}MB)`);
       }
+      if (mediaType === 'video' && buffer.byteLength > config.videoMaxSize * 1024 * 1024) {
+        if (fs.existsSync(targetPath)) await fs.promises.unlink(targetPath);
+        logger.error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
+        throw new Error(`视频超出大小限制 (${config.videoMaxSize}MB)`);
+      }
+      await fs.promises.writeFile(targetPath, buffer);
+      savedFiles.push(filename);
+    } catch (error) {
+      logger.error(`保存${mediaType === 'img'? '图片': mediaType === 'video' ? '视频' : '音频'}失败: ${error.message}`);
+      throw error;
     }
   }
   return savedFiles;
@@ -422,6 +346,32 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
   }));
 }
 
+// 新增辅助函数：发送媒体块(视频/音频)
+function sendMediaSection(
+  session: any,
+  resourceDir: string,
+  cave: CaveObject,
+  mediaType: 'video' | 'audio',
+  mediaElements: { file: string }[]
+): void {
+  if (mediaElements.length === 0) return;
+  const header = `回声洞 ——（${cave.cave_id}）\n(${mediaType === 'video' ? '视频' : '音频'})\n—— ${cave.contributor_name}`;
+  session.send(header);
+  for (const media of mediaElements) {
+    try {
+      const fullPath = path.join(resourceDir, media.file);
+      if (fs.existsSync(fullPath)) {
+        const mediaBuffer = fs.readFileSync(fullPath);
+        const base64 = mediaBuffer.toString('base64');
+        const type = mediaType === 'video' ? 'video/mp4' : 'audio/amr';
+        session.send(h(mediaType, { src: `data:${type};base64,${base64}` }));
+      }
+    } catch (error) {
+      logger.error(`发送${mediaType}失败: ${error.message}`);
+    }
+  }
+}
+
 // ---------------- 修改 buildMessage 函数 ----------------
 function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
   let text = ""; // 收集纯文本和图片部分
@@ -448,41 +398,8 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
     }
   }
   if (session) {
-    // 分开处理视频媒体
-    if (videoElements.length > 0) {
-      const videoHeader = `回声洞 ——（${cave.cave_id}）\n(视频)\n—— ${cave.contributor_name}`;
-      session.send(videoHeader);
-      for (const video of videoElements) {
-        try {
-          const fullVideoPath = path.join(resourceDir, video.file);
-          if (fs.existsSync(fullVideoPath)) {
-            const videoBuffer = fs.readFileSync(fullVideoPath);
-            const base64Video = videoBuffer.toString('base64');
-            session.send(h('video', { src: `data:video/mp4;base64,${base64Video}` }));
-          }
-        } catch (error) {
-          logger.error(`发送视频失败: ${error.message}`);
-        }
-      }
-    }
-    // 分开处理音频媒体
-    if (audioElements.length > 0) {
-      const audioHeader = `回声洞 ——（${cave.cave_id}）\n(音频)\n—— ${cave.contributor_name}`;
-      session.send(audioHeader);
-      for (const audio of audioElements) {
-        try {
-          const fullAudioPath = path.join(resourceDir, audio.file);
-          if (fs.existsSync(fullAudioPath)) {
-            const audioBuffer = fs.readFileSync(fullAudioPath);
-            const base64Audio = audioBuffer.toString('base64');
-            session.send(h('audio', { src: `data:audio/amr;base64,${base64Audio}` }));
-          }
-        } catch (error) {
-          logger.error(`发送音频失败: ${error.message}`);
-        }
-      }
-    }
-    // 发送文本内容（以及图片内嵌）
+    sendMediaSection(session, resourceDir, cave, 'video', videoElements);
+    sendMediaSection(session, resourceDir, cave, 'audio', audioElements);
     if (text.trim()) session.send(text);
     return '';
   }
@@ -691,201 +608,179 @@ export async function handleCaveAction(
     }
   }
 
-  // 提取添加操作的函数（cave -a）
-  async function processAdd(): Promise<string> {
-    // 提取原始内容
-    const originalContent = session.quote?.content || session.content;
-    const textParts: Element[] = [];
-    const imageUrls: string[] = [];
-    const imageElements: Array<{ type: 'img'; index: number; fileAttr?: string }> = [];
-    // 新增：视频相关数组
-    const videoUrls: string[] = [];
-    const videoElements: Array<{ type: 'video'; index: number; fileAttr?: string }> = [];
-    // 新增：处理 <audio> 标签
-    const audioUrls: string[] = [];
-    const audioElements: Array<{ type: 'audio'; index: number; fileAttr?: string }> = [];
-
-    // 处理文本内容
-    const prefixes = Array.isArray(session.app.config.prefix)
-      ? session.app.config.prefix
-      : [session.app.config.prefix];
-    const nicknames = Array.isArray(session.app.config.nickname)
-      ? session.app.config.nickname
-      : session.app.config.nickname ? [session.app.config.nickname] : [];
-    const allTriggers = [...prefixes, ...nicknames];
-    const triggerPattern = allTriggers
-      .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-      .join('|');
-    const commandPattern = new RegExp(`^(?:${triggerPattern}).*?-a\\s*`);
-    const parsedTexts = originalContent
-      .replace(commandPattern, '')
-      .split(/<img[^>]+>|<video[^>]+>/g)
-      .map(text => text.trim())
-      .filter(text => text);
-    parsedTexts.forEach((text, idx) => {
-      textParts.push({ type: 'text', content: text, index: idx * 3 });
-    });
-
-    // 处理 <img> 标签
-    const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
-    imgMatches.forEach((img, idx) => {
-      const srcMatch = img.match(/src="([^"]+)"/);
-      const fileMatch = img.match(/file="([^"]+)"/);
-      if (srcMatch?.[1]) {
-        imageUrls.push(srcMatch[1]);
-        imageElements.push({ type: 'img', index: idx * 3 + 1, fileAttr: fileMatch?.[1] });
-      }
-    });
-
-    // 如果文本、图片和视频均不存在，则等待回复内容（包含视频解析）
-    if (textParts.length === 0 && imageElements.length === 0 && videoElements.length === 0 && audioElements.length === 0) {
-      await session.send('请发送你想添加到回声洞的内容：');
-      const reply = await session.prompt({ timeout: 60000 });
-      if (reply) {
-        // 回复: 解析文本、<img> 与 <video> 标签
-        const replyTextParts: Element[] = [];
-        const replyImageElements: Array<{ type: 'img'; index: number; fileAttr?: string }> = [];
-        const replyVideoElements: Array<{ type: 'video'; index: number; fileAttr?: string }> = [];
-        const replyImageUrls: string[] = [];
-        const replyVideoUrls: string[] = [];
-        // 解析 reply 的文本、<img>、<video> 和 <audio>
-        const replyAudioElements: Array<{ type: 'audio'; index: number; fileAttr?: string }> = [];
-        const replyAudioUrls: string[] = [];
-        const replyTexts = reply.split(/<img[^>]+>|<video[^>]+>/g)
-          .map(t => t.trim())
-          .filter(t => t);
-        replyTexts.forEach((text, idx) => {
-          replyTextParts.push({ type: 'text', content: text, index: idx * 3 });
-        });
-        const replyImgs = reply.match(/<img[^>]+src="([^"]+)"/g) || [];
-        replyImgs.forEach((img, idx) => {
-          const match = img.match(/src="([^"]+)"/);
-          if (match?.[1]) {
-            replyImageUrls.push(match[1]);
-            replyImageElements.push({ type: 'img', index: idx * 3 + 1, fileAttr: img.match(/file="([^"]+)"/)?.[1] });
-          }
-        });
-        const replyVideos = reply.match(/<video[^>]+src="([^"]+)"/g) || [];
-        replyVideos.forEach((video, idx) => {
-          const match = video.match(/src="([^"]+)"/);
-          if (match?.[1]) {
-            replyVideoUrls.push(match[1]);
-            replyVideoElements.push({ type: 'video', index: idx * 3 + 2, fileAttr: video.match(/file="([^"]+)"/)?.[1] });
-          }
-        });
-        const replyAudioMatches = reply.match(/<audio[^>]+src="([^"]+)"/g) || [];
-        replyAudioMatches.forEach((audio, idx) => {
-          const match = audio.match(/src="([^"]+)"/);
-          if (match?.[1]) {
-            replyAudioUrls.push(match[1]);
-            replyAudioElements.push({ type: 'audio', index: idx * 3 + 3, fileAttr: audio.match(/file="([^"]+)"/)?.[1] });
-          }
-        });
-        textParts.push(...replyTextParts);
-        imageElements.push(...replyImageElements);
-        videoElements.push(...replyVideoElements);
-        audioElements.push(...replyAudioElements);
-        imageUrls.push(...replyImageUrls);
-        videoUrls.push(...replyVideoUrls);
-        audioUrls.push(...replyAudioUrls);
-      } else {
-        return '已放弃本次添加';
-      }
+// 新增辅助函数：解析文本及媒体标签
+function parseMessage(content: string, commandPattern?: RegExp): {
+  textParts: Element[],
+  imageUrls: string[],
+  imageElements: { type: 'img'; index: number; fileAttr?: string }[],
+  videoUrls: string[],
+  videoElements: { type: 'video'; index: number; fileAttr?: string }[],
+  audioUrls: string[],
+  audioElements: { type: 'audio'; index: number; fileAttr?: string }[]
+} {
+  if (commandPattern) content = content.replace(commandPattern, '');
+  // 使用非贪婪模式并支持换行字符
+  const textParts: Element[] = content.split(/<img[\s\S]*?>|<video[\s\S]*?>|<audio[\s\S]*?>/g)
+    .map(t => t.trim()).filter(t => t)
+    .map((text, idx) => ({ type: 'text', content: text, index: idx * 3 }));
+  const imageMatches = content.match(/<img[\s\S]*?src="([^"]+)"[^>]*>/g) || [];
+  const videoMatches = content.match(/<video[\s\S]*?src="([^"]+)"[^>]*>/g) || [];
+  const audioMatches = content.match(/<audio[\s\S]*?src="([^"]+)"/g) || [];
+  const imageUrls: string[] = [];
+  const imageElements: { type: 'img'; index: number; fileAttr?: string }[] = [];
+  imageMatches.forEach((img, idx) => {
+    const srcMatch = img.match(/src="([^"]+)"/);
+    const fileMatch = img.match(/file="([^"]+)"/);
+    if (srcMatch?.[1]) {
+      imageUrls.push(srcMatch[1]);
+      imageElements.push({ type: 'img', index: idx * 3 + 1, fileAttr: fileMatch?.[1] });
     }
-
-    // 新增：在处理媒体前判断配置是否允许添加视频/音频
-    if (videoUrls.length > 0 && !config.allowVideo) {
-      return '当前不允许添加视频';
+  });
+  const videoUrls: string[] = [];
+  const videoElements: { type: 'video'; index: number; fileAttr?: string }[] = [];
+  videoMatches.forEach((video, idx) => {
+    const srcMatch = video.match(/src="([^"]+)"/);
+    const fileMatch = video.match(/file="([^"]+)"/);
+    if (srcMatch?.[1]) {
+      videoUrls.push(srcMatch[1]);
+      videoElements.push({ type: 'video', index: idx * 3 + 2, fileAttr: fileMatch?.[1] });
     }
-    if (audioUrls.length > 0 && !config.allowAudio) {
-      return '当前不允许添加音频';
+  });
+  const audioUrls: string[] = [];
+  const audioElements: { type: 'audio'; index: number; fileAttr?: string }[] = [];
+  audioMatches.forEach((audio, idx) => {
+    const srcMatch = audio.match(/src="([^"]+)"/);
+    const fileMatch = audio.match(/file="([^"]+)"/);
+    if (srcMatch?.[1]) {
+      audioUrls.push(srcMatch[1]);
+      audioElements.push({ type: 'audio', index: idx * 3 + 3, fileAttr: fileMatch?.[1] });
     }
+  });
+  return { textParts, imageUrls, imageElements, videoUrls, videoElements, audioUrls, audioElements };
+}
 
-    // 生成新的回声洞ID及保存图片、视频
-    const pendingData = readJsonData<PendingCave>(pendingFilePath);
-    const data = readJsonData<CaveObject>(caveFilePath, item => item && typeof item.cave_id === 'number');
-    const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
-    const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
-    const caveId = Math.max(maxDataId, maxPendingId) + 1;
-    let savedImages: string[] = [];
-    if (imageUrls.length > 0) {
-      try {
-        const fileSuggestions = imageElements.map(el => el.fileAttr);
-        savedImages = await saveMedia(imageUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'img');
-      } catch (error) {
-        logger.error(`保存图片失败: ${error.message}`);
-      }
+// 修改 processAdd 函数，使用 parseMessage 辅助函数代替重复解析逻辑
+async function processAdd(): Promise<string> {
+  // 提取原始内容
+  const originalContent = session.quote?.content || session.content;
+  // 定义命令剔除模式
+  const prefixes = Array.isArray(session.app.config.prefix)
+    ? session.app.config.prefix
+    : [session.app.config.prefix];
+  const nicknames = Array.isArray(session.app.config.nickname)
+    ? session.app.config.nickname
+    : session.app.config.nickname ? [session.app.config.nickname] : [];
+  const allTriggers = [...prefixes, ...nicknames];
+  const triggerPattern = new RegExp(`^(?:${allTriggers.map(t => t.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')).join('|')}).*?-a\\s*`);
+
+  // 解析原始内容
+  let { textParts, imageUrls, imageElements, videoUrls, videoElements, audioUrls, audioElements } = parseMessage(originalContent, triggerPattern);
+
+  // 若没有任何内容，则提示回复并解析
+  if (textParts.length === 0 && imageElements.length === 0 && videoElements.length === 0 && audioElements.length === 0) {
+    await session.send('请发送你想添加到回声洞的内容：');
+    const reply = await session.prompt({ timeout: 60000 });
+    if (reply) {
+      const replyResult = parseMessage(reply);
+      // 合并两次解析结果
+      textParts = textParts.concat(replyResult.textParts);
+      imageUrls = imageUrls.concat(replyResult.imageUrls);
+      imageElements = imageElements.concat(replyResult.imageElements);
+      videoUrls = videoUrls.concat(replyResult.videoUrls);
+      videoElements = videoElements.concat(replyResult.videoElements);
+      audioUrls = audioUrls.concat(replyResult.audioUrls);
+      audioElements = audioElements.concat(replyResult.audioElements);
+    } else {
+      return '已放弃本次添加';
     }
-    // 新增：保存视频文件
-    let savedVideos: string[] = [];
-    if (videoUrls.length > 0) {
-      try {
-        const fileSuggestions = videoElements.map(el => el.fileAttr);
-        savedVideos = await saveMedia(videoUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'video');
-      } catch (error) {
-        return `添加失败：超出 ${config.videoMaxSize}MB 限制`;
-      }
-    }
-    let savedAudios: string[] = [];
-    if (audioUrls.length > 0) {
-      try {
-        const fileSuggestions = audioElements.map(el => el.fileAttr);
-        savedAudios = await saveMedia(audioUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'audio');
-      } catch (error) {
-        logger.error(`保存音频失败: ${error.message}`);
-      }
-    }
-
-    // 合并所有元素：文本/图片/视频
-    const elements: Element[] = [];
-    elements.push(...textParts);
-    savedImages.forEach((file, idx) => {
-      if (imageElements[idx]) {
-        elements.push({ ...imageElements[idx], type: 'img', file });
-      }
-    });
-    savedVideos.forEach((file, idx) => {
-      if (videoElements[idx]) {
-        elements.push({ ...videoElements[idx], type: 'video', file });
-      }
-    });
-    savedAudios.forEach((file, idx) => {
-      if (audioElements[idx]) {
-        elements.push({ ...audioElements[idx], type: 'audio', file });
-      }
-    });
-    elements.sort((a, b) => a.index - b.index);
-
-    // 获取投稿者信息及后续保存流程保持不变
-    let contributorName = session.username;
-    if (ctx.database) {
-      try {
-        const userInfo = await ctx.database.getUser(session.platform, session.userId);
-        contributorName = (userInfo as unknown as User)?.nickname || session.username;
-      } catch (error) {
-        logger.error(`获取用户昵称失败: ${error.message}`);
-      }
-    }
-
-    const newCave: CaveObject = {
-      cave_id: caveId,
-      elements: cleanElementsForSave(elements, true),
-      contributor_number: session.userId,
-      contributor_name: contributorName
-    };
-
-    if (config.enableAudit) {
-      pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
-      writeJsonData(pendingFilePath, pendingData);
-      await sendAuditMessage(ctx, config, newCave, buildMessage(newCave, resourceDir));
-      return `✨ 已提交审核，序号为 (${caveId})`;
-    }
-
-    const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
-    data.push(caveWithoutIndex);
-    writeJsonData(caveFilePath, data);
-    return `✨ 添加成功！序号为 (${caveId})`;
   }
+
+  // 判断是否允许添加视频/音频
+  if (videoUrls.length > 0 && !config.allowVideo) {
+    return '当前不允许添加视频';
+  }
+  if (audioUrls.length > 0 && !config.allowAudio) {
+    return '当前不允许添加音频';
+  }
+
+  // 生成新的回声洞ID及保存媒体文件
+  const pendingData = readJsonData<PendingCave>(pendingFilePath);
+  const data = readJsonData<CaveObject>(caveFilePath, item => item && typeof item.cave_id === 'number');
+  const maxDataId = data.length > 0 ? Math.max(...data.map(item => item.cave_id)) : 0;
+  const maxPendingId = pendingData.length > 0 ? Math.max(...pendingData.map(item => item.cave_id)) : 0;
+  const caveId = Math.max(maxDataId, maxPendingId) + 1;
+  let savedImages: string[] = [];
+  if (imageUrls.length > 0) {
+    try {
+      const fileSuggestions = imageElements.map(el => el.fileAttr);
+      savedImages = await saveMedia(imageUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'img');
+    } catch (error) {
+      logger.error(`保存图片失败: ${error.message}`);
+    }
+  }
+  let savedVideos: string[] = [];
+  if (videoUrls.length > 0) {
+    try {
+      const fileSuggestions = videoElements.map(el => el.fileAttr);
+      savedVideos = await saveMedia(videoUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'video');
+    } catch (error) {
+      return `添加失败：超出 ${config.videoMaxSize}MB 限制`;
+    }
+  }
+  let savedAudios: string[] = [];
+  if (audioUrls.length > 0) {
+    try {
+      const fileSuggestions = audioElements.map(el => el.fileAttr);
+      savedAudios = await saveMedia(audioUrls, fileSuggestions, resourceDir, caveId, config, ctx, 'audio');
+    } catch (error) {
+      logger.error(`保存音频失败: ${error.message}`);
+    }
+  }
+
+  // 合并所有元素：文本/图片/视频/音频
+  const elements: Element[] = [];
+  elements.push(...textParts);
+  savedImages.forEach((file, idx) => {
+    if (imageElements[idx]) elements.push({ ...imageElements[idx], type: 'img', file });
+  });
+  savedVideos.forEach((file, idx) => {
+    if (videoElements[idx]) elements.push({ ...videoElements[idx], type: 'video', file });
+  });
+  savedAudios.forEach((file, idx) => {
+    if (audioElements[idx]) elements.push({ ...audioElements[idx], type: 'audio', file });
+  });
+  elements.sort((a, b) => a.index - b.index);
+
+  // 获取投稿者信息
+  let contributorName = session.username;
+  if (ctx.database) {
+    try {
+      const userInfo = await ctx.database.getUser(session.platform, session.userId);
+      contributorName = (userInfo as unknown as User)?.nickname || session.username;
+    } catch (error) {
+      logger.error(`获取用户昵称失败: ${error.message}`);
+    }
+  }
+
+  const newCave: CaveObject = {
+    cave_id: caveId,
+    elements: cleanElementsForSave(elements, true),
+    contributor_number: session.userId,
+    contributor_name: contributorName
+  };
+
+  if (config.enableAudit) {
+    pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
+    writeJsonData(pendingFilePath, pendingData);
+    await sendAuditMessage(ctx, config, newCave, buildMessage(newCave, resourceDir));
+    return `✨ 已提交审核，序号为 (${caveId})`;
+  }
+
+  const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
+  data.push(caveWithoutIndex);
+  writeJsonData(caveFilePath, data);
+  return `✨ 添加成功！序号为 (${caveId})`;
+}
 
   try {
     if (options.l !== undefined) return await processList();
