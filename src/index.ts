@@ -561,7 +561,7 @@ function sendMediaSection(
 
 // 修改 buildMessage 函数，统一发送逻辑
 function buildMessage(cave: CaveObject, resourceDir: string, session?: any): string {
-  let text = "'回声洞 ——（${cave.cave_id}）\n'"; // 收集纯文本和图片部分
+  let text = `回声洞 ——（${cave.cave_id}）\n`;
   const mediaElements: { type: 'video' | 'audio' | 'img', file: string }[] = [];
 
   // 收集所有元素
@@ -571,11 +571,6 @@ function buildMessage(cave: CaveObject, resourceDir: string, session?: any): str
     } else if ((element.type === 'img' || element.type === 'video' || element.type === 'audio') && element.file) {
       mediaElements.push({ type: element.type, file: element.file });
     }
-  }
-
-  // 如果是直接返回文本（无session）
-  if (!session) {
-    return text + `—— ${cave.contributor_name}`;
   }
 
   // 构建完整消息，包括图片、文本、作者
