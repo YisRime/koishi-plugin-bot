@@ -6,6 +6,18 @@
 
 一个为 Koishi 机器人开发的趣味性插件，提供回声洞功能，支持文字、图片与视频的收藏与分享。
 
+## 配置说明
+
+在配置文件中可设置以下属性：
+
+- manager：管理员列表（必填）
+- blacklist：禁用用户列表
+- number：调用冷却时间（单位：秒）
+- enableAudit：是否启用审核流程
+- allowVideo：是否允许添加视频
+- videoMaxSize：视频最大上传大小（单位：MB）
+- imageMaxSize：图片最大上传大小（单位：MB）
+
 ## 功能特性
 
 ### 回声洞系统 (cave)
