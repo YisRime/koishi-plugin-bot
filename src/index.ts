@@ -324,6 +324,64 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
   }));
 }
 
+// 新增：提取 processAdd 中媒体处理及回复逻辑的函数
+async function extractMediaContent(originalContent: string): Promise<{
+	imageUrls: string[],
+	imageElements: { type: 'img'; index: number; fileAttr?: string }[],
+	videoUrls: string[],
+	videoElements: { type: 'video'; index: number; fileAttr?: string }[],
+	textParts: Element[]
+}> {
+  // 提取文本内容
+  const parsedTexts = originalContent
+    .split(/<img[^>]+>|<video[^>]+>/g)
+    .map(t => t.trim())
+    .filter(t => t);
+  const textParts: Element[] = [];
+  parsedTexts.forEach((text, idx) => {
+    textParts.push({ type: 'text', content: text, index: idx * 3 });
+  });
+
+  const imageUrls: string[] = [];
+  const imageElements: Array<{ type: 'img'; index: number; fileAttr?: string }> = [];
+  const videoUrls: string[] = [];
+  const videoElements: Array<{ type: 'video'; index: number; fileAttr?: string }> = [];
+
+  // 处理 <img> 标签
+  const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
+  imgMatches.forEach((img, idx) => {
+    const srcMatch = img.match(/src="([^"]+)"/);
+    const fileMatch = img.match(/file="([^"]+)"(?:\s+fileSize="([^"]+)")?/);
+    if (srcMatch?.[1]) {
+      imageUrls.push(srcMatch[1]);
+      const suggestion = fileMatch
+        ? fileMatch[2]
+          ? `${fileMatch[1]};${fileMatch[2]}`
+          : fileMatch[1]
+        : undefined;
+      imageElements.push({ type: 'img', index: idx * 3 + 1, fileAttr: suggestion });
+    }
+  });
+
+  // 处理 <video> 标签
+  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"[^>]*>/g) || [];
+  videoMatches.forEach((video, idx) => {
+    const srcMatch = video.match(/src="([^"]+)"/);
+    const fileMatch = video.match(/file="([^"]+)"(?:\s+fileSize="([^"]+)")?/);
+    if (srcMatch?.[1]) {
+      videoUrls.push(srcMatch[1]);
+      const suggestion = fileMatch
+        ? fileMatch[2]
+          ? `${fileMatch[1]};${fileMatch[2]}`
+          : fileMatch[1]
+        : undefined;
+      videoElements.push({ type: 'video', index: idx * 3 + 2, fileAttr: suggestion });
+    }
+  });
+
+  return { imageUrls, imageElements, videoUrls, videoElements, textParts };
+}
+
 // ---------------- 修改 buildMessage 函数 ----------------
 async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
   let content = `回声洞 ——（${cave.cave_id}）\n`;
@@ -568,7 +626,7 @@ export async function handleCaveAction(
         }
       }
       // 获取回声洞内容（调用 buildMessage 不传 session 返回纯文本）
-      const caveContent = buildMessage(targetCave, resourceDir, session);
+      const caveContent = await buildMessage(targetCave, resourceDir, session);
       if (isPending) {
         pendingData.splice(pendingIndex, 1);
         writeJsonData(pendingFilePath, pendingData);
@@ -586,12 +644,28 @@ export async function handleCaveAction(
   // 修改 processAdd：将缺少媒体及文本的回复逻辑移入 processAdd，并调用 extractMediaContent 提取文本处理
   async function processAdd(): Promise<string> {
     try {
+      // 修改原始内容变量声明为 let 以便后续修改
+      let originalContent = session.quote?.content || session.content;
+
+      // 新增：移除命令前缀
+      const prefixes = Array.isArray(session.app.config.prefix)
+        ? session.app.config.prefix
+        : [session.app.config.prefix];
+      const nicknames = Array.isArray(session.app.config.nickname)
+        ? session.app.config.nickname
+        : session.app.config.nickname ? [session.app.config.nickname] : [];
+      const allTriggers = [...prefixes, ...nicknames];
+      const triggerPattern = allTriggers
+        .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+      const commandPattern = new RegExp(`^(?:${triggerPattern}).*?-a\\s*`);
+      originalContent = originalContent.replace(commandPattern, '');
+
       // 提取原始内容
-      const originalContent = session.quote?.content || session.content;
       let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(originalContent);
 
       // 当媒体和文本均为空时，进行回复提示
-      if (imageUrls.length === 0 && videoUrls.length === 0 && textParts.length === 0) {
+      if (textParts.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
         await session.send('请发送你想添加到回声洞的内容：');
         const reply = await session.prompt({ timeout: 60000 });
         if (reply) {
@@ -694,62 +768,4 @@ export async function handleCaveAction(
     // 直接将错误发送给用户，确保 error.message 中不会重复前缀
     return `操作失败: ${error.message.replace(/^操作失败: /, '')}`;
   }
-}
-
-// 新增：提取 processAdd 中媒体处理及回复逻辑的函数
-async function extractMediaContent(originalContent: string): Promise<{
-	imageUrls: string[],
-	imageElements: { type: 'img'; index: number; fileAttr?: string }[],
-	videoUrls: string[],
-	videoElements: { type: 'video'; index: number; fileAttr?: string }[],
-	textParts: Element[]
-}> {
-  // 提取文本内容
-  const parsedTexts = originalContent
-    .split(/<img[^>]+>|<video[^>]+>/g)
-    .map(t => t.trim())
-    .filter(t => t);
-  const textParts: Element[] = [];
-  parsedTexts.forEach((text, idx) => {
-    textParts.push({ type: 'text', content: text, index: idx * 3 });
-  });
-
-  const imageUrls: string[] = [];
-  const imageElements: Array<{ type: 'img'; index: number; fileAttr?: string }> = [];
-  const videoUrls: string[] = [];
-  const videoElements: Array<{ type: 'video'; index: number; fileAttr?: string }> = [];
-
-  // 处理 <img> 标签
-  const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
-  imgMatches.forEach((img, idx) => {
-    const srcMatch = img.match(/src="([^"]+)"/);
-    const fileMatch = img.match(/file="([^"]+)"(?:\s+fileSize="([^"]+)")?/);
-    if (srcMatch?.[1]) {
-      imageUrls.push(srcMatch[1]);
-      const suggestion = fileMatch
-        ? fileMatch[2]
-          ? `${fileMatch[1]};${fileMatch[2]}`
-          : fileMatch[1]
-        : undefined;
-      imageElements.push({ type: 'img', index: idx * 3 + 1, fileAttr: suggestion });
-    }
-  });
-
-  // 处理 <video> 标签
-  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"[^>]*>/g) || [];
-  videoMatches.forEach((video, idx) => {
-    const srcMatch = video.match(/src="([^"]+)"/);
-    const fileMatch = video.match(/file="([^"]+)"(?:\s+fileSize="([^"]+)")?/);
-    if (srcMatch?.[1]) {
-      videoUrls.push(srcMatch[1]);
-      const suggestion = fileMatch
-        ? fileMatch[2]
-          ? `${fileMatch[1]};${fileMatch[2]}`
-          : fileMatch[1]
-        : undefined;
-      videoElements.push({ type: 'video', index: idx * 3 + 2, fileAttr: suggestion });
-    }
-  });
-
-  return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
