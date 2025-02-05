@@ -11,12 +11,13 @@ export const inject = ['database'];
 // 配置Schema
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required().description('管理员'),
-  blacklist: Schema.array(Schema.string()).default([]).description('黑名单'),
+  blacklist: Schema.array(Schema.string()).default([]).description('黑名单（用户）'),
+  whitelist: Schema.array(Schema.string()).default([]).description('白名单（用户 / 群组 / 频道）'),
   number: Schema.number().default(60).description('调用冷却时间（秒）'),
   enableAudit: Schema.boolean().default(false).description('审核功能'),
   allowVideo: Schema.boolean().default(true).description('允许添加视频'),
-  videoMaxSize: Schema.number().default(10).description('视频最大大小（MB）'),
-  imageMaxSize: Schema.number().default(5).description('图片最大大小（MB）'),
+  videoMaxSize: Schema.number().default(16).description('视频最大大小（MB）'),
+  imageMaxSize: Schema.number().default(4).description('图片最大大小（MB）'),
 });
 
 // 插件主函数：初始化和命令注册
@@ -79,6 +80,7 @@ export interface Config {
   videoMaxSize: number;
   imageMaxSize: number;  // 新增属性
   blacklist: string[];  // 新增属性
+  whitelist: string[]; // 新增白名单属性
 }
 
 // 定义数据类型接口
@@ -180,8 +182,8 @@ async function saveMedia(
         if (extPattern.test(filenameCandidate)) {
           ext = filenameCandidate.match(extPattern)![0].slice(1);
         }
-        if (sizeCandidate > defaults.maxSize * 1024 * 1024) {
-          throw new Error(`${mediaType === 'img' ? '图片' : '视频'}超出大小限制 (${defaults.maxSize}MB)，实际大小为 ${(sizeCandidate / (1024 * 1024)).toFixed(2)}MB`);
+        if (sizeCandidate > defaults.maxSize * 1024) {
+          throw new Error(`${mediaType === 'img' ? '图片' : '视频'}超出大小限制 (${defaults.maxSize}MB)，实际大小为 ${(sizeCandidate / 1024).toFixed(2)}MB`);
         }
       } else if (suggestion && extPattern.test(suggestion)) {
         ext = suggestion.match(extPattern)![0].slice(1);
@@ -773,17 +775,21 @@ export async function handleCaveAction(
         contributor_name: contributorName
       };
 
-      if (config.enableAudit) {
+      // 判断是否绕过审核：白名单包括用户、群组和频道
+      const bypassAudit = config.whitelist.includes(session.userId) ||
+                      (session.guildId && config.whitelist.includes(session.guildId)) ||
+                      (session.channelId && config.whitelist.includes(session.channelId));
+      if (config.enableAudit && !bypassAudit) {
         pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
         FileHandler.writeJsonData(pendingFilePath, pendingData);
         await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session));
         return `已提交审核，序号为 (${caveId})`;
+      } else {
+        const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
+        data.push(caveWithoutIndex);
+        FileHandler.writeJsonData(caveFilePath, data);
+        return `添加成功！序号为 (${caveId})`;
       }
-
-      const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
-      data.push(caveWithoutIndex);
-      FileHandler.writeJsonData(caveFilePath, data);
-      return `添加成功！序号为 (${caveId})`;
     } catch (error) {
       return `操作失败: ${error.message}`;
     }
@@ -799,6 +805,6 @@ export async function handleCaveAction(
     return await processRandom();
   } catch (error) {
     // 将错误信息返回给用户
-    return `操作失败: ${error.message.replace(/^操作失败: /, '')}`;
+    return `操作失败: ${error.message}`;
   }
 }
