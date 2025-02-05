@@ -10,13 +10,13 @@ export const inject = ['database'];
 
 // 配置Schema
 export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required().description('管理员账号'),
-  number: Schema.number().default(60).description('群内调用冷却时间（秒）'),
-  enableAudit: Schema.boolean().default(false).description('是否开启审核功能'),
-  // 删除 allowAudio 配置项
-  allowVideo: Schema.boolean().default(true).description('是否允许用户添加视频'),
-  videoMaxSize: Schema.number().default(10).description('允许添加的视频最大大小（MB）'),
-  imageMaxSize: Schema.number().default(5).description('允许添加的图片最大大小（MB）')  // 新增配置项
+  manager: Schema.array(Schema.string()).required().description('管理员'),
+  blacklist: Schema.array(Schema.string()).default([]).description('黑名单'),
+  number: Schema.number().default(60).description('调用冷却时间（秒）'),
+  enableAudit: Schema.boolean().default(false).description('审核功能'),
+  allowVideo: Schema.boolean().default(true).description('允许添加视频'),
+  videoMaxSize: Schema.number().default(10).description('视频最大大小（MB）'),
+  imageMaxSize: Schema.number().default(5).description('图片最大大小（MB）'),
 });
 
 // 插件主函数：初始化和命令注册
@@ -42,10 +42,12 @@ export async function apply(ctx: Context, config: Config) {
     .option('l', '查询投稿统计', { type: 'string' })
     // 仅对 -l、-p 和 -d 指令进行权限检查
     .before(async ({ session, options }) => {
+      // 黑名单检查
+      if (config.blacklist.includes(session.userId)) return '你已被列入黑名单';
       // 如果输入内容包含 "-help"，不进行权限检查
       if (session.content && session.content.includes('-help')) return;
       if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
-        return '只有管理员才能执行此操作';
+        return '此操作仅管理员可用';
       }
     })
     .action(async ({ session, options }, ...content) => {
@@ -76,6 +78,7 @@ export interface Config {
   allowVideo: boolean;
   videoMaxSize: number;
   imageMaxSize: number;  // 新增属性
+  blacklist: string[];  // 新增属性
 }
 
 // 定义数据类型接口
@@ -525,7 +528,7 @@ export async function handleCaveAction(
           total += ids.length;
           return `${cid} 共计投稿 ${ids.length} 项回声洞:\n` + formatIds(ids);
         });
-        return `回声洞共计投稿 ${total} 项:\n` + lines.join('\n');
+        return `==回声洞共计投稿 ${total} 项==\n` + lines.join('\n');
       }
     } catch (error) {
       return `操作失败: ${error.message}`;
@@ -636,7 +639,7 @@ export async function handleCaveAction(
         isPending = true;
       }
       if (targetCave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
-        return '你不是本项回声洞的添加者！';
+        return '不可删除他人添加的回声洞！';
       }
 
       // 先生成回声洞预览消息（图片等媒体将被嵌入）
@@ -694,10 +697,10 @@ export async function handleCaveAction(
 
       // 当媒体和文本均为空时，进行回复提示
       if (textParts.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
-        await session.send('请发送你要添加到回声洞的内容：');
+        await session.send('请在一分钟内发送你要添加的内容');
         const reply = await session.prompt({ timeout: 60000 });
         if (!reply || reply.trim() === "") {
-          return '空内容，已放弃本次添加';
+          return '操作超时，放弃本次添加';
         }
         const replyResult = await extractMediaContent(reply);
         imageUrls = replyResult.imageUrls;
@@ -709,7 +712,7 @@ export async function handleCaveAction(
 
       // 检查配置：是否允许添加视频
       if (videoUrls.length > 0 && !config.allowVideo) {
-        return '当前设置不允许添加视频';
+        return '已关闭上传视频功能';
       }
 
       // 生成新的回声洞ID及处理媒体文件
