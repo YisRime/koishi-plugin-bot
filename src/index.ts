@@ -194,7 +194,7 @@ async function saveMedia(
         filename = `${caveId}_${i + 1}.${ext}`;
       }
       const targetPath = path.join(resourceDir, filename);
-      const response = await ctx.http.axios(processedUrl, {
+      const response = await ctx.http(processedUrl, {
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 30000,
@@ -613,6 +613,10 @@ export async function handleCaveAction(
       if (targetCave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
         return '你不是这条回声洞的添加者！';
       }
+
+      // 先生成回声洞预览消息（图片等媒体将被嵌入）
+      const caveContent = await buildMessage(targetCave, resourceDir, session);
+
       if (targetCave.elements) {
         try {
           for (const element of targetCave.elements) {
@@ -625,8 +629,7 @@ export async function handleCaveAction(
           return `操作失败: ${error.message}`;
         }
       }
-      // 获取回声洞内容（调用 buildMessage 不传 session 返回纯文本）
-      const caveContent = await buildMessage(targetCave, resourceDir, session);
+      // 返回预览消息后再更新数据文件
       if (isPending) {
         pendingData.splice(pendingIndex, 1);
         writeJsonData(pendingFilePath, pendingData);
