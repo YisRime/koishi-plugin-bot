@@ -1,104 +1,92 @@
 _config:
-  manager: 管理员
-  blacklist: 黑名单（用户）
-  whitelist: 白名单（用户 / 群组 / 频道）
-  number: 调用冷却时间（秒）
-  enableAudit: 审核功能
-  allowVideo: 允许添加视频
-  videoMaxSize: 视频最大大小（MB）
-  imageMaxSize: 图片最大大小（MB）
-  enablePagination: 启用分页展示
-  itemsPerPage: 每页显示的条目数
+  manager: "管理员"
+  blacklist: "黑名单（用户）"
+  whitelist: "审核白名单（用户/群组/频道）"
+  number: "冷却时间（秒）"
+  enableAudit: "启用审核"
+  allowVideo: "允许视频上传"
+  videoMaxSize: "视频最大大小（MB）"
+  imageMaxSize: "图片最大大小（MB）"
+  enablePagination: "启用统计分页"
+  itemsPerPage: "每页显示数目"
 
 commands:
   cave:
-    description: 支持添加、抽取、查看、查询回声洞
-    usage: |-
-      支持添加、抽取、查看、查询回声洞
+    description: "回声洞操作"
+    usage: "支持添加、抽取、查看、管理回声洞"
     examples: |-
-      cave           随机抽取回声洞
-      cave -a 内容   添加新回声洞
-      cave -g/r x      查看/删除指定回声洞
-      cave -p/d x/all  通过/拒绝待审回声洞
-      cave -l x      查询投稿者投稿列表
+      使用 'cave' 随机选择一个回声洞
+      -a 添加（直接或引用）
+      -g 查看指定回声洞
+      -r 删除指定回声洞
     options:
-      a: 添加回声洞
-      g: 查看回声洞
-      r: 删除回声洞
-      p: 通过审核
-      d: 拒绝审核
-      l: 查询投稿统计
+      a: "添加回声洞"
+      g: "查看回声洞"
+      r: "删除回声洞"
+      p: "通过审核（批量）"
+      d: "拒绝审核（批量）"
+      l: "查询投稿统计"
     messages:
-      blacklisted: 你已被列入黑名单
-      manager_only: 此操作仅管理员可用
-      timeout: 群聊冷却中...请{0}秒后再试
-      no_content: 请在一分钟内发送你要添加的内容
-      operation_timeout: 操作超时，放弃本次添加
-      video_disabled: 已关闭上传视频功能
-      no_pending: 没有待审核回声洞
-      pending_not_found: 未找到该待审核回声洞
-      pending_result: |
-        {0}成功，还有 {1} 条待审核：[{2}]
-      audit_passed: 已通过该回声洞
-      audit_rejected: 已拒绝该回声洞
-      batch_audit_result: 已{0} {1}/{2} 条回声洞
-      invalid_id: 请输入正确的回声洞序号
-      not_found: 未找到该序号的回声洞
-      no_permission: 不可删除他人添加的回声洞！
-      delete_pending: 已删除（待审核）
-      deleted: 已删除
-      media_error: "{0}文件处理失败：{1}"
-      save_failed: 保存数据失败
-      contributor_not_found: 未找到投稿者 {0}
-      stats_header: ==回声洞共计投稿 {0} 项==
-      submit_pending: 已提交审核，序号为 ({0})
-      add_success: 添加成功！序号为 ({0})
-      cave_title: 回声洞 ——（{0}）
-      video_sending: [视频正在发送中]
-      media_invalid: "[{0}失效]"
-      media_load_failed: "[{0}加载失败]"
-      contributor_suffix: —— {0}
-      no_cave: 暂无回声洞可用
-      cooldown: 群聊冷却中...请{0}秒后再试
-      random_failed: 获取随机回声洞失败
-      get_failed: 获取回声洞失败
-      stats_failed: 统计数据生成失败，请检查数据文件完整性
-      review_process_failed: 审核处理失败，请稍后重试
-      stats_operation_failed: "操作失败: {0}"
-      media_delete_failed: 媒体文件删除失败，但数据已更新
-      media_size_exceeded: "{0}文件大小超出限制"
-      media_format_unsupported: "{0}格式不支持或无法访问"
-      video_send_failed: 视频发送失败
-      page_info: 第 {0} 页，共 {1} 页
+      general:
+        blacklisted: "你已被拉黑"
+        manager_only: "此操作仅限管理员"
+        cooldown: "群聊冷却中... 请在 {0} 秒后重试"
+        no_content: "请在一分钟内发送内容"
+        operation_timeout: "操作超时，添加取消"
+        video_disabled: "不允许上传视频"
+        invalid_id: "请输入有效的回声洞序号"
+        not_found: "未找到回声洞"
+        no_permission: "你无权删除他人添加的回声洞"
+        delete_pending: "删除（待审核）"
+        deleted: "已删除"
+        save_failed: "保存数据失败"
+        submit_pending: "提交审核成功，回声洞ID为 ({0})"
+        add_success: "添加成功，回声洞ID为 ({0})"
+        cave_title: "回声洞 —— ({0})"
+        video_sending: "[视频发送中]"
+        media_invalid: "[无效的 {0}]"
+        media_load_failed: "[加载 {0} 失败]"
+        contributor_suffix: "—— {0}"
+        no_cave: "暂无回声洞"
+        random_failed: "随机选择回声洞失败"
+        stats_failed: "生成统计数据失败"
+        review_process_failed: "审核过程失败"
+        stats_operation_failed: "操作失败: {0}"
+        media_size_exceeded: "{0} 文件大小超过限制"
+        media_format_unsupported: "{0} 格式不支持"
+        video_send_failed: "视频发送失败"
+        page_info: "第 {0} 页，共 {1} 页"
       audit:
-        title: 待审核回声洞：
-        from: 来自：
-        send_failed: "发送审核消息失败: 无法向管理员 {0} 发送消息"
-      commons:
-        pending: （待审核）
-        deleted: 已删除
+        no_pending: "暂无待审核回声洞"
+        pending_not_found: "待审核回声洞未找到"
+        pending_result: "{0}，剩余 {1} 个待审核回声洞: [{2}]"
+        audit_passed: "回声洞审核通过"
+        audit_rejected: "回声洞审核拒绝"
+        batch_audit_result: "{0} {1}/{2} 回声洞"
+        audit:
+          title: "待审核回声洞列表:"
+          from: "投稿人:"
+          send_failed: "发送审核消息失败，无法联系管理员 {0}"
       stats:
-        total_items: "{0} 共计投稿 {1} 项回声洞："
-        ids_line: {0}
+        stats_header: "该用户共提交 {0} 个回声洞:"
+        total_items: "共 {0} 个投稿，{1} 个回声洞:"
+        ids_line: "{0}"
       media:
-        upload_image_failed: 图片上传失败，请检查图片是否可访问或尝试重新上传
-        upload_video_failed: 视频上传失败，请检查视频是否可访问或尝试重新上传
+        media_error: "{0} 文件处理失败: {1}"
+        upload_image_failed: "图片上传失败"
+        upload_video_failed: "视频上传失败"
+
     errors:
       file:
-        read: 读取 JSON 数据失败：{0}
-        write: 写入 JSON 数据失败：{0}
-        not_found: 文件未找到：{0}
-      media:
-        image_upload: 图片上传失败，请检查图片是否可访问或尝试重新上传
-        video_upload: 视频上传失败，请检查视频是否可访问或尝试重新上传
-        image_format: 图片格式不支持或无法访问
-        video_format: 视频格式不支持或无法访问
+        read: "读取 JSON 数据失败：{0}"
+        write: "写入 JSON 数据失败：{0}"
+        not_found: "未找到文件：{0}"
       command:
-        process: 指令处理失败：{0}
-        parse: 解析参数失败：{0}
+        process: "命令处理失败：{0}"
+        parse: "参数解析失败：{0}"
       audit:
-        process: 审核处理失败：{0}
-      media_delete: 媒体文件删除失败，但数据已更新
-      get_cave: 获取回声洞失败，请稍后重试
+        process: "审核处理失败：{0}"
+      media_delete: "媒体文件删除失败"
+      get_cave: "获取回声洞失败"
       operations:
-        user_info: 无法获取用户信息：{0}
+        user_info: "获取用户信息失败：{0}"

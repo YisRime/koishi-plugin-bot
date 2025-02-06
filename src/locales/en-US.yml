@@ -1,101 +1,92 @@
 _config:
-  manager: "Manager"
+  manager: "Administrator"
   blacklist: "Blacklist (User)"
-  whitelist: "Whitelist (User / Group / Channel)"
-  number: "Cooldown time (seconds)"
-  enableAudit: "Audit feature"
-  allowVideo: "Allow video uploads"
-  videoMaxSize: "Max video size (MB)"
-  imageMaxSize: "Max image size (MB)"
-  enablePagination: "Enable pagination"
-  itemsPerPage: "Items per page"
+  whitelist: "Audit Whitelist (User/Group/Channel)"
+  number: "Cooldown (Seconds)"
+  enableAudit: "Enable Audit"
+  allowVideo: "Allow Video Upload"
+  videoMaxSize: "Maximum Video Size (MB)"
+  imageMaxSize: "Maximum Image Size (MB)"
+  enablePagination: "Enable Pagination"
+  itemsPerPage: "Items per Page"
+
 commands:
   cave:
-    description: "Support adding, extracting, viewing, and querying caves"
-    usage: |-
-      Support adding, extracting, viewing, and querying caves
+    description: "Cave Operations"
+    usage: "Supports adding, drawing, viewing, and managing caves"
     examples: |-
-      cave           Random cave extraction
-      cave -a content    Add a new cave
-      cave -g/r x      View/Delete a specific cave
-      cave -p/d x/all  Approve/Reject pending caves
-      cave -l x      Query submission stats
+      Use 'cave' to randomly select a cave
+      Use '-a' to add directly or by reference
+      Use '-g' to view a specific cave
+      Use '-r' to delete a specific cave
     options:
-      a: "Add cave"
-      g: "View cave"
-      r: "Delete cave"
-      p: "Approve audit"
-      d: "Reject audit"
-      l: "Query submission stats"
+      a: "Add Cave"
+      g: "View Cave"
+      r: "Delete Cave"
+      p: "Approve (Batch)"
+      d: "Reject (Batch)"
+      l: "View Submission Stats"
     messages:
-      blacklisted: "You are blacklisted"
-      manager_only: "This operation is manager-only"
-      timeout: "Channel cooldown... please wait {0} seconds"
-      no_content: "Please send the content to add within one minute"
-      operation_timeout: "Operation timed out, aborted adding"
-      video_disabled: "Video upload has been disabled"
-      no_pending: "No pending caves"
-      pending_not_found: "Pending cave not found"
-      pending_result: |-
-        "{0} succeeded, {1} pending entries remaining: [{2}]"
-      audit_passed: "Cave approved"
-      audit_rejected: "Cave rejected"
-      batch_audit_result: "\"{0} {1}/{2} entries\""
-      invalid_id: "Please enter a valid cave ID"
-      not_found: "Cave not found"
-      no_permission: "Cannot delete others' caves!"
-      delete_pending: "Deleted (Pending)"
-      deleted: "Deleted"
-      media_error: "{0} file handling failed: {1}"
-      save_failed: "Failed to save data"
-      contributor_not_found: "Contributor {0} not found"
-      stats_header: "==Total submissions: {0} caves=="
-      submit_pending: "Submitted for audit, cave ID is ({0})"
-      add_success: "Addition successful! Cave ID is ({0})"
-      cave_title: "Cave — ({0})"
-      video_sending: "[Video is being sent]"
-      media_invalid: "[Invalid {0}]"
-      media_load_failed: "[Failed to load {0}]"
-      contributor_suffix: "— {0}"
-      no_cave: "No caves available"
-      cooldown: "Channel cooldown... please wait {0} seconds"
-      random_failed: "Random cave extraction failed"
-      get_failed: "Failed to retrieve cave"
-      stats_failed: "Stats generation failed, please check data integrity"
-      review_process_failed: "Audit processing failed, please try again later"
-      stats_operation_failed: "Operation failed: {0}"
-      media_delete_failed: "Media deletion failed, but data has been updated"
-      video_send_failed: "Video sending failed"
-      page_info: "Page {0} of {1}"
-      audit:
-        title: "Pending caves:"
-        from: "From: "
-        send_failed: "Failed to send audit message: cannot send to manager {0}"
-      commons:
-        pending: "(Pending)"
+      general:
+        blacklisted: "You have been blacklisted"
+        manager_only: "This operation is for administrators only"
+        no_content: "Please send the content within one minute"
+        operation_timeout: "Operation timed out, addition cancelled"
+        video_disabled: "Video upload is disabled"
+        invalid_id: "Please enter a valid cave ID"
+        not_found: "Cave not found"
+        no_permission: "You do not have permission to delete caves added by others"
+        delete_pending: "Deleted (Pending)"
         deleted: "Deleted"
+        save_failed: "Failed to save data"
+        submit_pending: "Submitted for audit, cave ID is ({0})"
+        add_success: "Addition successful, cave ID is ({0})"
+        cave_title: "Cave — ({0})"
+        video_sending: "[Sending video]"
+        media_invalid: "[Invalid {0}]"
+        media_load_failed: "[Failed to load {0}]"
+        contributor_suffix: "— {0}"
+        no_cave: "No caves available"
+        cooldown: "Group chat cooldown... Please try again in {0} seconds"
+        random_failed: "Failed to randomly select a cave"
+        stats_failed: "Failed to generate statistics"
+        review_process_failed: "Audit process failed"
+        stats_operation_failed: "Operation failed: {0}"
+        media_size_exceeded: "{0} file size exceeds limit"
+        media_format_unsupported: "{0} format is not supported"
+        video_send_failed: "Video sending failed"
+        page_info: "Page {0} of {1}"
+      audit:
+        no_pending: "No caves pending audit"
+        pending_not_found: "Pending cave not found"
+        pending_result: "{0}, {1} pending caves remain: [{2}]"
+        audit_passed: "Cave approved"
+        audit_rejected: "Cave audit rejected"
+        batch_audit_result: "{0} {1}/{2} caves"
+        audit:
+          title: "Caves pending audit:"
+          from: "From:"
+          send_failed: "Failed to send audit message: unable to message administrator {0}"
       stats:
-        total_items: "{0} submitted {1} caves:"
+        stats_header: "This cave has {0} submissions:"
+        total_items: "A total of {0} submissions, {1} caves:"
         ids_line: "{0}"
       media:
-        upload_image_failed: "Image upload failed, please check accessibility or try again"
-        upload_video_failed: "Video upload failed, please check accessibility or try again"
+        media_error: "{0} file processing failed: {1}"
+        upload_image_failed: "Image upload failed"
+        upload_video_failed: "Video upload failed"
+
     errors:
       file:
         read: "Failed to read JSON data: {0}"
         write: "Failed to write JSON data: {0}"
         not_found: "File not found: {0}"
-      media:
-        image_upload: "Image upload failed, please check if image is accessible or try again"
-        video_upload: "Video upload failed, please check if video is accessible or try again"
-        image_format: "Image format not supported or inaccessible"
-        video_format: "Video format not supported or inaccessible"
       command:
         process: "Command processing failed: {0}"
-        parse: "Failed to parse parameters: {0}"
+        parse: "Parameter parsing failed: {0}"
       audit:
-        process: "Audit process failed: {0}"
-      media_delete: "Media file deletion failed, but data updated"
-      get_cave: "Failed to get Echo Cave entry, please try again later"
+        process: "Audit processing failed: {0}"
+      media_delete: "Failed to delete media file"
+      get_cave: "Failed to get cave"
       operations:
         user_info: "Failed to get user information: {0}"
