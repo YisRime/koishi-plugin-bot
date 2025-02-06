@@ -11,14 +11,20 @@ _config:
 commands:
   cave:
     description: Echo Cave
-    usage: |-
-      Support add, draw, view, and query echo caves
-    examples: |-
-      cave           Random draw
-      cave -a content Add new entry
-      cave -g/r x    View/Delete specific entry
-      cave -p/d x/all Pass/Reject pending entry
-      cave -l x      Query contributor stats
+    usage: 'Support add, draw, view, and query echo caves'
+    options:
+      add: Add entry
+      view: View entry
+      delete: Delete entry
+      pass: Pass review
+      reject: Reject review
+      list: Query stats
+    examples:
+      random: 'cave           Random draw'
+      add: 'cave -a content Add new entry'
+      view_delete: 'cave -g/r x    View/Delete specific entry'
+      review: 'cave -p/d x/all Pass/Reject pending entry'
+      query: 'cave -l x      Query contributor stats'
     messages:
       blacklisted: You are blacklisted
       manager_only: This operation is for managers only
@@ -44,3 +50,53 @@ commands:
       stats_header: ==Total {0} Echo Cave Entries==
       submit_pending: Submitted for review, ID ({0})
       add_success: Added successfully! ID ({0})
+      cave_title: 'Echo Cave —— ({0})'
+      video_sending: '[Video sending...]'
+      media_invalid: '[{0} invalid]'
+      media_load_failed: '[{0} load failed]'
+      contributor_suffix: '—— {0}'
+      no_caves: No available entries
+      cooldown: Channel cooldown...Please wait {0} seconds
+      random_failed: Failed to get random entry
+      get_failed: Failed to get entry
+      stats_failed: Failed to generate stats, please check data integrity
+      review_process_failed: Review process failed, please try again later
+      stats_operation_failed: 'Operation failed: {0}'
+      user_info_failed: Cannot get user info, using default username
+      media_delete_failed: Media file deletion failed, but data updated
+      media_size_exceeded: '{0} file size exceeded limit'
+      media_format_unsupported: '{0} format unsupported or inaccessible'
+      video_send_failed: Failed to send video
+      audit:
+        title: 'Pending Review:'
+        from: 'From:'
+        send_failed: 'Failed to send review message: Cannot send message to admin {0}'
+      commons:
+        pending: '(Pending)'
+        deleted: 'Deleted'
+      stats:
+        total_items: '{0} has submitted {1} entries:'
+        ids_line: '{0}'
+      media:
+        upload_image_failed: Image upload failed, please check if image is accessible or try again
+        upload_video_failed: Video upload failed, please check if video is accessible or try again
+    errors:
+      file:
+        read: 'Failed to read JSON data: {0}'
+        write: 'Failed to write JSON data: {0}'
+        not_found: 'File not found: {0}'
+      media:
+        image_upload: 'Image upload failed, please check if image is accessible or try again'
+        video_upload: 'Video upload failed, please check if video is accessible or try again'
+        image_format: 'Image format not supported or inaccessible'
+        video_format: 'Video format not supported or inaccessible'
+      command:
+        process: 'Command processing failed: {0}'
+        parse: 'Failed to parse parameters: {0}'
+      audit:
+        process: 'Audit process failed: {0}'
+      operations:
+        stats_save: 'Failed to save stats: {0}'
+        user_info: 'Failed to get user info: {0}'
+        not_found: '{0} not found'
+        validate: 'Validation failed: {0}'
