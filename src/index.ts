@@ -41,12 +41,12 @@ export async function apply(ctx: Context, config: Config) {
     .example('cave -g/r x      查看/删除指定回声洞')
     .example('cave -p/d x/all  通过/拒绝待审回声洞')
     .example('cave -l x      查询投稿者投稿列表')
-    .option('a', '-add')
-    .option('g', '-view', { type: 'string' })
-    .option('r', '-delete', { type: 'string' })
-    .option('p', '-pass', { type: 'string' })
-    .option('d', '-reject', { type: 'string' })
-    .option('l', '-list', { type: 'string' })
+    .option('a', '添加回声洞')
+    .option('g', '查看回声洞', { type: 'string' })
+    .option('r', '删除回声洞', { type: 'string' })
+    .option('p', '通过审核', { type: 'string' })
+    .option('d', '拒绝审核', { type: 'string' })
+    .option('l', '查询投稿统计', { type: 'string' })
     // 仅对 -l、-p 和 -d 指令进行权限检查
     .before(async ({ session, options }) => {
       // 黑名单检查
@@ -706,7 +706,7 @@ export async function handleCaveAction(
             ? session.text('commands.cave.messages.commons.pending')
             : '';
           const deleteMessage = session.text('commands.cave.messages.commons.deleted');
-          return `${deleteMessage}${deleteStatus}\n${caveContent}`;
+          return `${deleteMessage}${deleteStatus}${caveContent}`;
         }
       } catch (error) {
         return sendTempMessage(session, 'commands.cave.errors.command.process', [error.message]);
@@ -716,9 +716,12 @@ export async function handleCaveAction(
     // 修改 processAdd：将缺少媒体及文本的回复逻辑移入 processAdd，并调用 extractMediaContent 提取文本处理
     async function processAdd(): Promise<string> {
       try {
-        // 提示用户输入内容并解析媒体及文本信息
-        // 修改原始内容变量声明为 let 以便后续修改
-        let originalContent = session.quote?.content || session.content;
+        // 首先读取命令行内容，然后再读取引用内容
+        let originalContent = content.join(' ') || session.content;
+        if (!originalContent && session.quote?.content) {
+          originalContent = session.quote.content;
+        }
+
         // 新增：移除命令前缀
         const prefixes = Array.isArray(session.app.config.prefix)
           ? session.app.config.prefix
