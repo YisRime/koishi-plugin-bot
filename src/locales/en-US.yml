@@ -11,20 +11,6 @@ _config:
 commands:
   cave:
     description: Echo Cave
-    usage: 'Support add, draw, view, and query echo caves'
-    options:
-      add: Add entry
-      view: View entry
-      delete: Delete entry
-      pass: Pass review
-      reject: Reject review
-      list: Query stats
-    examples:
-      random: 'cave           Random draw'
-      add: 'cave -a content Add new entry'
-      view_delete: 'cave -g/r x    View/Delete specific entry'
-      review: 'cave -p/d x/all Pass/Reject pending entry'
-      query: 'cave -l x      Query contributor stats'
     messages:
       blacklisted: You are blacklisted
       manager_only: This operation is for managers only
@@ -55,14 +41,13 @@ commands:
       media_invalid: '[{0} invalid]'
       media_load_failed: '[{0} load failed]'
       contributor_suffix: '—— {0}'
-      no_caves: No available entries
+      no_cave: No available entries
       cooldown: Channel cooldown...Please wait {0} seconds
       random_failed: Failed to get random entry
       get_failed: Failed to get entry
       stats_failed: Failed to generate stats, please check data integrity
       review_process_failed: Review process failed, please try again later
       stats_operation_failed: 'Operation failed: {0}'
-      user_info_failed: Cannot get user info, using default username
       media_delete_failed: Media file deletion failed, but data updated
       media_size_exceeded: '{0} file size exceeded limit'
       media_format_unsupported: '{0} format unsupported or inaccessible'
@@ -95,8 +80,7 @@ commands:
         parse: 'Failed to parse parameters: {0}'
       audit:
         process: 'Audit process failed: {0}'
+      media_delete: 'Media file deletion failed, but data updated'
+      get_cave: 'Failed to get Echo Cave entry, please try again later'
       operations:
-        stats_save: 'Failed to save stats: {0}'
-        user_info: 'Failed to get user info: {0}'
-        not_found: '{0} not found'
-        validate: 'Validation failed: {0}'
+        user_info: 'Failed to get user information: {0}'

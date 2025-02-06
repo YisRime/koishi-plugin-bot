@@ -11,20 +11,6 @@ _config:
 commands:
   cave:
     description: 回声洞
-    usage: 支持添加、抽取、查看、查询回声洞
-    examples:
-      random: cave           随机抽取回声洞
-      add: 'cave -a 内容   添加新回声洞'
-      view_delete: 'cave -g/r x    查看/删除指定回声洞'
-      review: 'cave -p/d x/all  通过/拒绝待审回声洞'
-      query: 'cave -l x      查询投稿者投稿列表'
-    options:
-      add: 添加回声洞
-      view: 查看回声洞
-      delete: 删除回声洞
-      pass: 通过审核
-      reject: 拒绝审核
-      list: 查询投稿统计
     messages:
       blacklisted: 你已被列入黑名单
       manager_only: 此操作仅管理员可用
@@ -55,14 +41,13 @@ commands:
       media_invalid: '[{0}失效]'
       media_load_failed: '[{0}加载失败]'
       contributor_suffix: '—— {0}'
-      no_caves: 暂无回声洞可用
+      no_cave: 暂无回声洞可用
       cooldown: 群聊冷却中...请{0}秒后再试
       random_failed: 获取随机回声洞失败
       get_failed: 获取回声洞失败
       stats_failed: 统计数据生成失败，请检查数据文件完整性
       review_process_failed: 审核处理失败，请稍后重试
       stats_operation_failed: '操作失败: {0}'
-      user_info_failed: 无法获取用户信息，将使用默认用户名
       media_delete_failed: 媒体文件删除失败，但数据已更新
       media_size_exceeded: '{0}文件大小超出限制'
       media_format_unsupported: '{0}格式不支持或无法访问'
@@ -96,12 +81,6 @@ commands:
       audit:
         process: 审核处理失败：{0}
       media_delete: 媒体文件删除失败，但数据已更新
-      no_cave: 暂无回声洞可用
       get_cave: 获取回声洞失败，请稍后重试
-      invalid_id: 请输入有效的回声洞序号
-      contributor_stats: '{0} 共计投稿 {1} 项回声洞:\n{2}'
       operations:
-        stats_save: '统计数据保存失败：{0}'
         user_info: '无法获取用户信息：{0}'
-        not_found: '未找到{0}'
-        validate: '验证失败：{0}'
