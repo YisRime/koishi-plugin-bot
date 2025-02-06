@@ -53,7 +53,7 @@ export async function apply(ctx: Context, config: Config) {
       // 如果输入内容包含 "-help"，不进行权限检查
       if (session.content && session.content.includes('-help')) return;
       if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
-        return sendTempMessage(session, 'commands.cave.messages.general.manager_only');
+        return sendTempMessage(session, 'commands.cave.messages.general.managerOnly');
       }
     })
     .action(async ({ session, options }, ...content) => {
@@ -178,7 +178,7 @@ async function saveMedia(
       if (fileSize) {
         const sizeInBytes = parseInt(fileSize);
         if (sizeInBytes > defaults.maxSize * 1024 * 1024) {
-          logger.warn(session.text('commands.cave.messages.general.media_size_exceeded', [mediaType]));
+          logger.warn(session.text('commands.cave.messages.general.mediaSizeExceeded', [mediaType]));
           continue;
         }
       }
@@ -211,8 +211,8 @@ async function saveMedia(
       savedFiles.push(finalFileName);
     } catch (error) {
       const errorKey = mediaType === 'img'
-        ? 'commands.cave.messages.general.upload_image_failed' // 修改合并后的错误键
-        : 'commands.cave.messages.general.upload_video_failed';
+        ? 'commands.cave.messages.media.uploadImageFailed' // 修改合并后的错误键
+        : 'commands.cave.messages.media.uploadVideoFailed';
       await sendTempMessage(session, errorKey);
       return [];
     }
@@ -229,7 +229,7 @@ ${session.text('commands.cave.messages.audit.audit.from')}${cave.contributor_num
     try {
       await ctx.bots[0]?.sendPrivateMessage(managerId, auditMessage);
     } catch (error) {
-      logger.error(session.text('commands.cave.messages.audit.send_failed', [managerId]));
+      logger.error(session.text('commands.cave.messages.audit.audit.sendFailed', [managerId]));
     }
   }
 }
@@ -299,7 +299,7 @@ async function handleAudit(
     if (remainingCount > 0) {
       const remainingIds = pendingData.map(c => c.cave_id).join(', ');
       const action = isApprove ? 'audit_passed' : 'audit_rejected';
-      return sendMessage(session, 'commands.cave.messages.general.pending_result', [
+      return sendMessage(session, 'commands.cave.messages.adult.pendingResult', [
         session.text(`commands.cave.messages.audit.${action}`),
         remainingCount,
         remainingIds
@@ -307,7 +307,7 @@ async function handleAudit(
     }
     return sendMessage(
       session,
-      isApprove ? 'commands.cave.messages.audit.audit_passed' : 'commands.cave.messages.audit.audit_rejected',
+      isApprove ? 'commands.cave.messages.audit.auditPassed' : 'commands.cave.messages.audit.auditRejected',
       [],
       false // 审核结果改为永久消息
     );
@@ -324,7 +324,7 @@ async function handleAudit(
   if (isApprove && data) FileHandler.writeJsonData(caveFilePath, data, session);
   FileHandler.writeJsonData(pendingFilePath, [], session);
 
-  return sendMessage(session, 'commands.cave.messages.audit.batch_audit_result', [
+  return sendMessage(session, 'commands.cave.messages.audit.batchAuditResult', [
     isApprove ? '通过' : '拒绝',
     processedCount,
     pendingData.length
@@ -536,8 +536,8 @@ export async function handleCaveAction(
           throw new Error(`操作失败: ${error.message}`);
         }
         const lines: string[] = Object.entries(stats).map(([cid, ids]) => {
-          return session.text('commands.cave.messages.stats.total_items', [cid, ids.length]) + '\n' +
-                 session.text('commands.cave.messages.stats.ids_line', [ids.join(',')]);
+          return session.text('commands.cave.messages.stats.totalItems', [cid, ids.length]) + '\n' +
+                 session.text('commands.cave.messages.stats.idsLine', [ids.join(',')]);
         });
         // 修改处：计算总投稿数
         const totalSubmissions = Object.values(stats).reduce((sum, arr) => sum + arr.length, 0);
@@ -551,15 +551,15 @@ export async function handleCaveAction(
           const start = (pageNum - 1) * itemsPerPage;
           const paginatedLines = lines.slice(start, start + itemsPerPage);
           // 调整返回顺序：先统计头部和分页数据，再显示分页信息
-          return session.text('commands.cave.messages.stats.stats_header', [totalSubmissions]) + '\n' +
+          return session.text('commands.cave.messages.stats.header', [totalSubmissions]) + '\n' +
                  paginatedLines.join('\n') + '\n' +
-                 session.text('commands.cave.messages.general.page_info', [pageNum, totalPages]);
+                 session.text('commands.cave.messages.general.pageInfo', [pageNum, totalPages]);
         } else {
-          return session.text('commands.cave.messages.stats.stats_header', [totalSubmissions]) + '\n' +
+          return session.text('commands.cave.messages.stats.header', [totalSubmissions]) + '\n' +
                  lines.join('\n');
         }
       } catch (error) {
-        return sendMessage(session, 'commands.cave.messages.stats_failed', [], true);
+        return sendMessage(session, 'commands.cave.messages.statsFailed', [], true);
       }
     }
 
@@ -750,10 +750,10 @@ export async function handleCaveAction(
         // 当媒体和文本均为空时，进行回复提示
         if (textParts.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
           // 发送临时提示消息
-          await sendMessage(session, 'commands.cave.messages.general.no_content', [], true);
+          await sendMessage(session, 'commands.cave.messages.general.noContent', [], true);
           const reply = await session.prompt({ timeout: 60000 });
           if (!reply || reply.trim() === "") {
-            return sendMessage(session, 'commands.cave.messages.general.operation_timeout', [], true);
+            return sendMessage(session, 'commands.cave.messages.general.operationTimeout', [], true);
           }
           const replyResult = await extractMediaContent(reply);
           imageUrls = replyResult.imageUrls;
@@ -765,7 +765,7 @@ export async function handleCaveAction(
 
         // 检查配置：是否允许添加视频
         if (videoUrls.length > 0 && !config.allowVideo) {
-          return sendMessage(session, 'commands.cave.messages.general.video_disabled', [], true);
+          return sendMessage(session, 'commands.cave.messages.general.videoDisabled', [], true);
         }
 
         // 生成新的回声洞ID及处理媒体文件
@@ -796,7 +796,7 @@ export async function handleCaveAction(
               session
             );
           } catch (error) {
-            return sendMessage(session, 'commands.cave.messages.general.upload_image_failed', [], true);
+            return sendMessage(session, 'commands.cave.messages.media.uploadImageFailed', [], true);
           }
         }
 
@@ -817,7 +817,7 @@ export async function handleCaveAction(
               session
             );
           } catch (error) {
-            return sendMessage(session, 'commands.cave.messages.general.upload_video_failed', [], true);
+            return sendMessage(session, 'commands.cave.messages.media.uploadVideoFailed', [], true);
           }
         }
 
@@ -845,7 +845,7 @@ export async function handleCaveAction(
           } catch (error) {
             return sendMessage(
               session,
-              'commands.cave.errors.operations.user_info',
+              'commands.cave.errors.operations.userInfo',
               [error.message],
               true
             );
@@ -867,12 +867,12 @@ export async function handleCaveAction(
           pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
           FileHandler.writeJsonData(pendingFilePath, pendingData, session);
           await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session);
-          return sendMessage(session, 'commands.cave.messages.general.submit_pending', [caveId], false);
+          return sendMessage(session, 'commands.cave.messages.general.submitPending', [caveId], false);
         } else {
           const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
           data.push(caveWithoutIndex);
           FileHandler.writeJsonData(caveFilePath, data, session);
-          return sendMessage(session, 'commands.cave.messages.general.add_success', [caveId], false);
+          return sendMessage(session, 'commands.cave.messages.general.addSuccess', [caveId], false);
         }
       } catch (error) {
         return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
