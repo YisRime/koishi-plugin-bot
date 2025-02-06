@@ -521,7 +521,6 @@ export async function handleCaveAction(
 
     // 提取查询投稿统计的函数（cave -l）
     async function processList(): Promise<string> {
-      // 查询数据，统计投稿信息并格式化输出
       try {
         const caveData = FileHandler.readJsonData<CaveObject>(caveFilePath, session);
         const caveDir = path.dirname(caveFilePath);
@@ -545,14 +544,11 @@ export async function handleCaveAction(
           const numberMatch = content.join(' ').match(/\d+/);
           if (numberMatch) queryId = numberMatch[0];
         }
-        // 移除 formatIds 函数，直接使用 join
         if (queryId) {
           if (stats[queryId]) {
-            const count = stats[queryId].length;
-            // 查询结果改为永久消息
             return session.text('commands.cave.messages.stats.total_items', [
               queryId,
-              count
+              stats[queryId].length
             ]) + '\n' + session.text('commands.cave.messages.stats.ids_line', [stats[queryId].join(', ')]);
           } else {
             return sendMessage(session, 'commands.cave.messages.contributor_not_found', [queryId], true);
@@ -561,11 +557,11 @@ export async function handleCaveAction(
           let total = 0;
           const lines = Object.entries(stats).map(([cid, ids]) => {
             total += ids.length;
-            return session.text('commands.cave.messages.contributor_stats', [
+            // 使用 i18n 格式化每一行输出
+            return session.text('commands.cave.messages.stats.total_items', [
               cid,
-              ids.length,
-              ids.join(', ')
-            ]);
+              ids.length
+            ]) + '\n' + session.text('commands.cave.messages.stats.ids_line', [ids.join(', ')]);
           });
           return session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
         }
