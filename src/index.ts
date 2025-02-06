@@ -1,922 +1,113 @@
-// -------- 导入依赖、接口定义与配置 --------
-// 导入核心依赖
-import { Context, Schema, h, Logger } from 'koishi'
-import * as fs from 'fs';
-import * as path from 'path';
+import { Context, Schema, h } from 'koishi';
+// npm publish --workspace koishi-plugin-asmr-lizard --access public --registry https://registry.npmjs.org
+import { } from 'koishi-plugin-ffmpeg';
+export const name = 'asmr-lizard';
+export const inject = ['ffmpeg'];
+export interface Config { }
+export const Config = Schema.object({});
+export const usage = `
+- 获取以下类型的助眠音频：钢琴、雨声、脑波、自然
 
-// 基础定义
-export const name = 'cave';
-export const inject = ['database'];
+- 还有睡前故事哦~
 
-// 配置Schema
-export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required(),
-  blacklist: Schema.array(Schema.string()).default([]),
-  whitelist: Schema.array(Schema.string()).default([]),
-  number: Schema.number().default(60),
-  enableAudit: Schema.boolean().default(false),
-  allowVideo: Schema.boolean().default(true),
-  videoMaxSize: Schema.number().default(16),
-  imageMaxSize: Schema.number().default(4),
-  listDisplayMode: Schema.union(['pagination', 'merge', 'normal']).default('normal'),
-  itemsPerPage: Schema.number().default(10),
-}).i18n({
-  'zh-CN': require('./locales/zh-CN')._config,
-  'en-US': require('./locales/en-US')._config,
-});
+- 如果是比较长的音频会分段发送~
+---
+<details>
+<summary>如果要反馈建议或报告问题</summary>
 
-// 插件主函数：初始化和命令注册
-export async function apply(ctx: Context, config: Config) {
-  ctx.i18n.define('zh-CN', require('./locales/zh-CN'));
-  ctx.i18n.define('en-US', require('./locales/en-US'));
+可以[点这里](https://github.com/lizard0126/asmr-lizard/issues)创建议题~
+</details>
+<details>
+<summary>如果喜欢我的插件</summary>
 
-  // 初始化路径（caveFilePath, resourceDir, pendingFilePath）
-  const { caveFilePath, resourceDir, pendingFilePath } = await initCavePaths(ctx);
-  // 初始化群组冷却管理
-  const lastUsed: Map<string, number> = new Map();
+可以[请我喝可乐](https://ifdian.net/a/lizard0126)，没准就有动力更新新功能了~
+</details>
+`;
 
-  // 注册命令并配置权限检查
-  ctx.command('cave [message:text]')
-    .usage('支持添加、抽取、查看、查询回声洞')
-    .example('cave')
-    .option('a', '添加回声洞')
-    .option('g', '查看回声洞', { type: 'string' })
-    .option('r', '删除回声洞', { type: 'string' })
-    .option('p', '通过审核', { type: 'string' })
-    .option('d', '拒绝审核', { type: 'string' })
-    .option('l', '查询投稿统计', { type: 'string' })
-    // 仅对 -l、-p 和 -d 指令进行权限检查
-    .before(async ({ session, options }) => {
-      // 黑名单检查
-      if (config.blacklist.includes(session.userId)) {
-        return sendTempMessage(session, 'commands.cave.messages.blacklisted');
-      }
-      // 如果输入内容包含 "-help"，不进行权限检查
-      if (session.content && session.content.includes('-help')) return;
-      if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
-        return sendTempMessage(session, 'commands.cave.messages.manager_only');
-      }
-    })
-    .action(async ({ session, options }, ...content) => {
-      // 调用主业务处理函数
-      return await handleCaveAction(ctx, config, session, options, content, lastUsed);
-    });
-}
+const apis = {
+  '钢琴': 'https://www.hhlqilongzhu.cn/api/ximalaya/ximalaya_gangqin.php',
+  '雨声': 'https://www.hhlqilongzhu.cn/api/ximalaya/ximalaya_rain.php',
+  '脑波': 'https://www.hhlqilongzhu.cn/api/ximalaya/ximalaya_naobo.php',
+  '自然': 'https://www.hhlqilongzhu.cn/api/ximalaya/ximalaya_daziran.php',
+  '故事': 'https://www.hhlqilongzhu.cn/api/ximalaya/ximalaya_gushi.php',
+};
 
-// 日志记录器
-const logger = new Logger('cave');
-
-// 接口定义
-export interface User {
-  userId: string;
-  username: string;
-  nickname?: string;
-}
-
-export interface getStrangerInfo {
-  user_id: string;
-  nickname: string;
-}
-
-export interface Config {
-  manager: string[];
-  number: number;
-  enableAudit: boolean;
-  allowVideo: boolean;
-  videoMaxSize: number;
-  imageMaxSize: number;  // 新增属性
-  blacklist: string[];  // 新增属性
-  whitelist: string[]; // 新增白名单属性
-  listDisplayMode: 'pagination' | 'merge' | 'normal';
-  itemsPerPage: number;
-}
-
-// 定义数据类型接口
-interface Element {
-  type: 'text' | 'img' | 'video';
-  content?: string;      // 文本内容
-  file?: string;         // 图片或视频文件名
-  index: number;         // 排序索引
-}
-
-// 定义回声洞数据结构
-interface CaveObject {
-  cave_id: number;             // 回声洞唯一ID
-  elements: Element[];         // 内容元素数组
-  contributor_number: string;  // 投稿者ID
-  contributor_name: string;    // 投稿者昵称
-}
-
-interface PendingCave extends CaveObject {}
-
-// -------- 新增：文件处理类 --------
-// 修改 FileHandler 类以接收 session 参数
-class FileHandler {
-  static readJsonData<T>(filePath: string, session: any, validator?: (item: any) => boolean): T[] {
-    try {
-      const data = fs.readFileSync(filePath, 'utf8');
-      const parsed = JSON.parse(data || '[]');
-      return Array.isArray(parsed) ? (validator ? parsed.filter(validator) : parsed) : [];
-    } catch (error) {
-      logger.error(session.text('commands.cave.errors.file.read', [error.message]));
-      return [];
-    }
-  }
-
-  static writeJsonData<T>(filePath: string, data: T[], session: any): void {
-    try {
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-    } catch (error) {
-      logger.error(session.text('commands.cave.errors.file.write', [error.message]));
-      throw new Error(session.text('commands.cave.messages.save_failed'));
-    }
-  }
-
-  static async ensureDirectory(dir: string): Promise<void> {
-    !fs.existsSync(dir) && await fs.promises.mkdir(dir, { recursive: true });
-  }
-
-  static async ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
-    !fs.existsSync(filePath) && await fs.promises.writeFile(filePath, defaultContent, 'utf8');
-  }
-}
-
-// -------- 图片及视频处理函数 --------
-async function saveMedia(
-  urls: string[],
-  fileNames: (string | undefined)[],
-  fileSizes: (string | undefined)[],
-  resourceDir: string,
-  caveId: number,
-  config: Config,
-  ctx: Context,
-  mediaType: 'img' | 'video',
-  session: any
-): Promise<string[]> {
-  const savedFiles: string[] = [];
-  const defaults = mediaType === 'img'
-    ? { ext: 'png', accept: 'image/*', maxSize: config.imageMaxSize }
-    : { ext: 'mp4', accept: 'video/*', maxSize: config.videoMaxSize };
-  const extPattern = /\.[a-zA-Z0-9]+$/;
-
-  for (let i = 0; i < urls.length; i++) {
-    try {
-      const url = urls[i];
-      const processedUrl = (() => {
-        try {
-          const decodedUrl = decodeURIComponent(url);
-          return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-        } catch {
-          return url;
-        }
-      })();
-
-      let ext = defaults.ext;
-      const fileName = fileNames[i];
-      const fileSize = fileSizes[i];
-
-      // 检查文件大小
-      if (fileSize) {
-        const sizeInBytes = parseInt(fileSize);
-        if (sizeInBytes > defaults.maxSize * 1024 * 1024) {
-          logger.warn(session.text('commands.cave.messages.media_size_exceeded', [mediaType]));
-          continue;
-        }
+export function apply(ctx: Context) {
+  ctx.command('助眠 [type]', '获取助眠音频，包括小故事')
+    .action(async ({ session }, type) => {
+      if (!type) {
+        return '提供以下类型：钢琴、雨声、脑波、自然、故事，输入随机则随机获取。';
       }
 
-      // 处理文件名和扩展名
-      if (fileName && extPattern.test(fileName)) {
-        ext = fileName.match(extPattern)![0].slice(1);
+      if (type === '随机') {
+        const keys = Object.keys(apis);
+        type = keys[Math.floor(Math.random() * keys.length)];
       }
 
-      // 生成最终的文件名
-      const finalFileName = fileName
-        ? `${caveId}_${path.basename(fileName)}`
-        : `${caveId}_${i + 1}.${ext}`;
-
-      // ...其余下载和保存逻辑保持不变...
-      const targetPath = path.join(resourceDir, finalFileName);
-      const response = await ctx.http(processedUrl, {
-        method: 'GET',
-        responseType: 'arraybuffer',
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': defaults.accept,
-          'Referer': 'https://qq.com'
-        }
-      });
-
-      const fileBuffer = Buffer.from(response.data);
-      await fs.promises.writeFile(targetPath, fileBuffer);
-      savedFiles.push(finalFileName);
-    } catch (error) {
-      const errorKey = mediaType === 'img'
-        ? 'commands.cave.errors.media.image_upload'
-        : 'commands.cave.errors.media.video_upload';
-      await sendTempMessage(session, errorKey);
-      return [];
-    }
-  }
-  return savedFiles;
-}
-
-// -------- 审核相关函数 --------
-async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string, session: any) {
-  const auditMessage = `${session.text('commands.cave.messages.audit.title')}\n${content}
-${session.text('commands.cave.messages.audit.from')}${cave.contributor_number}`;
-
-  for (const managerId of config.manager) {
-    try {
-      await ctx.bots[0]?.sendPrivateMessage(managerId, auditMessage);
-    } catch (error) {
-      logger.error(session.text('commands.cave.messages.audit.send_failed', [managerId]));
-    }
-  }
-}
-
-// 审核相关函数
-async function handleSingleCaveAudit(
-  ctx: Context,
-  cave: PendingCave,
-  isApprove: boolean,
-  resourceDir: string,
-  data?: CaveObject[],
-  session?: any
-): Promise<boolean | string> {
-  // 处理单个审核项，根据审批状态更新数据或删除文件
-  try {
-    if (isApprove && data) {
-      // 保存经过清理的回声洞数据
-      const caveWithoutIndex = {
-        ...cave,
-        elements: cleanElementsForSave(cave.elements, false)
-      };
-      data.push(caveWithoutIndex);
-    } else if (!isApprove && cave.elements) {
-      // 删除与回声洞关联的媒体文件
-      for (const element of cave.elements) {
-        if (element.type === 'img' && element.file) {
-          const fullPath = path.join(resourceDir, element.file);
-          if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-        }
+      const apiUrl = apis[type];
+      if (!apiUrl) {
+        return '提供以下类型：钢琴、雨声、脑波、自然、故事，输入随机则随机获取。';
       }
-    }
-    return true;
-  } catch (error) {
-    return sendTempMessage(session, 'commands.cave.errors.audit.process', [error.message]);
-  }
-}
 
-async function handleAudit(
-  ctx: Context,
-  pendingData: PendingCave[],
-  isApprove: boolean,
-  caveFilePath: string,
-  resourceDir: string,
-  pendingFilePath: string,
-  session: any,
-  targetId?: number
-): Promise<string> {
-  // 处理审核操作，支持单条及批量处理
-  if (pendingData.length === 0) return sendMessage(session, 'commands.cave.messages.no_pending', [], true);
-
-  // 处理单条审核
-  if (typeof targetId === 'number') {
-    const pendingIndex = pendingData.findIndex(item => item.cave_id === targetId);
-    if (pendingIndex === -1) return sendMessage(session, 'commands.cave.messages.pending_not_found', [], true);
-
-    const cave = pendingData[pendingIndex];
-    const data = isApprove ? FileHandler.readJsonData<CaveObject>(caveFilePath, session) : null;
-
-    const auditResult = await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data, session);
-    if (typeof auditResult === 'string') return auditResult;
-    if (isApprove && data) FileHandler.writeJsonData(caveFilePath, data, session);
-
-    pendingData.splice(pendingIndex, 1);
-    FileHandler.writeJsonData(pendingFilePath, pendingData, session);
-
-    const remainingCount = pendingData.length;
-    if (remainingCount > 0) {
-      const remainingIds = pendingData.map(c => c.cave_id).join(', ');
-      const action = isApprove ? 'audit_passed' : 'audit_rejected';
-      return sendMessage(session, 'commands.cave.messages.pending_result', [
-        session.text(`commands.cave.messages.${action}`),
-        remainingCount,
-        remainingIds
-      ], false);
-    }
-    return sendMessage(
-      session,
-      isApprove ? 'commands.cave.messages.audit_passed' : 'commands.cave.messages.audit_rejected',
-      [],
-      false // 审核结果改为永久消息
-    );
-  }
-
-  // 处理批量审核
-  const data = isApprove ? FileHandler.readJsonData<CaveObject>(caveFilePath, session) : null;
-  let processedCount = 0;
-
-  for (const cave of pendingData) {
-    await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data, session) && processedCount++;
-  }
-
-  if (isApprove && data) FileHandler.writeJsonData(caveFilePath, data, session);
-  FileHandler.writeJsonData(pendingFilePath, [], session);
-
-  return sendMessage(session, 'commands.cave.messages.batch_audit_result', [
-    isApprove ? '通过' : '拒绝',
-    processedCount,
-    pendingData.length
-  ], false); // 批量审核结果改为永久消息
-}
-
-// -------- 消息构建函数 --------
-function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
-  // 清理元素对象，移除无关属性，并排序
-  const sorted = elements.sort((a, b) => a.index - b.index);
-  return sorted.map(({ type, content, file, index }) => ({
-    type,
-    ...(keepIndex && { index }),
-    ...(content && { content }),
-    ...(file && { file })
-  }));
-}
-
-// 添加辅助函数到文件开头的函数定义区域
-async function sendTempMessage(session: any, key: string, params: any[] = [], timeout = 10000): Promise<string> {
-  try {
-    const msg = await session.send(session.text(key, params));
-    setTimeout(async () => {
       try {
-        await session.bot.deleteMessage(session.channelId, msg);
-      } catch (err) {
-        logger.error('Failed to delete message:', err);
-      }
-    }, timeout);
-    return '';  // 返回空字符串避免重复发送
-  } catch (error) {
-    logger.error('Failed to send temp message:', error);
-    return session.text(key, params); // 发送失败时返回原消息
-  }
-}
+        const response = await ctx.http.get(apiUrl);
+        const { title, cover, url } = response;
 
-// 修改 sendMessage 函数替换原有的 sendTempMessage
-async function sendMessage(session: any, key: string, params: any[] = [], isTemp = true, timeout = 10000): Promise<string> {
-  try {
-    const msg = await session.send(session.text(key, params));
-    if (isTemp) {
-      setTimeout(async () => {
-        try {
-          await session.bot.deleteMessage(session.channelId, msg);
-        } catch (err) {
-          logger.error('Failed to delete message:', err);
-        }
-      }, timeout);
-    }
-    return '';
-  } catch (error) {
-    logger.error('Failed to send message:', error);
-    return session.text(key, params);
-  }
-}
+        const audioData = await ctx.http.get<ArrayBuffer>(url, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(audioData);
 
-// 媒体处理及回复
-async function extractMediaContent(originalContent: string): Promise<{
-  imageUrls: string[],
-  imageElements: { type: 'img'; index: number; fileName?: string; fileSize?: string }[],
-  videoUrls: string[],
-  videoElements: { type: 'video'; index: number; fileName?: string; fileSize?: string }[],
-  textParts: Element[]
-}> {
-  // 拆分文本与媒体标签，并分别提取相关信息
-  const parsedTexts = originalContent
-    .split(/<img[^>]+>|<video[^>]+>/g)
-    .map(t => t.trim())
-    .filter(t => t);
-  const textParts: Element[] = [];
-  parsedTexts.forEach((text, idx) => {
-    textParts.push({ type: 'text', content: text, index: idx * 3 });
-  });
+        const durationBuffer = await ctx.ffmpeg.builder()
+          .input(buffer)
+          .outputOption('-f', 'null')
+          .run('info');
 
-  // 初始化数组用于存储媒体链接与元素信息
-  const imageUrls: string[] = [];
-  const imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }> = [];
-  const videoUrls: string[] = [];
-  const videoElements: Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }> = [];
+        const durationOutput = durationBuffer.toString();
+        const match = /Duration: (\d+):(\d+):(\d+\.\d+)/.exec(durationOutput);
+        const duration = match ? (parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseFloat(match[3])) : 0;
 
-  // 提取 <img> 标签中的 src 和 file 属性
-  const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
-  imgMatches.forEach((img, idx) => {
-    const srcMatch = img.match(/src="([^"]+)"/);
-    const fileName = img.match(/file="([^"]+)"/)?.[1];
-    const fileSize = img.match(/fileSize="([^"]+)"/)?.[1];
-    if (srcMatch?.[1]) {
-      imageUrls.push(srcMatch[1]);
-      imageElements.push({ type: 'img', index: idx * 3 + 1, fileName, fileSize });
-    }
-  });
+        const coverResponse = await ctx.http.get(cover);
+        await session.send(`${title}\n${h.image(coverResponse)}`);
 
-  // 提取 <video> 标签中的 src 与 file 属性
-  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"[^>]*>/g) || [];
-  videoMatches.forEach((video, idx) => {
-    const srcMatch = video.match(/src="([^"]+)"/);
-    const fileName = video.match(/file="([^"]+)"/)?.[1];
-    const fileSize = video.match(/fileSize="([^"]+)"/)?.[1];
-    if (srcMatch?.[1]) {
-      videoUrls.push(srcMatch[1]);
-      videoElements.push({ type: 'video', index: idx * 3 + 2, fileName, fileSize });
-    }
-  });
-
-  return { imageUrls, imageElements, videoUrls, videoElements, textParts };
-}
-
-async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
-  // 构建回声洞消息文本，并处理视频的单独发送
-  let content = session.text('commands.cave.messages.cave_title', [cave.cave_id]) + '\n';
-  const videoElements: { file: string }[] = [];
-  for (const element of cave.elements) {
-    if (element.type === 'text') {
-      // 追加文本段落
-      content += element.content + '\n';
-    } else if (element.type === 'img' && element.file) {
-      const fullImagePath = path.join(resourceDir, element.file);
-      if (fs.existsSync(fullImagePath)) {
-        try {
-          const imageBuffer = fs.readFileSync(fullImagePath);
-          content += h('image', { src: `data:image/png;base64,${imageBuffer.toString('base64')}` }) + '\n';
-        } catch (error) {
-          content += session.text('commands.cave.messages.media_load_failed', ['图片']) + '\n';
-        }
-      } else {
-        content += session.text('commands.cave.messages.media_invalid', ['图片']) + '\n';
-      }
-    } else if (element.type === 'video' && element.file) {
-      // 将视频元素存入数组，待后续单独发送
-      videoElements.push({ file: element.file });
-    }
-  }
-  if (videoElements.length > 0 && session) {
-    // 通知用户视频已单独发送
-    content += session.text('commands.cave.messages.video_sending') + '\n';
-    for (const video of videoElements) {
-      const fullVideoPath = path.join(resourceDir, video.file);
-      if (fs.existsSync(fullVideoPath)) {
-        try {
-          const videoBuffer = fs.readFileSync(fullVideoPath);
-          // 不等待 session.send 完成，异步发送视频消息
-          session.send(h('video', { src: `data:video/mp4;base64,${videoBuffer.toString('base64')}` }))
-            .catch((error) => logger.warn(session.text('commands.cave.messages.video_send_failed'), error.message));
-        } catch (error) {
-          content += session.text('commands.cave.messages.media_load_failed', ['视频']) + '\n';
-        }
-      } else {
-        content += session.text('commands.cave.messages.media_invalid', ['视频']) + '\n';
-      }
-    }
-  }
-  content += session.text('commands.cave.messages.contributor_suffix', [cave.contributor_name]);
-  return content;
-}
-
-// -------- 初始化函数 --------
-export async function initCavePaths(ctx: Context): Promise<{
-  dataDir: string,
-  caveDir: string,
-  caveFilePath: string,
-  resourceDir: string,
-  pendingFilePath: string
-}> {
-  // 初始化回声洞目录与文件路径
-  const dataDir = path.join(ctx.baseDir, 'data');
-  const caveDir = path.join(dataDir, 'cave');
-  const caveFilePath = path.join(caveDir, 'cave.json');
-  const resourceDir = path.join(caveDir, 'resources'); // 目录名称更新
-  const pendingFilePath = path.join(caveDir, 'pending.json');
-
-  // 确保所有所需目录和 JSON 文件均存在
-  await FileHandler.ensureDirectory(dataDir);
-  await FileHandler.ensureDirectory(caveDir);
-  await FileHandler.ensureDirectory(resourceDir); // 修改调用
-  await FileHandler.ensureJsonFile(caveFilePath);
-  await FileHandler.ensureJsonFile(pendingFilePath);
-
-  return { dataDir, caveDir, caveFilePath, resourceDir, pendingFilePath };
-}
-
-// -------- 主业务函数 --------
-// 修改 handleCaveAction: 调用 initCavePaths 获取各路径
-export async function handleCaveAction(
-  ctx: Context,
-  config: Config,
-  session: any,
-  options: any,
-  content: string[],
-  lastUsed: Map<string, number>
-): Promise<string | void> {
-  try {
-    const { caveFilePath, resourceDir, pendingFilePath } = await initCavePaths(ctx);
-
-    // 提取查询投稿统计的函数（cave -l）
-    async function processList(): Promise<string> {
-      try {
-        const caveData = FileHandler.readJsonData<CaveObject>(caveFilePath, session);
-        const caveDir = path.dirname(caveFilePath);
-        const stats: Record<string, number[]> = {};
-        for (const cave of caveData) {
-          if (cave.contributor_number === '10000') continue;
-          if (!stats[cave.contributor_number]) stats[cave.contributor_number] = [];
-          stats[cave.contributor_number].push(cave.cave_id);
-        }
-        const statFilePath = path.join(caveDir, 'stat.json');
-        try {
-          fs.writeFileSync(statFilePath, JSON.stringify(stats, null, 2), 'utf8');
-        } catch (error) {
-          throw new Error(`操作失败: ${error.message}`);
-        }
-        let queryId: string | null = null;
-        if (typeof options.l === 'string') {
-          const match = String(options.l).match(/\d+/);
-          if (match) queryId = match[0];
-        } else if (content.length > 0) {
-          const numberMatch = content.join(' ').match(/\d+/);
-          if (numberMatch) queryId = numberMatch[0];
-        }
-        if (queryId) {
-          if (stats[queryId]) {
-            return session.text('commands.cave.messages.stats.total_items', [
-              queryId,
-              stats[queryId].length
-            ]) + '\n' + session.text('commands.cave.messages.stats.ids_line', [stats[queryId].join(', ')]);
-          } else {
-            return sendMessage(session, 'commands.cave.messages.contributor_not_found', [queryId], true);
-          }
+        const maxSegmentDuration = 5 * 60;
+        const [tipMessageId] = await session.send('正在获取音频，请耐心等待');
+        if (duration <= maxSegmentDuration) {
+          await session.send(h.audio(buffer, 'audio/mp3'));
+          await session.bot.deleteMessage(session.channelId, tipMessageId);
         } else {
-          let total = 0;
-          const lines = Object.entries(stats).map(([cid, ids]) => {
-            total += ids.length;
-            return session.text('commands.cave.messages.stats.total_items', [
-              cid,
-              ids.length
-            ]) + '\n' + session.text('commands.cave.messages.stats.ids_line', [ids.join(', ')]);
-          });
+          const segmentCount = Math.ceil(duration / maxSegmentDuration);
+          await session.send(`音频时长大于5分钟，将分${segmentCount}段发送。`);
 
-          if (config.listDisplayMode === 'pagination') {
-            const page = parseInt(content[0]) || 1;
-            const itemsPerPage = config.itemsPerPage;
-            const totalPages = Math.ceil(lines.length / itemsPerPage);
-            if (page < 1 || page > totalPages) {
-              return sendMessage(session, 'commands.cave.messages.invalid_page', [totalPages], true);
-            }
-            const start = (page - 1) * itemsPerPage;
-            const end = start + itemsPerPage;
-            const paginatedLines = lines.slice(start, end);
-            return session.text('commands.cave.messages.stats_header', [total]) + '\n' + paginatedLines.join('\n') + '\n' +
-              session.text('commands.cave.messages.page_info', [page, totalPages]);
-          } else if (config.listDisplayMode === 'merge') {
-            const mergedMessage = session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
-            await session.sendForwardMsg([{
-              user_id: session.selfId,
-              nickname: session.bot.username,
-              message: mergedMessage
-            }]);
-            return '';
-          } else {
-            return session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
-          }
-        }
-      } catch (error) {
-        return sendMessage(session, 'commands.cave.messages.stats_failed', [], true);
-      }
-    }
+          for (let i = 0; i < segmentCount; i++) {
+            const startTime = i * maxSegmentDuration;
 
-    // 提取审核操作的函数（cave -p / -d）
-    async function processAudit(): Promise<string> {
-      try {
-        // 根据输入参数判断单条或批量审核
-        const pendingData = FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
-        const isApprove = Boolean(options.p);
-        if ((options.p === true && content[0] === 'all') ||
-            (options.d === true && content[0] === 'all')) {
-          return await handleAudit(ctx, pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session);
-        }
-        const id = parseInt(content[0] ||
-          (typeof options.p === 'string' ? options.p : '') ||
-          (typeof options.d === 'string' ? options.d : ''));
-        if (isNaN(id)) {
-          return sendMessage(session, 'commands.cave.errors.invalid_id', [], true);
-        }
-        return sendMessage(session, await handleAudit(ctx, pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, id), [], true);
-      } catch (error) {
-        return sendMessage(session, 'commands.cave.errors.audit.process', [error.message], true);
-      }
-    }
+            const segmentBuffer = await ctx.ffmpeg.builder()
+              .input(buffer)
+              .inputOption('-ss', startTime.toString())
+              .outputOption('-t', maxSegmentDuration.toString(), '-f', 'mp3')
+              .run('buffer');
 
-    // processView 函数用于根据用户输入的回声洞序号显示该回声洞内容，并单独发送视频消息（如果有）
-    async function processView(): Promise<string> {
-      try {
-        // 根据指定序号查找并构建回声洞消息
-        const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
-        if (isNaN(caveId)) return sendMessage(session, 'commands.cave.errors.invalid_id', [], true);
-        const data = FileHandler.readJsonData<CaveObject>(caveFilePath, session, item =>
-          item &&
-          typeof item.cave_id === 'number' &&
-          Array.isArray(item.elements) &&
-          item.elements.every(el =>
-            (el.type === 'text' && typeof el.content === 'string') ||
-            (el.type === 'img' && typeof el.file === 'string') ||
-            (el.type === 'video' && typeof el.file === 'string')
-          ) &&
-          typeof item.contributor_number === 'string' &&
-          typeof item.contributor_name === 'string'
-        );
-        const cave = data.find(item => item.cave_id === caveId);
-        if (!cave) return sendMessage(session, '未找到该序号的回声洞', [], true);
+            const maxRetries = 3; // 最大重试次数
+            let attempts = 0;
+            let sent = false;
 
-        // 调用修改后的 buildMessage 发送视频消息内部处理
-        const caveContent = await buildMessage(cave, resourceDir, session);
-        return caveContent;
-      } catch (error) {
-        return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
-      }
-    }
-
-    // 提取随机抽取的函数
-    async function processRandom(): Promise<string | void> {
-      try {
-        // 抽取符合条件的随机回声洞
-        const data = FileHandler.readJsonData<CaveObject>(caveFilePath, session, item =>
-          item &&
-          typeof item.cave_id === 'number' &&
-          Array.isArray(item.elements) &&
-          item.elements.every(el =>
-            (el.type === 'text' && typeof el.content === 'string') ||
-            (el.type === 'img' && typeof el.file === 'string')
-          ) &&
-          typeof item.contributor_number === 'string' &&
-          typeof item.contributor_name === 'string'
-        );
-        if (data.length === 0) {
-          return sendMessage(session, 'commands.cave.errors.no_cave', [], true);
-        }
-        const guildId = session.guildId;
-        const now = Date.now();
-        const lastCall = lastUsed.get(guildId) || 0;
-        const isManager = config.manager.includes(session.userId);
-        if (!isManager && now - lastCall < config.number * 1000) {
-          const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
-          return sendMessage(session, 'commands.cave.messages.cooldown', [waitTime], true);
-        }
-        if (!isManager) lastUsed.set(guildId, now);
-        const cave = (() => {
-          const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
-          if (!validCaves.length) return undefined;
-          const randomIndex = Math.floor(Math.random() * validCaves.length);
-          return validCaves[randomIndex];
-        })();
-        return cave ? buildMessage(cave, resourceDir, session)
-                    : sendMessage(session, 'commands.cave.errors.get_cave', [], true);
-      } catch (error) {
-        return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
-      }
-    }
-
-    // 提取删除操作的函数（cave -r）
-    async function processDelete(): Promise<string> {
-      try {
-        // 校验删除权限，删除对应的媒体及数据文件，并返回预览消息
-        const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
-        if (isNaN(caveId)) return sendMessage(session, 'commands.cave.errors.invalid_id', [], true);
-        const data = FileHandler.readJsonData<CaveObject>(caveFilePath, session, item =>
-          item && typeof item.cave_id === 'number'
-        );
-        const pendingData = FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
-        const index = data.findIndex(item => item.cave_id === caveId);
-        const pendingIndex = pendingData.findIndex(item => item.cave_id === caveId);
-        if (index === -1 && pendingIndex === -1) return sendMessage(session, '未找到该序号的回声洞', [], true);
-        let targetCave: CaveObject;
-        let isPending = false;
-        if (index !== -1) {
-          targetCave = data[index];
-        } else {
-          targetCave = pendingData[pendingIndex];
-          isPending = true;
-        }
-        if (targetCave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
-          return sendMessage(session, '不可删除他人添加的回声洞！', [], true);
-        }
-
-        // 先生成回声洞预览消息（图片等媒体将被嵌入）
-        const caveContent = await buildMessage(targetCave, resourceDir, session);
-
-        if (targetCave.elements) {
-          try {
-            for (const element of targetCave.elements) {
-              if ((element.type === 'img' || element.type === 'video') && element.file) {
-                const fullPath = path.join(resourceDir, element.file);
-                if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+            while (attempts < maxRetries && !sent) {
+              try {
+                await session.send(h.audio(segmentBuffer, 'audio/mp3'));
+                sent = true;
+              } catch (error) {
+                attempts++;
+                await session.send(`发送第 ${i + 1} 段音频失败，正在重试...（尝试次数: ${attempts}）`);
+                if (attempts === maxRetries) {
+                  await session.send(`第 ${i + 1} 段音频发送失败。`);
+                }
               }
             }
-          } catch (error) {
-            return sendMessage(session, 'commands.cave.errors.media_delete', [], true);
           }
-        }
-        // 返回预览消息后再更新数据文件
-        if (isPending) {
-          pendingData.splice(pendingIndex, 1);
-          FileHandler.writeJsonData(pendingFilePath, pendingData, session);
-          const deleteStatus = isPending
-            ? session.text('commands.cave.messages.commons.pending')
-            : '';
-          const deleteMessage = session.text('commands.cave.messages.commons.deleted');
-          return `${deleteMessage}${deleteStatus}\n${caveContent}`;
-        } else {
-          data.splice(index, 1);
-          FileHandler.writeJsonData(caveFilePath, data, session);
-          const deleteStatus = isPending
-            ? session.text('commands.cave.messages.commons.pending')
-            : '';
-          const deleteMessage = session.text('commands.cave.messages.commons.deleted');
-          return `${deleteMessage}${deleteStatus}${caveContent}`;
+          await session.bot.deleteMessage(session.channelId, tipMessageId);
         }
       } catch (error) {
-        return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
+        ctx.logger.error('请求失败', error.message);
+        return '请求过程中出现错误，请稍后重试。';
       }
-    }
-
-    // 修改 processAdd：将缺少媒体及文本的回复逻辑移入 processAdd，并调用 extractMediaContent 提取文本处理
-    async function processAdd(): Promise<string> {
-      try {
-        // 提示用户输入内容并解析媒体及文本信息
-        // 修改：先读取命令内容，再读取引用内容，最后合并
-        let originalContent = content.join(' ') || '';
-        if (session.content) {
-          originalContent = session.content;
-        }
-        if (session.quote?.content) {
-          originalContent = originalContent ? `${originalContent}\n${session.quote.content}` : session.quote.content;
-        }
-
-        // 新增：移除命令前缀
-        const prefixes = Array.isArray(session.app.config.prefix)
-          ? session.app.config.prefix
-          : [session.app.config.prefix];
-        const nicknames = Array.isArray(session.app.config.nickname)
-          ? session.app.config.nickname
-          : session.app.config.nickname ? [session.app.config.nickname] : [];
-        const allTriggers = [...prefixes, ...nicknames];
-        const triggerPattern = allTriggers
-          .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-          .join('|');
-        const commandPattern = new RegExp(`^(?:${triggerPattern}).*?-a\\s*`);
-        originalContent = originalContent.replace(commandPattern, '');
-
-        // 提取原始内容
-        let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(originalContent);
-
-        // 当媒体和文本均为空时，进行回复提示
-        if (textParts.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
-          // 发送临时提示消息
-          await sendMessage(session, 'commands.cave.messages.no_content', [], true);
-          const reply = await session.prompt({ timeout: 60000 });
-          if (!reply || reply.trim() === "") {
-            return sendMessage(session, 'commands.cave.messages.operation_timeout', [], true);
-          }
-          const replyResult = await extractMediaContent(reply);
-          imageUrls = replyResult.imageUrls;
-          imageElements = replyResult.imageElements;
-          videoUrls = replyResult.videoUrls;
-          videoElements = replyResult.videoElements;
-          textParts = replyResult.textParts;
-        }
-
-        // 检查配置：是否允许添加视频
-        if (videoUrls.length > 0 && !config.allowVideo) {
-          return sendMessage(session, 'commands.cave.messages.video_disabled', [], true);
-        }
-
-        // 生成新的回声洞ID及处理媒体文件
-        const pendingData = FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
-        const data = FileHandler.readJsonData<CaveObject>(caveFilePath, session, item => item && typeof item.cave_id === 'number');
-
-        // 修复获取maxid问题：检测中间是否有空缺，使用最小可用ID
-        const usedIds = new Set<number>([...data.map(item => item.cave_id), ...pendingData.map(item => item.cave_id)]);
-        let caveId = 1;
-        while (usedIds.has(caveId)) {
-          caveId++;
-        }
-
-        let savedImages: string[] = [];
-        if (imageUrls.length > 0) {
-          try {
-            const imageFileNames = imageElements.map(el => el.fileName);
-            const imageFileSizes = imageElements.map(el => el.fileSize);
-            savedImages = await saveMedia(
-              imageUrls,
-              imageFileNames,
-              imageFileSizes,
-              resourceDir,
-              caveId,
-              config,
-              ctx,
-              'img',
-              session
-            );
-          } catch (error) {
-            return sendMessage(session, 'commands.cave.messages.media.upload_image_failed', [], true);
-          }
-        }
-
-        let savedVideos: string[] = [];
-        if (videoUrls.length > 0) {
-          try {
-            const videoFileNames = videoElements.map(el => el.fileName);
-            const videoFileSizes = videoElements.map(el => el.fileSize);
-            savedVideos = await saveMedia(
-              videoUrls,
-              videoFileNames,
-              videoFileSizes,
-              resourceDir,
-              caveId,
-              config,
-              ctx,
-              'video',
-              session
-            );
-          } catch (error) {
-            return sendMessage(session, 'commands.cave.messages.media.upload_video_failed', [], true);
-          }
-        }
-
-        // 合并所有元素：文本/图片/视频
-        const elements: Element[] = [];
-        elements.push(...textParts);
-        savedImages.forEach((file, idx) => {
-          if (imageElements[idx]) {
-            elements.push({ ...imageElements[idx], type: 'img', file });
-          }
-        });
-        savedVideos.forEach((file, idx) => {
-          if (videoElements[idx]) {
-            elements.push({ ...videoElements[idx], type: 'video', file });
-          }
-        });
-        elements.sort((a, b) => a.index - b.index);
-
-        // 获取投稿者信息保持不变
-        let contributorName = session.username;
-        if (ctx.database) {
-          try {
-            const userInfo = await ctx.database.getUser(session.platform, session.userId);
-            contributorName = (userInfo as unknown as User)?.nickname || session.username;
-          } catch (error) {
-            return sendMessage(
-              session,
-              'commands.cave.errors.operations.user_info',
-              [error.message],
-              true
-            );
-          }
-        }
-
-        const newCave: CaveObject = {
-          cave_id: caveId,
-          elements: cleanElementsForSave(elements, true),
-          contributor_number: session.userId,
-          contributor_name: contributorName
-        };
-
-        // 判断是否绕过审核：白名单包括用户、群组和频道
-        const bypassAudit = config.whitelist.includes(session.userId) ||
-                        (session.guildId && config.whitelist.includes(session.guildId)) ||
-                        (session.channelId && config.whitelist.includes(session.channelId));
-        if (config.enableAudit && !bypassAudit) {
-          pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
-          FileHandler.writeJsonData(pendingFilePath, pendingData, session);
-          await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session);
-          return sendMessage(session, 'commands.cave.messages.submit_pending', [caveId], false);
-        } else {
-          const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
-          data.push(caveWithoutIndex);
-          FileHandler.writeJsonData(caveFilePath, data, session);
-          return sendMessage(session, 'commands.cave.messages.add_success', [caveId], false);
-        }
-      } catch (error) {
-        return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
-      }
-    }
-
-    // 根据不同命令参数调用对应处理函数
-    if (options.l !== undefined) return await processList();
-    if (options.p || options.d) return await processAudit();
-    if (options.g) return await processView();
-    if (options.r) return await processDelete();
-    if (options.a) return await processAdd();
-    return await processRandom();
-  } catch (error) {
-    logger.error(error);
-    return sendMessage(session, 'commands.cave.errors.command.process', [error.message], true);
-  }
+    });
 }
