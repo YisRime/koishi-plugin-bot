@@ -18,6 +18,9 @@ export const Config: Schema<Config> = Schema.object({
   allowVideo: Schema.boolean().default(true).description('允许添加视频'),
   videoMaxSize: Schema.number().default(16).description('视频最大大小（MB）'),
   imageMaxSize: Schema.number().default(4).description('图片最大大小（MB）'),
+  enablePagination: Schema.boolean().default(true).description('启用分页展示'),
+  listDisplayMode: Schema.union(['pagination', 'merge', 'normal']).default('pagination').description('列表展示模式：分页、合并转发、普通'),
+  itemsPerPage: Schema.number().default(10).description('每页显示的条目数'),
 }).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -89,6 +92,9 @@ export interface Config {
   imageMaxSize: number;  // 新增属性
   blacklist: string[];  // 新增属性
   whitelist: string[]; // 新增白名单属性
+  enablePagination: boolean;
+  listDisplayMode: 'pagination' | 'merge' | 'normal';
+  itemsPerPage: number;
 }
 
 // 定义数据类型接口
@@ -557,13 +563,35 @@ export async function handleCaveAction(
           let total = 0;
           const lines = Object.entries(stats).map(([cid, ids]) => {
             total += ids.length;
-            // 使用 i18n 格式化每一行输出
             return session.text('commands.cave.messages.stats.total_items', [
               cid,
               ids.length
             ]) + '\n' + session.text('commands.cave.messages.stats.ids_line', [ids.join(', ')]);
           });
-          return session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
+
+          if (config.listDisplayMode === 'pagination') {
+            const page = parseInt(content[0]) || 1;
+            const itemsPerPage = config.itemsPerPage;
+            const totalPages = Math.ceil(lines.length / itemsPerPage);
+            if (page < 1 || page > totalPages) {
+              return sendMessage(session, 'commands.cave.messages.invalid_page', [totalPages], true);
+            }
+            const start = (page - 1) * itemsPerPage;
+            const end = start + itemsPerPage;
+            const paginatedLines = lines.slice(start, end);
+            return session.text('commands.cave.messages.stats_header', [total]) + '\n' + paginatedLines.join('\n') + '\n' +
+              session.text('commands.cave.messages.page_info', [page, totalPages]);
+          } else if (config.listDisplayMode === 'merge') {
+            const mergedMessage = session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
+            await session.sendForwardMsg([{
+              user_id: session.selfId,
+              nickname: session.bot.username,
+              message: mergedMessage
+            }]);
+            return '';
+          } else {
+            return session.text('commands.cave.messages.stats_header', [total]) + '\n' + lines.join('\n');
+          }
         }
       } catch (error) {
         return sendMessage(session, 'commands.cave.messages.stats_failed', [], true);
