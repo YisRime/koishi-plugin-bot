@@ -7,10 +7,26 @@ _config:
   allowVideo: Allow video uploads
   videoMaxSize: Maximum video size (MB)
   imageMaxSize: Maximum image size (MB)
-
+  listDisplayMode: List display mode: pagination, merge, normal
+  itemsPerPage: Items per page
 commands:
   cave:
-    description: Echo Cave
+    description: Supports adding, extracting, viewing, and querying Echo Cave entries
+    usage: |-
+      Supports adding, extracting, viewing, and querying Echo Cave entries
+    examples: |-
+      cave           Randomly extract an Echo Cave entry
+      cave -a content   Add a new Echo Cave entry
+      cave -g/r x      View/Delete a specific Echo Cave entry
+      cave -p/d x/all  Approve/Reject pending Echo Cave entries
+      cave -l x      Query the list of submissions by a contributor
+    options:
+      a: Add Echo Cave entry
+      g: View Echo Cave entry
+      r: Delete Echo Cave entry
+      p: Approve review
+      d: Reject review
+      l: Query submission statistics
     messages:
       blacklisted: You are blacklisted
       manager_only: This operation is for managers only

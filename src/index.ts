@@ -10,17 +10,16 @@ export const inject = ['database'];
 
 // 配置Schema
 export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required().description('管理员'),
-  blacklist: Schema.array(Schema.string()).default([]).description('黑名单（用户）'),
-  whitelist: Schema.array(Schema.string()).default([]).description('白名单（用户 / 群组 / 频道）'),
-  number: Schema.number().default(60).description('调用冷却时间（秒）'),
-  enableAudit: Schema.boolean().default(false).description('审核功能'),
-  allowVideo: Schema.boolean().default(true).description('允许添加视频'),
-  videoMaxSize: Schema.number().default(16).description('视频最大大小（MB）'),
-  imageMaxSize: Schema.number().default(4).description('图片最大大小（MB）'),
-  enablePagination: Schema.boolean().default(true).description('启用分页展示'),
-  listDisplayMode: Schema.union(['pagination', 'merge', 'normal']).default('pagination').description('列表展示模式：分页、合并转发、普通'),
-  itemsPerPage: Schema.number().default(10).description('每页显示的条目数'),
+  manager: Schema.array(Schema.string()).required(),
+  blacklist: Schema.array(Schema.string()).default([]),
+  whitelist: Schema.array(Schema.string()).default([]),
+  number: Schema.number().default(60),
+  enableAudit: Schema.boolean().default(false),
+  allowVideo: Schema.boolean().default(true),
+  videoMaxSize: Schema.number().default(16),
+  imageMaxSize: Schema.number().default(4),
+  listDisplayMode: Schema.union(['pagination', 'merge', 'normal']).default('normal'),
+  itemsPerPage: Schema.number().default(10),
 }).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -39,11 +38,7 @@ export async function apply(ctx: Context, config: Config) {
   // 注册命令并配置权限检查
   ctx.command('cave [message:text]')
     .usage('支持添加、抽取、查看、查询回声洞')
-    .example('cave           随机抽取回声洞')
-    .example('cave -a 内容   添加新回声洞')
-    .example('cave -g/r x      查看/删除指定回声洞')
-    .example('cave -p/d x/all  通过/拒绝待审回声洞')
-    .example('cave -l x      查询投稿者投稿列表')
+    .example('cave')
     .option('a', '添加回声洞')
     .option('g', '查看回声洞', { type: 'string' })
     .option('r', '删除回声洞', { type: 'string' })
@@ -92,7 +87,6 @@ export interface Config {
   imageMaxSize: number;  // 新增属性
   blacklist: string[];  // 新增属性
   whitelist: string[]; // 新增白名单属性
-  enablePagination: boolean;
   listDisplayMode: 'pagination' | 'merge' | 'normal';
   itemsPerPage: number;
 }
