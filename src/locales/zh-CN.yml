@@ -12,13 +12,13 @@ _config:
 
 commands:
   cave:
-    description: "回声洞操作"
+    description: "回声洞"
     usage: "支持添加、抽取、查看、管理回声洞"
     examples: |-
-      使用 'cave' 随机选择一个回声洞
-      -a 添加（直接或引用）
-      -g 查看指定回声洞
-      -r 删除指定回声洞
+      使用 cave 随机抽取回声洞
+      使用 -a 直接添加或引用添加
+      使用 -g 查看指定回声洞
+      使用 -r 删除指定回声洞
     options:
       a: "添加回声洞"
       g: "查看回声洞"
@@ -40,9 +40,9 @@ commands:
         delete_pending: "删除（待审核）"
         deleted: "已删除"
         save_failed: "保存数据失败"
-        submit_pending: "提交审核成功，回声洞ID为 ({0})"
-        add_success: "添加成功，回声洞ID为 ({0})"
-        cave_title: "回声洞 —— ({0})"
+        submit_pending: "提交成功，序号为（{0}）"
+        add_success: "添加成功，序号为（{0}）"
+        cave_title: "回声洞 —— （{0}）"
         video_sending: "[视频发送中]"
         media_invalid: "[无效的 {0}]"
         media_load_failed: "[加载 {0} 失败]"
@@ -55,21 +55,21 @@ commands:
         media_size_exceeded: "{0} 文件大小超过限制"
         media_format_unsupported: "{0} 格式不支持"
         video_send_failed: "视频发送失败"
-        page_info: "第 {0} 页，共 {1} 页"
+        page_info: "第 {0} / {1} 页"
       audit:
         no_pending: "暂无待审核回声洞"
-        pending_not_found: "待审核回声洞未找到"
-        pending_result: "{0}，剩余 {1} 个待审核回声洞: [{2}]"
-        audit_passed: "回声洞审核通过"
-        audit_rejected: "回声洞审核拒绝"
-        batch_audit_result: "{0} {1}/{2} 回声洞"
+        pending_not_found: "未找到待审核回声洞"
+        pending_result: "已 {0}，剩余 {1} 个待审核回声洞: [{2}]"
+        audit_passed: "审核通过"
+        audit_rejected: "审核拒绝"
+        batch_audit_result: "已 {0} {1}/{2} 项回声洞"
         audit:
-          title: "待审核回声洞列表:"
+          title: "待审核回声洞:"
           from: "投稿人:"
           send_failed: "发送审核消息失败，无法联系管理员 {0}"
       stats:
-        stats_header: "该用户共提交 {0} 个回声洞:"
-        total_items: "共 {0} 个投稿，{1} 个回声洞:"
+        stats_header: "当前共有 {0} 项回声洞:"
+        total_items: "用户 {0} 共计投稿 {1} 项:"
         ids_line: "{0}"
       media:
         media_error: "{0} 文件处理失败: {1}"

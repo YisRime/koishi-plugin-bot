@@ -38,7 +38,6 @@ export async function apply(ctx: Context, config: Config) {
   // 注册命令并配置权限检查
   ctx.command('cave [message:text]')
     .usage('支持添加、抽取、查看、查询回声洞')
-    .example('cave')
     .option('a', '添加回声洞')
     .option('g', '查看回声洞', { type: 'string' })
     .option('r', '删除回声洞', { type: 'string' })
@@ -223,8 +222,8 @@ async function saveMedia(
 
 // -------- 审核相关函数 --------
 async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string, session: any) {
-  const auditMessage = `${session.text('commands.cave.messages.audit.title')}\n${content}
-${session.text('commands.cave.messages.audit.from')}${cave.contributor_number}`;
+  const auditMessage = `${session.text('commands.cave.messages.audit.audit.title')}\n${content}
+${session.text('commands.cave.messages.audit.audit.from')}${cave.contributor_number}`;
 
   for (const managerId of config.manager) {
     try {
@@ -552,11 +551,11 @@ export async function handleCaveAction(
           const start = (pageNum - 1) * itemsPerPage;
           const paginatedLines = lines.slice(start, start + itemsPerPage);
           // 调整返回顺序：先统计头部和分页数据，再显示分页信息
-          return session.text('commands.cave.messages.stats_header', [totalSubmissions]) + '\n' +
-                 paginatedLines.join('\n') +
+          return session.text('commands.cave.messages.stats.stats_header', [totalSubmissions]) + '\n' +
+                 paginatedLines.join('\n') + '\n' +
                  session.text('commands.cave.messages.general.page_info', [pageNum, totalPages]);
         } else {
-          return session.text('commands.cave.messages.stats_header', [totalSubmissions]) + '\n' +
+          return session.text('commands.cave.messages.stats.stats_header', [totalSubmissions]) + '\n' +
                  lines.join('\n');
         }
       } catch (error) {
@@ -605,7 +604,7 @@ export async function handleCaveAction(
           typeof item.contributor_name === 'string'
         );
         const cave = data.find(item => item.cave_id === caveId);
-        if (!cave) return sendMessage(session, 'commands.cave.errors.general.cave_not_found', [], true);
+        if (!cave) return sendMessage(session, 'commands.cave.errors.general.not_found', [], true);
 
         // 调用修改后的 buildMessage 发送视频消息内部处理
         const caveContent = await buildMessage(cave, resourceDir, session);
@@ -667,7 +666,7 @@ export async function handleCaveAction(
         const pendingData = FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
         const index = data.findIndex(item => item.cave_id === caveId);
         const pendingIndex = pendingData.findIndex(item => item.cave_id === caveId);
-        if (index === -1 && pendingIndex === -1) return sendMessage(session, 'commands.cave.errors.general.cave_not_found', [], true);
+        if (index === -1 && pendingIndex === -1) return sendMessage(session, 'commands.cave.errors.general.not_found', [], true);
         let targetCave: CaveObject;
         let isPending = false;
         if (index !== -1) {
