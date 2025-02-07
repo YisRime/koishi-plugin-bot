@@ -181,6 +181,10 @@ export async function apply(ctx: Context, config: Config) {
   ctx.command('sleep', '精致睡眠')
     .alias('jzsm')
     .action(async ({ session }) => {
+      if (!session.guildId) {
+        return session.text('commands.sleep.guild_only')
+      }
+
       let duration: number
       const now = new Date()
 
@@ -207,9 +211,7 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       try {
-        const member = await session.bot.internal.getGuildMember?.(session.guildId, session.userId)
-        if (!member?.mute) return session.text('commands.sleep.no_permission')
-        await member.mute(duration * 60)
+        await session.bot.muteGuildMember(session.guildId, session.userId, duration * 60 * 1000)
         return session.text('commands.sleep.success', [duration])
       } catch (error) {
         ctx.logger('sleep').warn(error)

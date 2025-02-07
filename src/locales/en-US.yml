@@ -53,6 +53,7 @@ _config:
     duration: "Fixed mute duration (minutes)"
 commands:
   sleep:
+    guild_only: "This command can only be used in guilds"
     no_permission: "This command can only be used in groups"
     invalid_mode: "Invalid sleep mode configuration"
     success: "Good night! Mute will be automatically removed in {0} minutes"

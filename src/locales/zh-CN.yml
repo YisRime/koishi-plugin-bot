@@ -1,6 +1,6 @@
 jrrp:
   description: "查看今日人品"
-  result: "{1} 你今天的人品值是：{0}。"
+  result: "{1} 你今天的人品值是：{0}"
   prompt: "要查看今天的人品值吗？(回复'是'或'y'确认)"
   cancel: "好的，祝您今天愉快！"
   luck:
@@ -30,6 +30,7 @@ jrrp:
     christmas: "圣诞快乐！愿祝福与你同在~"
 commands:
   sleep:
+    guild_only: "该命令只能在群组中使用"
     no_permission: "只能在群组中使用此命令"
     invalid_mode: "无效的睡眠模式设置"
     success: "晚安！将在 {0} 分钟后自动解除禁言"
