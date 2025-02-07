@@ -1,7 +1,8 @@
 import { Context, Schema } from 'koishi'
+import * as cron from 'koishi-plugin-cron'
 
 export const name = 'daily-tools'
-export const inject = ['database']
+export const inject = ['database', 'cron']
 export interface Config {
   /** 特殊人品值对应的消息 */
   specialValues?: Record<number, string>
@@ -19,69 +20,70 @@ export interface Config {
   sleepRandomMin?: number
   /** 随机禁言的最大时长（分钟） */
   sleepRandomMax?: number
+  /** 每日自动点赞列表 */
+  autoLikeList?: string[]
+  /** 自动点赞时间 (HH:mm) */
+  autoLikeTime?: string
 }
 
 export const Config: Schema<Config> = Schema.intersect([
-  // 基础配置部分
   Schema.object({
-    // 特殊人品值配置
     specialValues: Schema.dict(Schema.string())
       .default({
-        0: 'jrrp.special.1',   // 最差
-        50: 'jrrp.special.2',  // 中等
-        100: 'jrrp.special.3'  // 最好
+        0: 'jrrp.special.1',
+        50: 'jrrp.special.2',
+        100: 'jrrp.special.3'
       }),
-
-    // 人品值区间配置
     ranges: Schema.dict(Schema.string())
       .default({
-        '0-9': 'jrrp.luck.1',    // 极度不幸
-        '10-19': 'jrrp.luck.2',  // 非常不幸
-        '20-39': 'jrrp.luck.3',  // 不太走运
-        '40-49': 'jrrp.luck.4',  // 一般般
-        '50-69': 'jrrp.luck.5',  // 还不错
-        '70-89': 'jrrp.luck.6',  // 运气好
-        '90-95': 'jrrp.luck.7',  // 非常好运
-        '96-100': 'jrrp.luck.8'  // 极度好运
+        '0-9': 'jrrp.luck.1',
+        '10-19': 'jrrp.luck.2',
+        '20-39': 'jrrp.luck.3',
+        '40-49': 'jrrp.luck.4',
+        '50-69': 'jrrp.luck.5',
+        '70-89': 'jrrp.luck.6',
+        '90-95': 'jrrp.luck.7',
+        '96-100': 'jrrp.luck.8'
       }),
-
-    // 特殊日期配置
     specialDates: Schema.dict(Schema.string())
       .default({
-        '01-01': 'jrrp.dates.new_year',   // 新年
-        '12-25': 'jrrp.dates.christmas'    // 圣诞
+        '01-01': 'jrrp.dates.new_year',
+        '12-25': 'jrrp.dates.christmas'
       }),
+  }).description('config.group.jrrp'),
 
-    // 睡眠模式选择
+  Schema.object({
     sleepMode: Schema.union([
       Schema.const('fixed'),
       Schema.const('until'),
       Schema.const('random')
     ]).default('fixed'),
-  }),
+  }).description('config.group.sleep.mode'),
 
-  // 睡眠模式相关配置
   Schema.union([
-    // 固定时长模式
     Schema.object({
       sleepMode: Schema.const('fixed').required(),
       sleepDuration: Schema.number().default(480),
     }),
-
-    // 指定时间模式
     Schema.object({
       sleepMode: Schema.const('until').required(),
-      sleepUntil: Schema.string()
-        .default('08:00'),
+      sleepUntil: Schema.string().default('08:00'),
     }),
-
-    // 随机时长模式
     Schema.object({
       sleepMode: Schema.const('random').required(),
       sleepRandomMin: Schema.number().default(360),
       sleepRandomMax: Schema.number().default(600),
     }),
-  ]),
+  ]).description('config.group.sleep.settings'),
+
+  // 自动点赞配置
+  Schema.object({
+    autoLikeList: Schema.array(String)
+      .default([])
+      .role('textarea'),
+    autoLikeTime: Schema.string()
+      .default('08:00')
+  }).description('config.group.autolike'),
 ]).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -205,4 +207,43 @@ export async function apply(ctx: Context, config: Config) {
         return session.text('commands.sleep.failed')
       }
     })
+
+  // 注册赞我命令
+  ctx.command('zanwo')
+    .alias('赞我')
+    .action(async ({ session }) => {
+      let num = 0
+      try {
+        for (let i = 0; i < 5; i++) {
+          await session.bot.internal.sendLike(session.userId, 10)
+          num += 1
+        }
+        return session.text('commands.zanwo.messages.success')
+      } catch (_e) {
+        if (num > 0) return session.text('commands.zanwo.messages.success')
+        return session.text('commands.zanwo.messages.failure')
+      }
+    })
+
+  // 添加自动点赞功能
+  if (config.autoLikeList?.length > 0) {
+    const [hour, minute] = config.autoLikeTime.split(':').map(Number)
+
+    // 注册定时任务
+    ctx.cron(`0 ${minute} ${hour} * * *`, async () => {
+
+      for (const userId of config.autoLikeList) {
+        try {
+          // 每个用户尝试点赞5轮
+          for (let i = 0; i < 5; i++) {
+            await ctx.bots.first?.internal.sendLike(userId, 10)
+          }
+        } catch (e) {
+          ctx.logger.warn(`为用户 ${userId} 自动点赞失败: ${e.message}`)
+        }
+        // 添加短暂延迟避免请求过快
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    })
+  }
 }

@@ -8,6 +8,14 @@ _config:
     until: "指定时间模式的相关设置"
     random: "随机时长模式的相关设置"
     duration: "设置固定禁言时长（分钟）"
+  group:
+    jrrp: "今日人品设置"
+    sleep:
+      mode: "睡眠命令模式"
+      settings: "睡眠参数设置"
+    autolike: "自动点赞设置"
+  autoLikeList: "每日自动点赞用户列表（每行一个QQ号）"
+  autoLikeTime: "自动点赞执行时间（HH:mm）"
 jrrp:
   description: "查看今日人品"
   result: "{1} 你今天的人品值是：{0}"
@@ -45,3 +53,12 @@ commands:
     invalid_mode: "无效的睡眠模式设置"
     success: "晚安！将在 {0} 分钟后自动解除禁言"
     failed: "设置禁言失败，请检查权限设置"
+  zanwo:
+    description: 赞我
+    usage: |-
+      直接输入即可点赞
+    examples: |-
+      zanwo
+    messages:
+      success: 已完成名片赞操作，记得回哦~
+      failure: 点赞失败惹

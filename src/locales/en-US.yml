@@ -8,6 +8,14 @@ _config:
     until: "Time-specific mode settings"
     random: "Random duration mode settings"
     duration: "Set fixed mute duration (minutes)"
+  group:
+    jrrp: "Daily Luck Settings"
+    sleep:
+      mode: "Sleep Command Mode"
+      settings: "Sleep Parameters"
+    autolike: "Auto Like Settings"
+  autoLikeList: "Daily Auto Like User List (One QQ number per line)"
+  autoLikeTime: "Auto Like Execution Time (HH:mm)"
 jrrp:
   description: "Check today's luck rating"
   result: "{1}, your luck rating today is: {0}"
