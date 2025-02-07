@@ -44,9 +44,6 @@ commands:
       header: "There are currently {0} Echo Caves:"
       totalItems: "User {0} submitted a total of {1} Echo Caves:"
       idsLine: "{0}"
-    view:
-      invalidId: "Please enter a valid Echo Cave ID"
-      notFound: "Echo Cave not found"
     audit:
       noPending: "No Echo Caves pending audit"
       pendingNotFound: "Pending Echo Cave not found"
@@ -61,7 +58,6 @@ commands:
       commandProcess: "Command processing failed: {0}"
       getCave: "Failed to retrieve Echo Cave"
       noCave: "No Echo Caves available"
-      statsFailed: "Failed to generate statistics"
       saveFailed: "Failed to save data"
       mediaLoadFailed: "[Failed to load {0}]"
       videoSendFailed: "Video sending failed"
@@ -69,9 +65,10 @@ commands:
       uploadVideoFailed: "Video upload failed"
       fileRead: "Failed to read JSON data: {0}"
       fileWrite: "Failed to write JSON data: {0}"
-      NotFound: "File not found: {0}"
-      mediaDelete: "Media file deletion failed"
+      notFound: "Not Found"
       userInfo: "Failed to retrieve user information: {0}"
+      auditProcess: "Audit processing failed: {0}"
+      invalidId: "Please enter a valid Echo Cave ID"
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is for administrators only"
