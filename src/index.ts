@@ -3,61 +3,109 @@ import { Context, Schema } from 'koishi'
 export const name = 'daily-tools'
 export const inject = ['database']
 export interface Config {
+  /** 特殊人品值对应的消息 */
   specialValues?: Record<number, string>
-  ranges?: { min: number, max: number, message: string }[]
-  specialDates?: { date: string, message: string }[]
-  sleepMode?: 1 | 2 | 3
-  sleepDuration?: number  // 模式1的禁言时长（分钟）
-  sleepUntil?: string    // 模式2的固定时间点 (HH:mm)
-  sleepRandomMin?: number // 模式3的最小禁言时长（分钟）
-  sleepRandomMax?: number // 模式3的最大禁言时长（分钟）
+  /** 人品值区间对应的消息 */
+  ranges?: Record<string, string>
+  /** 特殊日期对应的消息 */
+  specialDates?: Record<string, string>
+  /** 睡眠命令模式 */
+  sleepMode?: 'fixed' | 'until' | 'random'
+  /** 固定时长禁言的时长（分钟） */
+  sleepDuration?: number
+  /** 指定解除禁言的时间点 (HH:mm) */
+  sleepUntil?: string
+  /** 随机禁言的最小时长（分钟） */
+  sleepRandomMin?: number
+  /** 随机禁言的最大时长（分钟） */
+  sleepRandomMax?: number
 }
 
-export const Config: Schema<Config> = Schema.object({
-  specialValues: Schema.dict(Schema.string()).description('specialValues.description').default({
-    0: 'jrrp.special.1',
-    50: 'jrrp.special.2',
-    100: 'jrrp.special.3'
+export const Config: Schema<Config> = Schema.intersect([
+  // 基础配置部分
+  Schema.object({
+    // 特殊人品值配置
+    specialValues: Schema.dict(Schema.string())
+      .description('config.specialValues.description')
+      .default({
+        0: 'jrrp.special.1',   // 最差
+        50: 'jrrp.special.2',  // 中等
+        100: 'jrrp.special.3'  // 最好
+      }),
+
+    // 人品值区间配置
+    ranges: Schema.dict(Schema.string())
+      .description('config.ranges.description')
+      .default({
+        '0-9': 'jrrp.luck.1',    // 极度不幸
+        '10-19': 'jrrp.luck.2',  // 非常不幸
+        '20-39': 'jrrp.luck.3',  // 不太走运
+        '40-49': 'jrrp.luck.4',  // 一般般
+        '50-69': 'jrrp.luck.5',  // 还不错
+        '70-89': 'jrrp.luck.6',  // 运气好
+        '90-95': 'jrrp.luck.7',  // 非常好运
+        '96-100': 'jrrp.luck.8'  // 极度好运
+      }),
+
+    // 特殊日期配置
+    specialDates: Schema.dict(Schema.string())
+      .description('config.specialDates.description')
+      .default({
+        '01-01': 'jrrp.dates.new_year',   // 新年
+        '12-25': 'jrrp.dates.christmas'    // 圣诞
+      }),
+
+    // 睡眠模式选择
+    sleepMode: Schema.union([
+      Schema.const('fixed').description('config.sleep.mode.fixed'),
+      Schema.const('until').description('config.sleep.mode.until'),
+      Schema.const('random').description('config.sleep.mode.random')
+    ]).description('config.sleep.mode.description').default('fixed'),
   }),
-  ranges: Schema.array(Schema.object({
-    min: Schema.number().description('ranges.min'),
-    max: Schema.number().description('ranges.max'),
-    message: Schema.string().description('ranges.message'),
-  })).description('ranges.description').default([
-    { min: 0, max: 9, message: 'jrrp.luck.range1' },
-    { min: 10, max: 19, message: 'jrrp.luck.range2' },
-    { min: 20, max: 39, message: 'jrrp.luck.range3' },
-    { min: 40, max: 49, message: 'jrrp.luck.range4' },
-    { min: 50, max: 69, message: 'jrrp.luck.range5' },
-    { min: 70, max: 89, message: 'jrrp.luck.range6' },
-    { min: 90, max: 95, message: 'jrrp.luck.range7' },
-    { min: 96, max: 100, message: 'jrrp.luck.range8' },
+
+  // 睡眠模式相关配置
+  Schema.union([
+    // 固定时长模式
+    Schema.object({
+      sleepMode: Schema.const('fixed').required(),
+      sleepDuration: Schema.number().role('slider')
+        .min(1).max(120).step(1)
+        .description('config.sleep.duration')
+        .default(30),
+    }).description('config.sleep.fixed.description'),
+
+    // 指定时间模式
+    Schema.object({
+      sleepMode: Schema.const('until').required(),
+      sleepUntil: Schema.string()
+        .description('config.sleep.until.time')  // 修改这里的键名
+        .default('06:00'),
+    }).description('config.sleep.until.description'),
+
+    // 随机时长模式
+    Schema.object({
+      sleepMode: Schema.const('random').required(),
+      sleepRandomMin: Schema.number().role('slider')
+        .min(1).max(60).step(1)
+        .description('config.sleep.random.min')
+        .default(10),
+      sleepRandomMax: Schema.number().role('slider')
+        .min(1).max(120).step(1)
+        .description('config.sleep.random.max')
+        .default(60),
+    }).description('config.sleep.random.description'),
   ]),
-  specialDates: Schema.array(Schema.object({
-    date: Schema.string().description('specialDates.date'),
-    message: Schema.string().description('specialDates.message'),
-  })).description('specialDates.description').default([
-    { date: '01-01', message: 'jrrp.dates.new_year' },
-    { date: '12-25', message: 'jrrp.dates.christmas' },
-  ]),
-  sleepMode: Schema.union([
-    Schema.const(1).description('固定时长禁言'),
-    Schema.const(2).description('禁言到固定时间'),
-    Schema.const(3).description('随机时长禁言')
-  ]).description('睡眠命令模式').default(1),
-  sleepDuration: Schema.number().description('固定禁言时长(分钟)').default(30),
-  sleepUntil: Schema.string().description('固定禁言结束时间(HH:mm)').default('06:00'),
-  sleepRandomMin: Schema.number().description('随机禁言最小时长(分钟)').default(10),
-  sleepRandomMax: Schema.number().description('随机禁言最大时长(分钟)').default(60),
-}).i18n({
+]).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
 })
 
 export async function apply(ctx: Context, config: Config) {
+  // 载入国际化文本
   ctx.i18n.define('zh-CN', require('./locales/zh-CN'))
   ctx.i18n.define('en-US', require('./locales/en-US'))
 
+  // 注册今日人品命令
   ctx.command('jrrp', 'jrrp.description')
     .action(async ({ session }) => {
       const userId = session.userId
@@ -66,9 +114,8 @@ export async function apply(ctx: Context, config: Config) {
       const mmdd = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 
       // 检查是否是特殊日期
-      const specialDate = config.specialDates?.find(sd => sd.date === mmdd)
-      if (specialDate) {
-        const confirm = await session.send(session.text(specialDate.message) + '\n' + session.text('jrrp.prompt'))
+      if (config.specialDates?.[mmdd]) {
+        const confirm = await session.send(session.text(config.specialDates[mmdd]) + '\n' + session.text('jrrp.prompt'))
         const response = await session.prompt()
         if (!response || !['是', 'y', 'Y', 'yes'].includes(response.trim())) {
           return session.text('jrrp.cancel')
@@ -76,24 +123,53 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       // 获取用户昵称
-      const user = await ctx.database.getUser('id', userId)
-      const nickname = user?.name || 'User'
+      const nickname = session.username || 'User'
 
-      // 使用用户ID和日期生成随机数
-      const seed = `${userId}-${dateStr}`
-      const hash = Array.from(seed).reduce((acc, char) => {
-        return (acc * 31 + char.charCodeAt(0)) >>> 0
-      }, 0)
-      const rp = hash % 101 // 生成0-100的人品值
+      // 使用更好的哈希算法和随机数生成
+      function hashCode(str: string): number {
+        let hash = 5381
+        for (let i = 0; i < str.length; i++) {
+          hash = ((hash << 5) + hash) + str.charCodeAt(i)
+          hash = hash >>> 0 // 保持为32位无符号整数
+        }
+        return hash
+      }
+
+      // 生成0-1之间的伪随机数
+      function seededRandom(seed: string): number {
+        const hash = hashCode(seed)
+        // 使用多个哈希值来增加随机性
+        const x = Math.sin(hash) * 10000
+        return x - Math.floor(x)
+      }
+
+      // 正态分布转换（Box-Muller变换）
+      function normalDistribution(random: number): number {
+        const u1 = random
+        const u2 = seededRandom(random.toString())
+        const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2)
+        // 将正态分布映射到0-100范围，均值50，标准差15
+        return Math.min(100, Math.max(0, Math.round(z * 15 + 50)))
+      }
+
+      // 生成最终的人品值
+      const dateWeight = (date.getDay() + 1) / 7 // 根据星期几添加权重
+      const baseSeed = `${userId}-${dateStr}-v2` // 添加版本标记避免与旧版冲突
+      const baseRandom = seededRandom(baseSeed)
+      // 使用日期权重对基础随机值进行调整
+      const weightedRandom = (baseRandom + dateWeight) / 2
+      const rp = normalDistribution(weightedRandom)
 
       // 修复特殊值消息处理
       let message = session.text('jrrp.result', [rp, nickname])
       if (config.specialValues && rp in config.specialValues) {
-        message += '\n' + session.text(config.specialValues[rp])
-      } else {
-        for (const range of config.ranges) {
-          if (rp >= range.min && rp <= range.max) {
-            message += '\n' + session.text(range.message)
+        message += session.text(config.specialValues[rp])
+      } else if (config.ranges) {
+        // 遍历所有范围配置
+        for (const [range, msg] of Object.entries(config.ranges)) {
+          const [min, max] = range.split('-').map(Number)
+          if (!isNaN(min) && !isNaN(max) && rp >= min && rp <= max) {
+            message += session.text(msg)
             break
           }
         }
@@ -101,22 +177,19 @@ export async function apply(ctx: Context, config: Config) {
       return message
     })
 
+  // 注册精致睡眠命令
   ctx.command('sleep', '精致睡眠')
     .alias('jzsm')
     .action(async ({ session }) => {
-      if (!session.channelId || !session.guildId) {
-        return session.text('commands.sleep.no_permission')
-      }
-
       let duration: number
       const now = new Date()
 
       switch (config.sleepMode) {
-        case 1:
-          duration = Math.max(1, config.sleepDuration || 30)
+        case 'fixed':
+          duration = Math.max(1, config.sleepDuration)
           break
-        case 2:
-          const [hours, minutes] = (config.sleepUntil || '06:00').split(':').map(Number)
+        case 'until':
+          const [hours, minutes] = (config.sleepUntil).split(':').map(Number)
           const endTime = new Date(now)
           endTime.setHours(hours, minutes, 0, 0)
           if (endTime <= now) {
@@ -124,9 +197,9 @@ export async function apply(ctx: Context, config: Config) {
           }
           duration = Math.max(1, Math.floor((endTime.getTime() - now.getTime()) / 60000))
           break
-        case 3:
-          const min = Math.max(1, config.sleepRandomMin || 10)
-          const max = Math.max(min, config.sleepRandomMax || 60)
+        case 'random':
+          const min = Math.max(1, config.sleepRandomMin)
+          const max = Math.max(min, config.sleepRandomMax)
           duration = Math.floor(Math.random() * (max - min + 1) + min)
           break
         default:

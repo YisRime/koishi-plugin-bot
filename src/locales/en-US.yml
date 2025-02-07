@@ -1,48 +1,59 @@
 jrrp:
-  description: 'Check today''s luck rating'
-  result: '{1}, your luck rating today is: {0}'
-  prompt: 'Do you want to check your luck rating today? (Reply "y" to confirm)'
-  cancel: 'Okay, have a nice day!'
+  description: "Check today's luck rating"
+  result: "{1}, your luck rating today is: {0}"
+  prompt: "Do you want to check your luck rating today? (Reply 'y' to confirm)"
+  cancel: "Okay, have a nice day!"
   luck:
-    range1: ...(It's on a 100-point scale)
-    range2: ?! No way...
-    range3: Ugh...
-    range4: ! Barely acceptable...?
-    range5: Not bad, not bad at all.
-    range6: Pretty lucky today!
-    range7: ! Overwhelmingly positive!
-    range8: ! Almost reached 100...
-    range9:
-    range10:
+    1: "...(It's on a 100-point scale)"
+    2: "?! No way..."
+    3: "Ugh..."
+    4: "! Barely acceptable...?"
+    5: "Not bad, not bad at all."
+    6: "Pretty lucky today!"
+    7: "! Overwhelmingly positive!"
+    8: "! Almost reached 100..."
+    9:
+    10:
   special:
-    number1: Overwhelmingly negative!
-    number2: ! It's 50-50...
-    number3: ! 100! 100!!!!!
-    number4:
-    number5:
-    number6:
-    number7:
-    number8:
-    number9:
-    number10:
+    1: "! Overwhelmingly negative!"
+    2: "! It's 50-50..."
+    3: "! 100! 100!!!!!"
+    4:
+    5:
+    6:
+    7:
+    8:
+    9:
+    10:
   dates:
-    new_year: 'Happy New Year! Today''s luck rating has been replaced with blessings~'
-    christmas: 'Merry Christmas! May blessings be with you~'
+    new_year: "Happy New Year! Today's luck rating has been replaced with blessings~"
+    christmas: "Merry Christmas! May blessings be with you~"
 _config:
   specialValues:
-    description: 'Special luck values and their corresponding messages'
+    description: "Special luck values and their corresponding messages"
   ranges:
-    description: 'Luck rating ranges and their corresponding messages'
-    min: 'Minimum value of the range'
-    max: 'Maximum value of the range'
-    message: 'Message for this range'
+    description: "Luck rating ranges and their corresponding messages"
   specialDates:
-    description: 'Special dates and their corresponding messages'
-    date: 'Special date (MM-DD format)'
-    message: 'Message to display on special date'
+    description: "Special dates and their corresponding messages"
+  sleep:
+    mode:
+      description: "Sleep command mode"
+      fixed: "Fixed duration mute"
+      until: "Mute until specific time"
+      random: "Random duration mute"
+    fixed:
+      description: "Fixed duration mode settings"
+    until:
+      description: "Time-specific mode settings"
+      time: "Mute end time (HH:mm)"
+    random:
+      description: "Random duration mode settings"
+      min: "Minimum random mute duration (minutes)"
+      max: "Maximum random mute duration (minutes)"
+    duration: "Fixed mute duration (minutes)"
 commands:
   sleep:
-    no_permission: 'This command can only be used in groups'
-    invalid_mode: 'Invalid sleep mode configuration'
-    success: 'Good night! Mute will be automatically removed in {0} minutes'
-    failed: 'Failed to set mute status, please check permissions'
+    no_permission: "This command can only be used in groups"
+    invalid_mode: "Invalid sleep mode configuration"
+    success: "Good night! Mute will be automatically removed in {0} minutes"
+    failed: "Failed to set mute status, please check permissions"
