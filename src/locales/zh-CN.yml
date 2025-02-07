@@ -1,0 +1,48 @@
+jrrp:
+  description: 查看今日人品
+  result: '{1}今天你的人品值是: {0}'
+  prompt: '要查看今天的人品值吗？(回复"是"或"y"确认)'
+  cancel: '好的，祝您今天愉快！'
+  luck:
+    range1: ……（是百分制哦）
+    range2: ？！不会吧……
+    range3: 呜……
+    range4: ！勉强还行吧……？
+    range5: 还行啦，还行啦。
+    range6: 今天运气不错呢！
+    range7: ！好评如潮！
+    range8: ！差点就到 100 了呢……
+    range9:
+    range10:
+  special:
+    number1: 差评如潮！
+    number2: ！五五开……
+    number3: ！100！100！！！！！
+    number4:
+    number5:
+    number6:
+    number7:
+    number8:
+    number9:
+    number10:
+  dates:
+    new_year: '新年快乐！今天的人品值已被替换为祝福~'
+    christmas: '圣诞快乐！愿祝福与你同在~'
+commands:
+  sleep:
+    no_permission: '只能在群组中使用此命令'
+    invalid_mode: '无效的睡眠模式设置'
+    success: '晚安！将在 {0} 分钟后自动解除禁言'
+    failed: '设置禁言失败，请检查权限设置'
+_config:
+  specialValues:
+    description: '特殊人品值及其对应消息'
+  ranges:
+    description: '人品值区间及其对应消息'
+    min: '区间最小值'
+    max: '区间最大值'
+    message: '区间对应消息'
+  specialDates:
+    description: '特殊日期及其对应消息'
+    date: '特殊日期 (MM-DD格式)'
+    message: '特殊日期显示消息'
