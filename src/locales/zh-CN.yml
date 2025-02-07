@@ -1,3 +1,13 @@
+_config:
+  specialValues: "设置特定人品值时显示的特殊消息"
+  ranges: "设置不同人品值区间对应的提示消息"
+  specialDates: "设置特殊日期的提示消息"
+  sleep:
+    mode: "选择睡眠命令的工作模式"
+    fixed: "固定时长模式的相关设置"
+    until: "指定时间模式的相关设置"
+    random: "随机时长模式的相关设置"
+    duration: "设置固定禁言时长（分钟）"
 jrrp:
   description: "查看今日人品"
   result: "{1} 你今天的人品值是：{0}"
@@ -6,10 +16,10 @@ jrrp:
   luck:
     1: "……（是百分制哦）"
     2: "？！不会吧……"
-    3: "呜……"
+    3: "。呜……"
     4: "！勉强还行吧……？"
-    5: "还行啦，还行啦。"
-    6: "今天运气不错呢！"
+    5: "。还行啦，还行啦。"
+    6: "。今天运气不错呢！"
     7: "！好评如潮！"
     8: "！差点就到 100 了呢……"
     9:
@@ -35,26 +45,3 @@ commands:
     invalid_mode: "无效的睡眠模式设置"
     success: "晚安！将在 {0} 分钟后自动解除禁言"
     failed: "设置禁言失败，请检查权限设置"
-_config:
-  specialValues:
-    description: "特殊人品值及其对应消息"
-  ranges:
-    description: "人品值区间及其对应消息"
-  specialDates:
-    description: "特殊日期及其对应消息"
-  sleep:
-    mode:
-      description: "睡眠命令模式"
-      fixed: "固定时长禁言"
-      until: "禁言到固定时间"
-      random: "随机时长禁言"
-    fixed:
-      description: "固定时长模式配置"
-    until:
-      description: "指定时间模式配置"
-      time: "固定禁言结束时间(HH:mm)"
-    random:
-      description: "随机时长模式配置"
-      min: "随机禁言最小时长(分钟)"
-      max: "随机禁言最大时长(分钟)"
-    duration: "固定禁言时长(分钟)"

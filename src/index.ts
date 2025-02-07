@@ -26,7 +26,6 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     // 特殊人品值配置
     specialValues: Schema.dict(Schema.string())
-      .description('config.specialValues.description')
       .default({
         0: 'jrrp.special.1',   // 最差
         50: 'jrrp.special.2',  // 中等
@@ -35,7 +34,6 @@ export const Config: Schema<Config> = Schema.intersect([
 
     // 人品值区间配置
     ranges: Schema.dict(Schema.string())
-      .description('config.ranges.description')
       .default({
         '0-9': 'jrrp.luck.1',    // 极度不幸
         '10-19': 'jrrp.luck.2',  // 非常不幸
@@ -49,7 +47,6 @@ export const Config: Schema<Config> = Schema.intersect([
 
     // 特殊日期配置
     specialDates: Schema.dict(Schema.string())
-      .description('config.specialDates.description')
       .default({
         '01-01': 'jrrp.dates.new_year',   // 新年
         '12-25': 'jrrp.dates.christmas'    // 圣诞
@@ -57,10 +54,10 @@ export const Config: Schema<Config> = Schema.intersect([
 
     // 睡眠模式选择
     sleepMode: Schema.union([
-      Schema.const('fixed').description('config.sleep.mode.fixed'),
-      Schema.const('until').description('config.sleep.mode.until'),
-      Schema.const('random').description('config.sleep.mode.random')
-    ]).description('config.sleep.mode.description').default('fixed'),
+      Schema.const('fixed'),
+      Schema.const('until'),
+      Schema.const('random')
+    ]).default('fixed'),
   }),
 
   // 睡眠模式相关配置
@@ -68,32 +65,22 @@ export const Config: Schema<Config> = Schema.intersect([
     // 固定时长模式
     Schema.object({
       sleepMode: Schema.const('fixed').required(),
-      sleepDuration: Schema.number().role('slider')
-        .min(1).max(120).step(1)
-        .description('config.sleep.duration')
-        .default(30),
-    }).description('config.sleep.fixed.description'),
+      sleepDuration: Schema.number().default(480),
+    }),
 
     // 指定时间模式
     Schema.object({
       sleepMode: Schema.const('until').required(),
       sleepUntil: Schema.string()
-        .description('config.sleep.until.time')  // 修改这里的键名
-        .default('06:00'),
-    }).description('config.sleep.until.description'),
+        .default('08:00'),
+    }),
 
     // 随机时长模式
     Schema.object({
       sleepMode: Schema.const('random').required(),
-      sleepRandomMin: Schema.number().role('slider')
-        .min(1).max(60).step(1)
-        .description('config.sleep.random.min')
-        .default(10),
-      sleepRandomMax: Schema.number().role('slider')
-        .min(1).max(120).step(1)
-        .description('config.sleep.random.max')
-        .default(60),
-    }).description('config.sleep.random.description'),
+      sleepRandomMin: Schema.number().default(360),
+      sleepRandomMax: Schema.number().default(600),
+    }),
   ]),
 ]).i18n({
   'zh-CN': require('./locales/zh-CN')._config,

@@ -1,3 +1,13 @@
+_config:
+  specialValues: "Set special messages for specific luck values"
+  ranges: "Set hint messages for different luck value ranges"
+  specialDates: "Set messages for special dates"
+  sleep:
+    mode: "Choose sleep command operation mode"
+    fixed: "Fixed duration mode settings"
+    until: "Time-specific mode settings"
+    random: "Random duration mode settings"
+    duration: "Set fixed mute duration (minutes)"
 jrrp:
   description: "Check today's luck rating"
   result: "{1}, your luck rating today is: {0}"
@@ -6,10 +16,10 @@ jrrp:
   luck:
     1: "...(It's on a 100-point scale)"
     2: "?! No way..."
-    3: "Ugh..."
+    3: ".Ugh..."
     4: "! Barely acceptable...?"
-    5: "Not bad, not bad at all."
-    6: "Pretty lucky today!"
+    5: ".Not bad, not bad at all."
+    6: ".Pretty lucky today!"
     7: "! Overwhelmingly positive!"
     8: "! Almost reached 100..."
     9:
@@ -28,29 +38,6 @@ jrrp:
   dates:
     new_year: "Happy New Year! Today's luck rating has been replaced with blessings~"
     christmas: "Merry Christmas! May blessings be with you~"
-_config:
-  specialValues:
-    description: "Special luck values and their corresponding messages"
-  ranges:
-    description: "Luck rating ranges and their corresponding messages"
-  specialDates:
-    description: "Special dates and their corresponding messages"
-  sleep:
-    mode:
-      description: "Sleep command mode"
-      fixed: "Fixed duration mute"
-      until: "Mute until specific time"
-      random: "Random duration mute"
-    fixed:
-      description: "Fixed duration mode settings"
-    until:
-      description: "Time-specific mode settings"
-      time: "Mute end time (HH:mm)"
-    random:
-      description: "Random duration mode settings"
-      min: "Minimum random mute duration (minutes)"
-      max: "Maximum random mute duration (minutes)"
-    duration: "Fixed mute duration (minutes)"
 commands:
   sleep:
     guild_only: "This command can only be used in guilds"
