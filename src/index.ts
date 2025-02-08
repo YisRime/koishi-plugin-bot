@@ -30,25 +30,25 @@ export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     specialValues: Schema.dict(Schema.string())
       .default({
-        0: 'jrrp.special.1',
-        50: 'jrrp.special.2',
-        100: 'jrrp.special.3'
+        0: 'jrrp.messages.special.1',
+        50: 'jrrp.messages.special.2',
+        100: 'jrrp.messages.special.3'
       }),
     ranges: Schema.dict(Schema.string())
       .default({
-        '0-9': 'jrrp.luck.1',
-        '10-19': 'jrrp.luck.2',
-        '20-39': 'jrrp.luck.3',
-        '40-49': 'jrrp.luck.4',
-        '50-69': 'jrrp.luck.5',
-        '70-89': 'jrrp.luck.6',
-        '90-95': 'jrrp.luck.7',
-        '96-100': 'jrrp.luck.8'
+        '0-9': 'jrrp.messages.range.1',
+        '10-19': 'jrrp.messages.range.2',
+        '20-39': 'jrrp.messages.range.3',
+        '40-49': 'jrrp.messages.range.4',
+        '50-69': 'jrrp.messages.range.5',
+        '70-89': 'jrrp.messages.range.6',
+        '90-95': 'jrrp.messages.range.7',
+        '96-100': 'jrrp.messages.range.8'
       }),
     specialDates: Schema.dict(Schema.string())
       .default({
-        '01-01': 'jrrp.dates.new_year',
-        '12-25': 'jrrp.dates.christmas'
+        '01-01': 'jrrp.messages.date.1',
+        '12-25': 'jrrp.messages.date.2'
       }),
   }).description('config.group.jrrp'),
 
@@ -104,7 +104,6 @@ export async function apply(ctx: Context, config: Config) {
 
       // 检查是否是特殊日期
       if (config.specialDates?.[mmdd]) {
-        const confirm = await session.send(session.text(config.specialDates[mmdd]) + '\n' + session.text('jrrp.prompt'))
         const response = await session.prompt()
         if (!response || !['是', 'y', 'Y', 'yes'].includes(response.trim())) {
           return session.text('jrrp.cancel')
@@ -143,7 +142,7 @@ export async function apply(ctx: Context, config: Config) {
 
       // 生成最终的人品值
       const dateWeight = (date.getDay() + 1) / 7 // 根据星期几添加权重
-      const baseSeed = `${userId}-${dateStr}-v2` // 添加版本标记避免与旧版冲突
+      const baseSeed = `${userId}-${dateStr}` // 添加版本标记避免与旧版冲突
       const baseRandom = seededRandom(baseSeed)
       // 使用日期权重对基础随机值进行调整
       const weightedRandom = (baseRandom + dateWeight) / 2

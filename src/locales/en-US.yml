@@ -1,28 +1,28 @@
 _config:
-  $desc: 'Daily Tools Configuration'
+  $desc: "Daily Tools Configuration"
   specialValues:
-    $desc: 'Messages for specific luck values'
-    $inner: 'Enter message for specific value'
+    $desc: "Messages for specific luck values"
+    $inner: "Enter message for specific value"
   ranges:
-    $desc: 'Messages for luck value ranges'
-    $inner: 'Enter message for range'
+    $desc: "Messages for luck value ranges"
+    $inner: "Enter message for range"
   specialDates:
-    $desc: 'Messages for special dates'
-    $inner: 'Enter message for date'
+    $desc: "Messages for special dates"
+    $inner: "Enter message for date"
   sleepMode:
-    $desc: 'Sleep command mode'
+    $desc: "Sleep command mode"
     $inner:
-      - 'Fixed duration'
-      - 'Until time'
-      - 'Random duration'
-  sleepDuration: 'Fixed mute duration (minutes)'
-  sleepUntil: 'Unmute time (HH:mm)'
-  sleepRandomMin: 'Minimum random mute duration (minutes)'
-  sleepRandomMax: 'Maximum random mute duration (minutes)'
+      - "Fixed duration"
+      - "Until time"
+      - "Random duration"
+  sleepDuration: "Fixed mute duration (minutes)"
+  sleepUntil: "Unmute time (HH:mm)"
+  sleepRandomMin: "Minimum random mute duration (minutes)"
+  sleepRandomMax: "Maximum random mute duration (minutes)"
   autoLikeList:
-    $desc: 'Daily auto like list'
-    $inner: 'One QQ number per line'
-  autoLikeTime: 'Auto like execution time (HH:mm)'
+    $desc: "Daily auto like list"
+    $inner: "One QQ number per line"
+  autoLikeTime: "Auto like execution time (HH:mm)"
 jrrp:
   description: "Check Today's Luck Rating"
   usage: |-
@@ -34,7 +34,7 @@ jrrp:
     result: "{1}, your luck rating today is: {0}"
     prompt: "Do you want to check your luck rating today? (Reply 'y' to confirm)"
     cancel: "Okay, have a nice day!"
-    luck:
+    range:
       1: "...(It's on a 100-point scale)"
       2: "?! No way..."
       3: ".Ugh..."
@@ -43,24 +43,32 @@ jrrp:
       6: ".Pretty lucky today!"
       7: "! Overwhelmingly positive!"
       8: "! Almost reached 100..."
-      9:
-      10:
+      9: "Backup"
+      10: "Backup"
     special:
       1: "! Overwhelmingly negative!"
       2: "! It's 50-50..."
       3: "! 100! 100!!!!!"
-      4:
-      5:
-      6:
-      7:
-      8:
-      9:
-      10:
-    dates:
-      new_year: "Happy New Year! Today's luck rating has been replaced with blessings~"
-      christmas: "Merry Christmas! May blessings be with you~"
+      4: "Backup"
+      5: "Backup"
+      6: "Backup"
+      7: "Backup"
+      8: "Backup"
+      9: "Backup"
+      10: "Backup"
+    date:
+      1: "Happy New Year! Today's luck rating has been replaced with blessings~"
+      2: "Merry Christmas! May blessings be with you~"
+      3: "Backup"
+      4: "Backup"
+      5: "Backup"
+      6: "Backup"
+      7: "Backup"
+      8: "Backup"
+      9: "Backup"
+      10: "Backup"
 sleep:
-  description: 'Sleep Mode'
+  description: "Sleep Mode"
   usage: |-
     Use this command to mute yourself for a period
     Supports fixed duration, until specific time, or random duration
@@ -75,7 +83,7 @@ sleep:
     failed: "Failed to set mute status, please check permissions"
 
 zanwo:
-  description: 'Like Profile'
+  description: "Like Profile"
   usage: |-
     Use command to receive profile likes
     Can receive up to 50 likes each time

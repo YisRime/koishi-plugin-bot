@@ -1,37 +1,37 @@
 _config:
   # 今日人品设置组
   specialValues:
-    $desc: '特定人品值对应的消息'
-    $inner: '请输入特定数值对应的提示语'
+    $desc: "特定人品值对应的消息"
+    $inner: "请输入特定数值对应的提示语"
   ranges:
-    $desc: '人品值区间对应的消息'
-    $inner: '请输入区间对应的提示语'
+    $desc: "人品值区间对应的消息"
+    $inner: "请输入区间对应的提示语"
   specialDates:
-    $desc: '特殊日期对应的消息'
-    $inner: '请输入日期对应的提示语'
+    $desc: "特殊日期对应的消息"
+    $inner: "请输入日期对应的提示语"
 
   # 睡眠模式设置组
   sleepMode:
-    $desc: '睡眠命令模式'
+    $desc: "睡眠命令模式"
     $inner:
-      - '固定时长'
-      - '指定时间'
-      - '随机时长'
+      - "固定时长"
+      - "指定时间"
+      - "随机时长"
 
   # 睡眠参数设置组
-  sleepDuration: '固定禁言时长（分钟）'
-  sleepUntil: '指定解除禁言的时间点 (HH:mm)'
-  sleepRandomMin: '随机禁言最小时长（分钟）'
-  sleepRandomMax: '随机禁言最大时长（分钟）'
+  sleepDuration: "固定禁言时长（分钟）"
+  sleepUntil: "指定解除禁言的时间点 (HH:mm)"
+  sleepRandomMin: "随机禁言最小时长（分钟）"
+  sleepRandomMax: "随机禁言最大时长（分钟）"
 
   # 自动点赞设置组
   autoLikeList:
-    $desc: '每日自动点赞列表'
-    $inner: '每行一个QQ号'
-  autoLikeTime: '自动点赞执行时间 (HH:mm)'
+    $desc: "每日自动点赞列表"
+    $inner: "每行一个QQ号"
+  autoLikeTime: "自动点赞执行时间 (HH:mm)"
 
 jrrp:
-  description: '查看今日人品'
+  description: "查看今日人品"
   usage: |-
     直接使用命令查看今日人品值
     在特殊节日可能获得特殊祝福
@@ -41,7 +41,7 @@ jrrp:
     result: "{1} 你今天的人品值是：{0}"
     prompt: "要查看今天的人品值吗？(回复'是'或'y'确认)"
     cancel: "好的，祝您今天愉快！"
-    luck:
+    range:
       1: "……（是百分制哦）"
       2: "？！不会吧……"
       3: "。呜……"
@@ -63,12 +63,20 @@ jrrp:
       8: "备用"
       9: "备用"
       10: "备用"
-    dates:
-      new_year: "新年快乐！今天的人品值已被替换为祝福~"
-      christmas: "圣诞快乐！愿祝福与你同在~"
+    date:
+      1: "新年快乐！今天的人品值已被替换为祝福~"
+      2: "圣诞快乐！愿祝福与你同在~"
+      3: "备用"
+      4: "备用"
+      5: "备用"
+      6: "备用"
+      7: "备用"
+      8: "备用"
+      9: "备用"
+      10: "备用"
 
 sleep:
-  description: '精致睡眠'
+  description: "精致睡眠"
   usage: |-
     使用该命令将自动禁言一段时间
     支持固定时长、指定时间和随机时长三种模式
@@ -83,7 +91,7 @@ sleep:
     failed: "设置禁言失败，请检查权限设置"
 
 zanwo:
-  description: '为自己点赞'
+  description: "为自己点赞"
   usage: |-
     直接输入命令即可获得名片赞
     每次最多可获得50个赞
