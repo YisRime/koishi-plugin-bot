@@ -1,37 +1,40 @@
 _config:
-  $desc: '日常工具集配置'
-  jrrp:
-    $desc: '今日人品设置'
-    specialValues:
-      $desc: '特定人品值对应的消息'
-      $inner: '请输入特定数值'
-    ranges:
-      $desc: '人品值区间对应的消息'
-      $inner: '请输入区间'
-    specialDates:
-      $desc: '特殊日期对应的消息'
-      $inner: '请输入日期'
+  ranges:
+    $desc: "人品值范围对应消息"
+    $inner: "设置不同范围的提示消息"
+  specialValues:
+    $desc: "特殊人品值对应消息"
+    $inner: "设置特定数值的提示消息"
+  specialDates:
+    $desc: "特殊日期配置"
+    $inner: "设置特定日期的提示消息"
 
-  sleep:
-    $desc: '睡眠设置'
-    mode:
-      $desc: '睡眠命令模式'
-      $inner:
-        - '固定时长'
-        - '指定时间'
-        - '随机时长'
-    duration: '固定禁言时长（分钟）'
-    until: '指定解除禁言时间点 (HH:mm)'
-    random:
-      min: '随机禁言最小时长（分钟）'
-      max: '随机禁言最大时长（分钟）'
+  sleepMode:
+    $desc: "精致睡眠模式"
+    $inner:
+      - "固定时长"
+      - "直到某时刻"
+      - "随机时长"
 
-  autoLike:
-    $desc: '自动点赞设置'
-    list:
-      $desc: '每日自动点赞列表'
-      $inner: '每行一个QQ号'
-    time: '自动点赞执行时间 (HH:mm)'
+  sleepDuration:
+    $desc: "固定时长模式配置"
+    $inner: "睡眠时长（分钟）"
+  sleepUntil:
+    $desc: "指定时刻模式配置"
+    $inner: "睡到几点（格式：HH:MM）"
+  sleepRandomMin:
+    $desc: "随机时长模式配置最短时间"
+    $inner: "最短睡眠时间（分钟）"
+  sleepRandomMax:
+    $desc: "随机时长模式配置最长时间"
+    $inner: "最长睡眠时间（分钟）"
+
+  autoLikeList:
+    $desc: "自动点赞用户列表"
+    $inner: "QQ号，每行一个"
+  autoLikeTime:
+    $desc: "自动点赞时间"
+    $inner: "每日自动点赞时间（格式：HH:MM）"
 
 jrrp:
   description: "查看今日人品"
@@ -88,7 +91,6 @@ sleep:
     jzsm
   messages:
     guild_only: "该命令只能在群组中使用"
-    no_permission: "只能在群组中使用此命令"
     invalid_mode: "无效的睡眠模式设置"
     success: "晚安！将在 {0} 分钟后自动解除禁言"
     failed: "设置禁言失败，请检查权限设置"

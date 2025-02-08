@@ -2,62 +2,46 @@ import { Context, Schema } from 'koishi'
 import * as cron from 'koishi-plugin-cron'
 
 export const name = 'daily-tools'
-export const inject = {
-  required: ['database'],
-  optional: ['cron']
-}
-
-// 每日人品配置组
-export interface JrrpConfig {
+export const inject = ['database', 'cron']
+export interface Config {
   specialValues?: Record<number, string>
   ranges?: Record<string, string>
   specialDates?: Record<string, string>
-}
-
-// 睡眠配置组
-export interface SleepConfig {
   sleepMode?: 'fixed' | 'until' | 'random'
   sleepDuration?: number
   sleepUntil?: string
   sleepRandomMin?: number
   sleepRandomMax?: number
-}
-
-// 自动点赞配置组
-export interface AutoLikeConfig {
   autoLikeList?: string[]
   autoLikeTime?: string
 }
 
-export interface Config extends JrrpConfig, SleepConfig, AutoLikeConfig {}
+export const Config: Schema<Config> = Schema.intersect([
+  Schema.object({
+    ranges: Schema.dict(Schema.string())
+      .default({
+        '0-9': 'jrrp.messages.range.1',
+        '10-19': 'jrrp.messages.range.2',
+        '20-39': 'jrrp.messages.range.3',
+        '40-49': 'jrrp.messages.range.4',
+        '50-69': 'jrrp.messages.range.5',
+        '70-89': 'jrrp.messages.range.6',
+        '90-95': 'jrrp.messages.range.7',
+        '96-100': 'jrrp.messages.range.8'
+      }),
+    specialValues: Schema.dict(Schema.string())
+      .default({
+        0: 'jrrp.messages.special.1',
+        50: 'jrrp.messages.special.2',
+        100: 'jrrp.messages.special.3'
+      }),
+    specialDates: Schema.dict(Schema.string())
+      .default({
+        '01-01': 'jrrp.messages.date.1',
+        '12-25': 'jrrp.messages.date.2'
+      }),
+  }),
 
-// 定义配置Schema
-const jrrpConfig = Schema.object({
-  specialValues: Schema.dict(Schema.string())
-    .default({
-      0: 'jrrp.messages.special.1',
-      50: 'jrrp.messages.special.2',
-      100: 'jrrp.messages.special.3'
-    }),
-  ranges: Schema.dict(Schema.string())
-    .default({
-      '0-9': 'jrrp.messages.range.1',
-      '10-19': 'jrrp.messages.range.2',
-      '20-39': 'jrrp.messages.range.3',
-      '40-49': 'jrrp.messages.range.4',
-      '50-69': 'jrrp.messages.range.5',
-      '70-89': 'jrrp.messages.range.6',
-      '90-95': 'jrrp.messages.range.7',
-      '96-100': 'jrrp.messages.range.8'
-    }),
-  specialDates: Schema.dict(Schema.string())
-    .default({
-      '01-01': 'jrrp.messages.date.1',
-      '12-25': 'jrrp.messages.date.2'
-    }),
-}).description('_config.jrrp.$desc')
-
-const sleepConfig = Schema.intersect([
   Schema.object({
     sleepMode: Schema.union([
       Schema.const('fixed'),
@@ -65,6 +49,7 @@ const sleepConfig = Schema.intersect([
       Schema.const('random')
     ]).default('fixed'),
   }),
+
   Schema.union([
     Schema.object({
       sleepMode: Schema.const('fixed').required(),
@@ -80,20 +65,14 @@ const sleepConfig = Schema.intersect([
       sleepRandomMax: Schema.number().default(600),
     }),
   ]),
-]).description('_config.sleep.$desc')
 
-const autoLikeConfig = Schema.object({
-  autoLikeList: Schema.array(String)
-    .default([])
-    .role('textarea'),
-  autoLikeTime: Schema.string()
-    .default('08:00')
-}).description('_config.autoLike.$desc')
-
-export const Config = Schema.intersect([
-  jrrpConfig,
-  sleepConfig,
-  autoLikeConfig
+  Schema.object({
+    autoLikeList: Schema.array(String)
+      .default([])
+      .role('textarea'),
+    autoLikeTime: Schema.string()
+      .default('08:00')
+  }),
 ]).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -235,7 +214,7 @@ export async function apply(ctx: Context, config: Config) {
     })
 
   // 添加自动点赞功能
-  if (ctx.cron && config.autoLikeList?.length > 0) {
+  if (config.autoLikeList?.length > 0) {
     const [hour, minute] = config.autoLikeTime.split(':').map(Number)
 
     // 注册定时任务

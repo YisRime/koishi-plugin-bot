@@ -1,35 +1,42 @@
 _config:
   $desc: "Daily Tools Configuration"
-  jrrp:
-    $desc: 'Daily Luck Settings'
-    specialValues:
-      $desc: 'Messages for specific luck values'
-      $inner: 'Enter specific value'
-    ranges:
-      $desc: 'Messages for luck value ranges'
-      $inner: 'Enter range'
-    specialDates:
-      $desc: 'Messages for special dates'
-      $inner: 'Enter date'
-  sleep:
-    $desc: 'Sleep Settings'
-    mode:
-      $desc: 'Sleep command mode'
-      $inner:
-        - 'Fixed duration'
-        - 'Until time'
-        - 'Random duration'
-    duration: 'Fixed mute duration (minutes)'
-    until: 'Unmute time (HH:mm)'
-    random:
-      min: 'Minimum random mute duration (minutes)'
-      max: 'Maximum random mute duration (minutes)'
-  autoLike:
-    $desc: 'Auto Like Settings'
-    list:
-      $desc: 'Daily auto like list'
-      $inner: 'One QQ number per line'
-    time: 'Auto like execution time (HH:mm)'
+  ranges:
+    $desc: "Fortune Range Messages"
+    $inner: "Set messages for different ranges"
+  specialValues:
+    $desc: "Special Value Messages"
+    $inner: "Set messages for specific values"
+  specialDates:
+    $desc: "Special Date Settings"
+    $inner: "Set messages for specific dates"
+
+  sleepMode:
+    $desc: "Sleep Mode"
+    $inner:
+      - "Fixed Duration"
+      - "Until Time"
+      - "Random Duration"
+
+  sleepDuration:
+    $desc: "Fixed Duration Settings"
+    $inner: "Sleep duration (minutes)"
+  sleepUntil:
+    $desc: "Until Time Settings"
+    $inner: "Sleep until (format: HH:MM)"
+  sleepRandomMin:
+    $desc: "Random Duration Minimum"
+    $inner: "Minimum sleep duration (minutes)"
+  sleepRandomMax:
+    $desc: "Random Duration Maximum"
+    $inner: "Maximum sleep duration (minutes)"
+
+  autoLikeList:
+    $desc: "Auto-like User List"
+    $inner: "QQ numbers, one per line"
+  autoLikeTime:
+    $desc: "Auto-like Time"
+    $inner: "Daily auto-like time (format: HH:MM)"
+
 jrrp:
   description: "Check Today's Luck Rating"
   usage: |-
@@ -84,7 +91,6 @@ sleep:
     jzsm
   messages:
     guild_only: "This command can only be used in guilds"
-    no_permission: "This command can only be used in groups"
     invalid_mode: "Invalid sleep mode configuration"
     success: "Good night! Mute will be automatically removed in {0} minutes"
     failed: "Failed to set mute status, please check permissions"
