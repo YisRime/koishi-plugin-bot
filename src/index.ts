@@ -682,17 +682,34 @@ export async function handleCaveAction(
     // 修改 processAdd：将缺少媒体及文本的回复逻辑移入 processAdd，并调用 extractMediaContent 提取文本处理
     async function processAdd(): Promise<string> {
       try {
-        // 提示用户输入内容并解析媒体及文本信息
-        // 修改：先读取命令内容，再读取引用内容，最后合并
-        let originalContent = content.join(' ') || '';
-        if (session.content) {
-          originalContent = session.content;
-        }
+        // 1. 收集所有输入内容
+        let inputParts: string[] = [];
+
+        // 读取引用内容（如果有）
         if (session.quote?.content) {
-          originalContent = originalContent ? `${originalContent}\n${session.quote.content}` : session.quote.content;
+          inputParts.push(session.quote.content);
         }
 
-        // 新增：移除命令前缀
+        // 读取命令后的内容（如果有）
+        // 注意：这里直接使用 content 数组而不是 session.content，因为 session.content 包含了命令本身
+        if (content.length > 0) {
+          inputParts.push(content.join(' '));
+        }
+
+        // 合并所有内容部分
+        let originalContent = inputParts.join('\n').trim();
+
+/*         // 如果没有任何内容，进入提示流程
+        if (!originalContent) {
+          await sendMessage(session, 'commands.cave.add.noContent', [], true);
+          const reply = await session.prompt({ timeout: 60000 });
+          if (!reply || reply.trim() === "") {
+            return sendMessage(session, 'commands.cave.add.operationTimeout', [], true);
+          }
+          originalContent = reply;
+        }
+
+        // 2. 移除命令前缀
         const prefixes = Array.isArray(session.app.config.prefix)
           ? session.app.config.prefix
           : [session.app.config.prefix];
@@ -704,14 +721,13 @@ export async function handleCaveAction(
           .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
           .join('|');
         const commandPattern = new RegExp(`^(?:${triggerPattern}).*?-a\\s*`);
-        originalContent = originalContent.replace(commandPattern, '');
+        originalContent = originalContent.replace(commandPattern, ''); */
 
-        // 提取原始内容
+        // 提取媒体内容
         let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(originalContent);
 
         // 当媒体和文本均为空时，进行回复提示
         if (textParts.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
-          // 发送临时提示消息
           await sendMessage(session, 'commands.cave.add.noContent', [], true);
           const reply = await session.prompt({ timeout: 60000 });
           if (!reply || reply.trim() === "") {
