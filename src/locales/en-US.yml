@@ -1,28 +1,35 @@
 _config:
   $desc: "Daily Tools Configuration"
-  specialValues:
-    $desc: "Messages for specific luck values"
-    $inner: "Enter message for specific value"
-  ranges:
-    $desc: "Messages for luck value ranges"
-    $inner: "Enter message for range"
-  specialDates:
-    $desc: "Messages for special dates"
-    $inner: "Enter message for date"
-  sleepMode:
-    $desc: "Sleep command mode"
-    $inner:
-      - "Fixed duration"
-      - "Until time"
-      - "Random duration"
-  sleepDuration: "Fixed mute duration (minutes)"
-  sleepUntil: "Unmute time (HH:mm)"
-  sleepRandomMin: "Minimum random mute duration (minutes)"
-  sleepRandomMax: "Maximum random mute duration (minutes)"
-  autoLikeList:
-    $desc: "Daily auto like list"
-    $inner: "One QQ number per line"
-  autoLikeTime: "Auto like execution time (HH:mm)"
+  jrrp:
+    $desc: 'Daily Luck Settings'
+    specialValues:
+      $desc: 'Messages for specific luck values'
+      $inner: 'Enter specific value'
+    ranges:
+      $desc: 'Messages for luck value ranges'
+      $inner: 'Enter range'
+    specialDates:
+      $desc: 'Messages for special dates'
+      $inner: 'Enter date'
+  sleep:
+    $desc: 'Sleep Settings'
+    mode:
+      $desc: 'Sleep command mode'
+      $inner:
+        - 'Fixed duration'
+        - 'Until time'
+        - 'Random duration'
+    duration: 'Fixed mute duration (minutes)'
+    until: 'Unmute time (HH:mm)'
+    random:
+      min: 'Minimum random mute duration (minutes)'
+      max: 'Maximum random mute duration (minutes)'
+  autoLike:
+    $desc: 'Auto Like Settings'
+    list:
+      $desc: 'Daily auto like list'
+      $inner: 'One QQ number per line'
+    time: 'Auto like execution time (HH:mm)'
 jrrp:
   description: "Check Today's Luck Rating"
   usage: |-

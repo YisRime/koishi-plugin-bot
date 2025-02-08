@@ -2,64 +2,69 @@ import { Context, Schema } from 'koishi'
 import * as cron from 'koishi-plugin-cron'
 
 export const name = 'daily-tools'
-export const inject = ['database', 'cron']
-export interface Config {
-  /** 特殊人品值对应的消息 */
+export const inject = {
+  required: ['database'],
+  optional: ['cron']
+}
+
+// 每日人品配置组
+export interface JrrpConfig {
   specialValues?: Record<number, string>
-  /** 人品值区间对应的消息 */
   ranges?: Record<string, string>
-  /** 特殊日期对应的消息 */
   specialDates?: Record<string, string>
-  /** 睡眠命令模式 */
+}
+
+// 睡眠配置组
+export interface SleepConfig {
   sleepMode?: 'fixed' | 'until' | 'random'
-  /** 固定时长禁言的时长（分钟） */
   sleepDuration?: number
-  /** 指定解除禁言的时间点 (HH:mm) */
   sleepUntil?: string
-  /** 随机禁言的最小时长（分钟） */
   sleepRandomMin?: number
-  /** 随机禁言的最大时长（分钟） */
   sleepRandomMax?: number
-  /** 每日自动点赞列表 */
+}
+
+// 自动点赞配置组
+export interface AutoLikeConfig {
   autoLikeList?: string[]
-  /** 自动点赞时间 (HH:mm) */
   autoLikeTime?: string
 }
 
-export const Config: Schema<Config> = Schema.intersect([
-  Schema.object({
-    specialValues: Schema.dict(Schema.string())
-      .default({
-        0: 'jrrp.messages.special.1',
-        50: 'jrrp.messages.special.2',
-        100: 'jrrp.messages.special.3'
-      }),
-    ranges: Schema.dict(Schema.string())
-      .default({
-        '0-9': 'jrrp.messages.range.1',
-        '10-19': 'jrrp.messages.range.2',
-        '20-39': 'jrrp.messages.range.3',
-        '40-49': 'jrrp.messages.range.4',
-        '50-69': 'jrrp.messages.range.5',
-        '70-89': 'jrrp.messages.range.6',
-        '90-95': 'jrrp.messages.range.7',
-        '96-100': 'jrrp.messages.range.8'
-      }),
-    specialDates: Schema.dict(Schema.string())
-      .default({
-        '01-01': 'jrrp.messages.date.1',
-        '12-25': 'jrrp.messages.date.2'
-      }),
-  }).description('config.group.jrrp'),
+export interface Config extends JrrpConfig, SleepConfig, AutoLikeConfig {}
 
+// 定义配置Schema
+const jrrpConfig = Schema.object({
+  specialValues: Schema.dict(Schema.string())
+    .default({
+      0: 'jrrp.messages.special.1',
+      50: 'jrrp.messages.special.2',
+      100: 'jrrp.messages.special.3'
+    }),
+  ranges: Schema.dict(Schema.string())
+    .default({
+      '0-9': 'jrrp.messages.range.1',
+      '10-19': 'jrrp.messages.range.2',
+      '20-39': 'jrrp.messages.range.3',
+      '40-49': 'jrrp.messages.range.4',
+      '50-69': 'jrrp.messages.range.5',
+      '70-89': 'jrrp.messages.range.6',
+      '90-95': 'jrrp.messages.range.7',
+      '96-100': 'jrrp.messages.range.8'
+    }),
+  specialDates: Schema.dict(Schema.string())
+    .default({
+      '01-01': 'jrrp.messages.date.1',
+      '12-25': 'jrrp.messages.date.2'
+    }),
+}).description('_config.jrrp.$desc')
+
+const sleepConfig = Schema.intersect([
   Schema.object({
     sleepMode: Schema.union([
       Schema.const('fixed'),
       Schema.const('until'),
       Schema.const('random')
     ]).default('fixed'),
-  }).description('config.group.sleep.mode'),
-
+  }),
   Schema.union([
     Schema.object({
       sleepMode: Schema.const('fixed').required(),
@@ -74,16 +79,21 @@ export const Config: Schema<Config> = Schema.intersect([
       sleepRandomMin: Schema.number().default(360),
       sleepRandomMax: Schema.number().default(600),
     }),
-  ]).description('config.group.sleep.settings'),
+  ]),
+]).description('_config.sleep.$desc')
 
-  // 自动点赞配置
-  Schema.object({
-    autoLikeList: Schema.array(String)
-      .default([])
-      .role('textarea'),
-    autoLikeTime: Schema.string()
-      .default('08:00')
-  }).description('config.group.autolike'),
+const autoLikeConfig = Schema.object({
+  autoLikeList: Schema.array(String)
+    .default([])
+    .role('textarea'),
+  autoLikeTime: Schema.string()
+    .default('08:00')
+}).description('_config.autoLike.$desc')
+
+export const Config = Schema.intersect([
+  jrrpConfig,
+  sleepConfig,
+  autoLikeConfig
 ]).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -225,7 +235,7 @@ export async function apply(ctx: Context, config: Config) {
     })
 
   // 添加自动点赞功能
-  if (config.autoLikeList?.length > 0) {
+  if (ctx.cron && config.autoLikeList?.length > 0) {
     const [hour, minute] = config.autoLikeTime.split(':').map(Number)
 
     // 注册定时任务
