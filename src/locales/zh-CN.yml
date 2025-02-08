@@ -1,64 +1,96 @@
 _config:
-  specialValues: "设置特定人品值时显示的特殊消息"
-  ranges: "设置不同人品值区间对应的提示消息"
-  specialDates: "设置特殊日期的提示消息"
-  sleep:
-    mode: "选择睡眠命令的工作模式"
-    fixed: "固定时长模式的相关设置"
-    until: "指定时间模式的相关设置"
-    random: "随机时长模式的相关设置"
-    duration: "设置固定禁言时长（分钟）"
-  group:
-    jrrp: "今日人品设置"
-    sleep:
-      mode: "睡眠命令模式"
-      settings: "睡眠参数设置"
-    autolike: "自动点赞设置"
-  autoLikeList: "每日自动点赞用户列表（每行一个QQ号）"
-  autoLikeTime: "自动点赞执行时间（HH:mm）"
+  # 今日人品设置组
+  specialValues:
+    $desc: '特定人品值对应的消息'
+    $inner: '请输入特定数值对应的提示语'
+  ranges:
+    $desc: '人品值区间对应的消息'
+    $inner: '请输入区间对应的提示语'
+  specialDates:
+    $desc: '特殊日期对应的消息'
+    $inner: '请输入日期对应的提示语'
+
+  # 睡眠模式设置组
+  sleepMode:
+    $desc: '睡眠命令模式'
+    $inner:
+      - '固定时长'
+      - '指定时间'
+      - '随机时长'
+
+  # 睡眠参数设置组
+  sleepDuration: '固定禁言时长（分钟）'
+  sleepUntil: '指定解除禁言的时间点 (HH:mm)'
+  sleepRandomMin: '随机禁言最小时长（分钟）'
+  sleepRandomMax: '随机禁言最大时长（分钟）'
+
+  # 自动点赞设置组
+  autoLikeList:
+    $desc: '每日自动点赞列表'
+    $inner: '每行一个QQ号'
+  autoLikeTime: '自动点赞执行时间 (HH:mm)'
+
 jrrp:
-  description: "查看今日人品"
-  result: "{1} 你今天的人品值是：{0}"
-  prompt: "要查看今天的人品值吗？(回复'是'或'y'确认)"
-  cancel: "好的，祝您今天愉快！"
-  luck:
-    1: "……（是百分制哦）"
-    2: "？！不会吧……"
-    3: "。呜……"
-    4: "！勉强还行吧……？"
-    5: "。还行啦，还行啦。"
-    6: "。今天运气不错呢！"
-    7: "！好评如潮！"
-    8: "！差点就到 100 了呢……"
-    9:
-    10:
-  special:
-    1: "！差评如潮！"
-    2: "！五五开……"
-    3: "！100！100！！！！！"
-    4:
-    5:
-    6:
-    7:
-    8:
-    9:
-    10:
-  dates:
-    new_year: "新年快乐！今天的人品值已被替换为祝福~"
-    christmas: "圣诞快乐！愿祝福与你同在~"
-commands:
-  sleep:
+  description: '查看今日人品'
+  usage: |-
+    直接使用命令查看今日人品值
+    在特殊节日可能获得特殊祝福
+  examples: |-
+    jrrp
+  messages:
+    result: "{1} 你今天的人品值是：{0}"
+    prompt: "要查看今天的人品值吗？(回复'是'或'y'确认)"
+    cancel: "好的，祝您今天愉快！"
+    luck:
+      1: "……（是百分制哦）"
+      2: "？！不会吧……"
+      3: "。呜……"
+      4: "！勉强还行吧……？"
+      5: "。还行啦，还行啦。"
+      6: "。今天运气不错呢！"
+      7: "！好评如潮！"
+      8: "！差点就到 100 了呢……"
+      9: "备用"
+      10: "备用"
+    special:
+      1: "！差评如潮！"
+      2: "！五五开……"
+      3: "！100！100！！！！！"
+      4: "备用"
+      5: "备用"
+      6: "备用"
+      7: "备用"
+      8: "备用"
+      9: "备用"
+      10: "备用"
+    dates:
+      new_year: "新年快乐！今天的人品值已被替换为祝福~"
+      christmas: "圣诞快乐！愿祝福与你同在~"
+
+sleep:
+  description: '精致睡眠'
+  usage: |-
+    使用该命令将自动禁言一段时间
+    支持固定时长、指定时间和随机时长三种模式
+  examples: |-
+    sleep
+    jzsm
+  messages:
     guild_only: "该命令只能在群组中使用"
     no_permission: "只能在群组中使用此命令"
     invalid_mode: "无效的睡眠模式设置"
     success: "晚安！将在 {0} 分钟后自动解除禁言"
     failed: "设置禁言失败，请检查权限设置"
-  zanwo:
-    description: 赞我
-    usage: |-
-      直接输入即可点赞
-    examples: |-
-      zanwo
-    messages:
-      success: 已完成名片赞操作，记得回哦~
-      failure: 点赞失败惹
+
+zanwo:
+  description: '为自己点赞'
+  usage: |-
+    直接输入命令即可获得名片赞
+    每次最多可获得50个赞
+    每天可以使用多次
+  examples: |-
+    zanwo
+    赞我
+  messages:
+    success: "已完成名片赞操作，记得回哦~"
+    failure: "点赞失败惹"

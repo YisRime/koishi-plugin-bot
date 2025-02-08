@@ -149,8 +149,8 @@ export async function apply(ctx: Context, config: Config) {
       const weightedRandom = (baseRandom + dateWeight) / 2
       const rp = normalDistribution(weightedRandom)
 
-      // 修复特殊值消息处理
-      let message = session.text('jrrp.result', [rp, nickname])
+      // 修复消息路径
+      let message = session.text('jrrp.messages.result', [rp, nickname])
       if (config.specialValues && rp in config.specialValues) {
         message += session.text(config.specialValues[rp])
       } else if (config.ranges) {
@@ -167,11 +167,11 @@ export async function apply(ctx: Context, config: Config) {
     })
 
   // 注册精致睡眠命令
-  ctx.command('sleep', '精致睡眠')
+  ctx.command('sleep', 'sleep.description')
     .alias('jzsm')
     .action(async ({ session }) => {
       if (!session.guildId) {
-        return session.text('commands.sleep.guild_only')
+        return session.text('sleep.messages.guild_only')
       }
 
       let duration: number
@@ -196,20 +196,20 @@ export async function apply(ctx: Context, config: Config) {
           duration = Math.floor(Math.random() * (max - min + 1) + min)
           break
         default:
-          return session.text('commands.sleep.invalid_mode')
+          return session.text('sleep.messages.invalid_mode')
       }
 
       try {
         await session.bot.muteGuildMember(session.guildId, session.userId, duration * 60 * 1000)
-        return session.text('commands.sleep.success', [duration])
+        return session.text('sleep.messages.success', [duration])
       } catch (error) {
         ctx.logger('sleep').warn(error)
-        return session.text('commands.sleep.failed')
+        return session.text('sleep.messages.failed')
       }
     })
 
   // 注册赞我命令
-  ctx.command('zanwo')
+  ctx.command('zanwo', 'zanwo.description')
     .alias('赞我')
     .action(async ({ session }) => {
       let num = 0
@@ -218,10 +218,10 @@ export async function apply(ctx: Context, config: Config) {
           await session.bot.internal.sendLike(session.userId, 10)
           num += 1
         }
-        return session.text('commands.zanwo.messages.success')
+        return session.text('zanwo.messages.success')
       } catch (_e) {
-        if (num > 0) return session.text('commands.zanwo.messages.success')
-        return session.text('commands.zanwo.messages.failure')
+        if (num > 0) return session.text('zanwo.messages.success')
+        return session.text('zanwo.messages.failure')
       }
     })
 

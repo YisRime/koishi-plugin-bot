@@ -1,55 +1,88 @@
 _config:
-  specialValues: "Set special messages for specific luck values"
-  ranges: "Set hint messages for different luck value ranges"
-  specialDates: "Set messages for special dates"
-  sleep:
-    mode: "Choose sleep command operation mode"
-    fixed: "Fixed duration mode settings"
-    until: "Time-specific mode settings"
-    random: "Random duration mode settings"
-    duration: "Set fixed mute duration (minutes)"
-  group:
-    jrrp: "Daily Luck Settings"
-    sleep:
-      mode: "Sleep Command Mode"
-      settings: "Sleep Parameters"
-    autolike: "Auto Like Settings"
-  autoLikeList: "Daily Auto Like User List (One QQ number per line)"
-  autoLikeTime: "Auto Like Execution Time (HH:mm)"
+  $desc: 'Daily Tools Configuration'
+  specialValues:
+    $desc: 'Messages for specific luck values'
+    $inner: 'Enter message for specific value'
+  ranges:
+    $desc: 'Messages for luck value ranges'
+    $inner: 'Enter message for range'
+  specialDates:
+    $desc: 'Messages for special dates'
+    $inner: 'Enter message for date'
+  sleepMode:
+    $desc: 'Sleep command mode'
+    $inner:
+      - 'Fixed duration'
+      - 'Until time'
+      - 'Random duration'
+  sleepDuration: 'Fixed mute duration (minutes)'
+  sleepUntil: 'Unmute time (HH:mm)'
+  sleepRandomMin: 'Minimum random mute duration (minutes)'
+  sleepRandomMax: 'Maximum random mute duration (minutes)'
+  autoLikeList:
+    $desc: 'Daily auto like list'
+    $inner: 'One QQ number per line'
+  autoLikeTime: 'Auto like execution time (HH:mm)'
 jrrp:
-  description: "Check today's luck rating"
-  result: "{1}, your luck rating today is: {0}"
-  prompt: "Do you want to check your luck rating today? (Reply 'y' to confirm)"
-  cancel: "Okay, have a nice day!"
-  luck:
-    1: "...(It's on a 100-point scale)"
-    2: "?! No way..."
-    3: ".Ugh..."
-    4: "! Barely acceptable...?"
-    5: ".Not bad, not bad at all."
-    6: ".Pretty lucky today!"
-    7: "! Overwhelmingly positive!"
-    8: "! Almost reached 100..."
-    9:
-    10:
-  special:
-    1: "! Overwhelmingly negative!"
-    2: "! It's 50-50..."
-    3: "! 100! 100!!!!!"
-    4:
-    5:
-    6:
-    7:
-    8:
-    9:
-    10:
-  dates:
-    new_year: "Happy New Year! Today's luck rating has been replaced with blessings~"
-    christmas: "Merry Christmas! May blessings be with you~"
-commands:
-  sleep:
+  description: "Check Today's Luck Rating"
+  usage: |-
+    Use command to check your luck rating for today
+    Special blessings may appear on special dates
+  examples: |-
+    jrrp
+  messages:
+    result: "{1}, your luck rating today is: {0}"
+    prompt: "Do you want to check your luck rating today? (Reply 'y' to confirm)"
+    cancel: "Okay, have a nice day!"
+    luck:
+      1: "...(It's on a 100-point scale)"
+      2: "?! No way..."
+      3: ".Ugh..."
+      4: "! Barely acceptable...?"
+      5: ".Not bad, not bad at all."
+      6: ".Pretty lucky today!"
+      7: "! Overwhelmingly positive!"
+      8: "! Almost reached 100..."
+      9:
+      10:
+    special:
+      1: "! Overwhelmingly negative!"
+      2: "! It's 50-50..."
+      3: "! 100! 100!!!!!"
+      4:
+      5:
+      6:
+      7:
+      8:
+      9:
+      10:
+    dates:
+      new_year: "Happy New Year! Today's luck rating has been replaced with blessings~"
+      christmas: "Merry Christmas! May blessings be with you~"
+sleep:
+  description: 'Sleep Mode'
+  usage: |-
+    Use this command to mute yourself for a period
+    Supports fixed duration, until specific time, or random duration
+  examples: |-
+    sleep
+    jzsm
+  messages:
     guild_only: "This command can only be used in guilds"
     no_permission: "This command can only be used in groups"
     invalid_mode: "Invalid sleep mode configuration"
     success: "Good night! Mute will be automatically removed in {0} minutes"
     failed: "Failed to set mute status, please check permissions"
+
+zanwo:
+  description: 'Like Profile'
+  usage: |-
+    Use command to receive profile likes
+    Can receive up to 50 likes each time
+    Can be used multiple times per day
+  examples: |-
+    zanwo
+    likeme
+  messages:
+    success: "Like operation completed, please like back~"
+    failure: "Failed to send likes"
