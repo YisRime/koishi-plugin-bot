@@ -682,38 +682,26 @@ export async function handleCaveAction(
     // 修改 processAdd：将缺少媒体及文本的回复逻辑移入 processAdd，并调用 extractMediaContent 提取文本处理
     async function processAdd(): Promise<string> {
       try {
-        // 1. 收集输入内容，调整顺序和分隔方式
+        // 1. 收集所有输入内容
         let inputParts: string[] = [];
 
         // 读取命令后的内容（如果有）
         if (content.length > 0) {
-          inputParts.push(content.join(' '));
+          inputParts = content;
         }
 
-        // 如果有引用内容，添加到输入内容后面，并用换行符分隔
-        if (session.quote?.content) {
-          // 确保在输入内容和引用内容之间有换行符
-          if (inputParts.length > 0) {
-            inputParts.push(''); // 这会在join时创建一个空行
-          }
-          inputParts.push(session.quote.content);
-        }
-
-        // 合并所有内容部分
-        let originalContent = inputParts.join('\n').trim();
-
-        // 如果内容为空，进入提示流程
-        if (!originalContent) {
+        // 如果没有任何内容，进入提示流程
+        if (!inputParts.length) {
           await sendMessage(session, 'commands.cave.add.noContent', [], true);
           const reply = await session.prompt({ timeout: 60000 });
           if (!reply || reply.trim() === "") {
             return sendMessage(session, 'commands.cave.add.operationTimeout', [], true);
           }
-          originalContent = reply;
+          inputParts = [reply];
         }
 
         // 提取媒体内容
-        let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(originalContent);
+        let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(inputParts.join('\n'));
 
         // 检查配置：是否允许添加视频
         if (videoUrls.length > 0 && !config.allowVideo) {
