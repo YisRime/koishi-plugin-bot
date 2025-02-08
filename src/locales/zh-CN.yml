@@ -35,6 +35,15 @@ _config:
   autoLikeTime:
     $desc: "自动点赞时间"
     $inner: "每日自动点赞时间（格式：HH:MM）"
+  notifyAccount:
+    $desc: "点赞结果通知账户"
+    $inner: "QQ号，点赞结果将私聊发送到此账户"
+  choice:
+    $desc: "jrrp算法选择"
+    $inner:
+      - "取模算法"
+      - "正态分布算法"
+      - "线性同余算法"
 
 jrrp:
   description: "查看今日人品"
@@ -45,7 +54,7 @@ jrrp:
     jrrp
   messages:
     result: "{1} 你今天的人品值是：{0}"
-    prompt: "要查看今天的人品值吗？(回复'是'或'y'确认)"
+    prompt: "该日期为特殊日期，请在10秒内回复确认继续"
     cancel: "好的，祝您今天愉快！"
     range:
       1: "……（是百分制哦）"

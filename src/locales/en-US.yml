@@ -36,6 +36,16 @@ _config:
   autoLikeTime:
     $desc: "Auto-like Time"
     $inner: "Daily auto-like time (format: HH:MM)"
+  choice:
+    $desc: "jrrp Algorithm Choice"
+    $inner:
+      - "Modulo Algorithm"
+      - "Normal Distribution Algorithm"
+      - "Linear Congruential Generator Algorithm"
+
+  notifyAccount:
+    $desc: "Like Result Notification Account"
+    $inner: "QQ number, like results will be sent to this account via private message"
 
 jrrp:
   description: "Check Today's Luck Rating"
@@ -46,7 +56,7 @@ jrrp:
     jrrp
   messages:
     result: "{1}, your luck rating today is: {0}"
-    prompt: "Do you want to check your luck rating today? (Reply 'y' to confirm)"
+    prompt: "This is a special date, please reply within 10 seconds to confirm"
     cancel: "Okay, have a nice day!"
     range:
       1: "...(It's on a 100-point scale)"
