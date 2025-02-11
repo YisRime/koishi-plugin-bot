@@ -3,7 +3,6 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
-import { pathToFileURL } from 'url';  // 添加在文件顶部的导入部分
 
 // 基础定义
 export const name = 'best-cave';
@@ -792,8 +791,8 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           if (imgElement.file) {
             const filePath = path.join(resourceDir, imgElement.file);
             if (fs.existsSync(filePath)) {
-              // 使用pathToFileURL来正确构建文件URL
-              const fileUrl = pathToFileURL(filePath).href;
+              // 使用 encodeURI 确保文件路径正确编码
+              const fileUrl = encodeURI(`file:/${filePath}`);
               lines.push(String(h('image', { src: fileUrl })));
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
@@ -822,16 +821,17 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     if (videoElements.length > 0) {
       lines.push(session.text('commands.cave.message.videoSending'));
 
-      // 异步发送视频并使用pathToFileURL
+      // 异步发送视频
       for (const videoElement of videoElements) {
         if (videoElement.file && session) {
           const filePath = path.join(resourceDir, videoElement.file);
           if (fs.existsSync(filePath)) {
-            const fileUrl = pathToFileURL(filePath).href;
-            await session.send(h('video', { src: fileUrl }))
-              .catch(error => {
-                logger.error('Failed to send video:', error);
-              });
+            const fileUrl = encodeURI(`file:/${filePath}`);
+            await session.send(h('video', {
+              src: fileUrl
+            })).catch(error => {
+              logger.error('Failed to send video:', error);
+            });
           }
         }
       }
