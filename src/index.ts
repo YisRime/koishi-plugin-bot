@@ -3,6 +3,7 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
+import LRU from 'lru-cache';
 
 // 基础定义
 export const name = 'best-cave';
@@ -294,7 +295,7 @@ export async function apply(ctx: Context, config: Config) {
             session
           );
         } catch (error) {
-          return sendMessage(session, 'commands.cave.error.uploadImageFailed', [], true);
+          return error.message;  // 直接使用转换后的错误消息
         }
       }
 
@@ -315,46 +316,28 @@ export async function apply(ctx: Context, config: Config) {
             session
           );
         } catch (error) {
-          return sendMessage(session, 'commands.cave.error.uploadVideoFailed', [], true);
+          return error.message;  // 直接使用转换后的错误消息
         }
       }
 
-      // 合并所有元素：文本/图片/视频
-      const elements: Element[] = [];
-      elements.push(...textParts);
-      savedImages.forEach((file, idx) => {
-        if (imageElements[idx]) {
-          elements.push({ ...imageElements[idx], type: 'img', file });
-        }
-      });
-      savedVideos.forEach((file, idx) => {
-        if (videoElements[idx]) {
-          elements.push({ ...videoElements[idx], type: 'video', file });
-        }
-      });
-      elements.sort((a, b) => a.index - b.index);
-
-      // 获取投稿者信息保持不变
-      let contributorName = session.username;
-      if (ctx.database) {
-        try {
-          const userInfo = await ctx.database.getUser(session.platform, session.userId);
-          contributorName = (userInfo as unknown as User)?.nickname || session.username;
-        } catch (error) {
-          return sendMessage(
-            session,
-            'commands.cave.error.userInfo',
-            [error.message],
-            true
-          );
-        }
-      }
+      // 合并所有元素时保持原始顺序
+      const elements: Element[] = [
+        ...textParts,
+        ...imageElements.map((el, idx) => ({
+          ...el,
+          file: savedImages[idx],
+        })),
+        ...videoElements.map((el, idx) => ({
+          ...el,
+          file: savedVideos[idx],
+        }))
+      ].sort((a, b) => a.index - b.index);
 
       const newCave: CaveObject = {
         cave_id: caveId,
-        elements: cleanElementsForSave(elements, true),
+        elements: cleanElementsForSave(elements, true), // 保存时保留索引信息
         contributor_number: session.userId,
-        contributor_name: contributorName
+        contributor_name: session.username
       };
 
       // 判断是否绕过审核：白名单包括用户、群组和频道
@@ -529,6 +512,21 @@ class FileHandler {
   static async ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
     !fs.existsSync(filePath) && await fs.promises.writeFile(filePath, defaultContent, 'utf8');
   }
+
+  static async batchWriteFiles(operations: Array<{
+    filePath: string,
+    data: any,
+    session: any
+  }>): Promise<void> {
+    return BatchProcessor.addToBatch('fileWrite', operations, async (items) => {
+      const results = await Promise.all(
+        items.map(({ filePath, data, session }) =>
+          this.writeJsonData(filePath, data, session)
+        )
+      );
+      return results;
+    });
+  }
 }
 
 // -------- 图片及视频处理函数 --------
@@ -548,7 +546,7 @@ async function saveMedia(
     : { ext: 'mp4', accept: 'video/*', maxSize: config.videoMaxSize };
   const extPattern = /\.[a-zA-Z0-9]+$/;
 
-  const downloadPromises = urls.map(async (url, i) => {
+  const downloadTasks = urls.map(async (url, i) => {
     try {
       const processedUrl = (() => {
         try {
@@ -563,26 +561,22 @@ async function saveMedia(
       const fileName = fileNames[i];
       const fileSize = fileSizes[i];
 
-      // 检查文件大小
       if (fileSize) {
         const sizeInBytes = parseInt(fileSize);
         if (sizeInBytes > defaults.maxSize * 1024 * 1024) {
-          logger.warn(session.text('commands.cave.message.mediaSizeExceeded', [mediaType]));
-          return null;
+          logger.warn(`${mediaType} size exceeded: ${sizeInBytes} bytes`);
+          throw new Error('file_size_exceeded');
         }
       }
 
-      // 处理文件名和扩展名
       if (fileName && extPattern.test(fileName)) {
         ext = fileName.match(extPattern)![0].slice(1);
       }
 
-      // 生成最终的文件名
       const finalFileName = fileName
         ? `${caveId}_${path.basename(fileName)}`
         : `${caveId}_${i + 1}.${ext}`;
 
-      // ...其余下载和保存逻辑保持不变...
       const targetPath = path.join(resourceDir, finalFileName);
       const response = await ctx.http(processedUrl, {
         method: 'GET',
@@ -595,20 +589,38 @@ async function saveMedia(
         }
       });
 
+      if (!response.data) {
+        throw new Error('empty_response');
+      }
+
       const fileBuffer = Buffer.from(response.data);
       await fs.promises.writeFile(targetPath, fileBuffer);
       return finalFileName;
     } catch (error) {
-      const errorKey = mediaType === 'img'
-        ? 'commands.cave.error.uploadImageFailed' // 修改合并后的错误键
-        : 'commands.cave.error.uploadVideoFailed';
-      await sendTempMessage(session, errorKey);
-      return null;
+      // 记录详细错误信息
+      logger.error(`Failed to process ${mediaType} (${url}):`, error);
+      if (error.message === 'file_size_exceeded') {
+        throw new Error(session.text('commands.cave.message.mediaSizeExceeded', [mediaType]));
+      }
+      throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
     }
   });
 
-  const results = await Promise.all(downloadPromises);
-  return results.filter((name): name is string => name !== null);
+  // 使用 allSettled 而不是 all，以便更好地处理部分失败的情况
+  const results = await Promise.allSettled(downloadTasks);
+  const successfulResults = results
+    .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
+    .map(result => result.value);
+
+  if (successfulResults.length === 0 && results.length > 0) {
+    // 如果所有任务都失败，抛出第一个错误
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (firstError) {
+      throw firstError.reason;
+    }
+  }
+
+  return successfulResults;
 }
 
 // -------- 审核相关函数 --------
@@ -818,7 +830,7 @@ async function extractMediaContent(originalContent: string): Promise<{
   });
 
   // 提取 <video> 标签中的 src 与 file 属性
-  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"[^>]*>/g) || [];
+  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"/g) || [];
   videoMatches.forEach((video, idx) => {
     const srcMatch = video.match(/src="([^"]+)"/);
     const fileName = video.match(/file="([^"]+)"/)?.[1];
@@ -832,95 +844,155 @@ async function extractMediaContent(originalContent: string): Promise<{
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
 
-async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
-  // 构建回声洞消息文本，并处理视频的单独发送
-  let content = session.text('commands.cave.message.caveTitle', [cave.cave_id]) + '\n';
-  const videoElements: { file: string }[] = [];
-  for (const element of cave.elements) {
-    if (element.type === 'text') {
-      // 追加文本段落
-      content += element.content + '\n';
-    } else if (element.type === 'img' && element.file) {
-      const fullImagePath = path.join(resourceDir, element.file);
-      if (fs.existsSync(fullImagePath)) {
-        try {
-          const imageBuffer = fs.readFileSync(fullImagePath);
-          content += h('image', { src: `data:image/png;base64,${imageBuffer.toString('base64')}` }) + '\n';
-        } catch (error) {
-          content += session.text('commands.cave.error.mediaLoadFailed', ['图片']) + '\n';
-        }
-      } else {
-        content += session.text('commands.cave.message.mediaInvalid', ['图片']) + '\n';
-      }
-    } else if (element.type === 'video' && element.file) {
-      // 将视频元素存入数组，待后续单独发送
-      videoElements.push({ file: element.file });
-    }
+// 添加统一的媒体处理函数
+async function processMediaFile(
+  filePath: string,
+  mediaType: 'image' | 'video',
+  session: any
+): Promise<string | null> {
+  if (!fs.existsSync(filePath)) {
+    logger.warn(`${mediaType} file not found: ${filePath}`);
+    return null;
   }
-  if (videoElements.length > 0 && session) {
-    // 通知用户视频已单独发送
-    content += session.text('commands.cave.message.videoSending') + '\n';
-    for (const video of videoElements) {
-      const fullVideoPath = path.join(resourceDir, video.file);
-      if (fs.existsSync(fullVideoPath)) {
-        try {
-          const videoBuffer = fs.readFileSync(fullVideoPath);
-          // 不等待 session.send 完成，异步发送视频消息
-          session.send(h('video', { src: `data:video/mp4;base64,${videoBuffer.toString('base64')}` }))
-            .catch((error) => logger.warn(session.text('commands.cave.error.videoSendFailed'), error.message));
-        } catch (error) {
-          content += session.text('commands.cave.error.mediaLoadFailed', ['视频']) + '\n';
-        }
-      } else {
-        content += session.text('commands.cave.message.mediaInvalid', ['视频']) + '\n';
-      }
-    }
+
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const mimeType = mediaType === 'image' ? 'image/png' : 'video/mp4';
+    return `data:${mimeType};base64,${buffer.toString('base64')}`;
+  } catch (error) {
+    logger.error(`Failed to process ${mediaType} file:`, error);
+    return null;
   }
-  content += session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]);
-  return content;
 }
 
-// -------- 主业务函数 --------
-// 删除原有的 handleCaveAction 函数
+async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
+  try {
+    let content = session.text('commands.cave.message.caveTitle', [cave.cave_id]) + '\n';
 
-// 添加缓存管理类
-class CacheManager {
-  private static caveDataCache: CaveObject[] | null = null;
-  private static pendingDataCache: PendingCave[] | null = null;
-  private static cacheTimeout = 5 * 60 * 1000; // 5分钟缓存
-  private static lastCaveUpdate = 0;
-  private static lastPendingUpdate = 0;
+    // 首先按索引排序所有元素
+    const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
 
-  static clearCache() {
-    this.caveDataCache = null;
-    this.pendingDataCache = null;
+    // 分开处理文本和媒体元素
+    for (const element of sortedElements) {
+      switch (element.type) {
+        case 'text':
+          content += element.content + '\n';
+          break;
+
+        case 'img':
+          if (element.file) {
+            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'image', session);
+            content += base64Data
+              ? h('image', { src: base64Data }) + '\n'
+              : session.text('commands.cave.error.mediaLoadFailed', ['图片']) + '\n';
+          }
+          break;
+
+        case 'video':
+          if (element.file && session) {
+            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'video', session);
+            if (base64Data) {
+              await session.send(h('video', { src: base64Data }))
+                .catch(error => {
+                  logger.error('Failed to send video:', error);
+                });
+            }
+          }
+          break;
+      }
+    }
+
+    // 添加投稿者信息
+    content += session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]);
+
+    // 如果包含视频，添加提示信息
+    if (sortedElements.some(el => el.type === 'video')) {
+      content += '\n' + session.text('commands.cave.message.videoSending');
+    }
+
+    return content;
+
+  } catch (error) {
+    logger.error('Error building message:', error);
+    return session.text('commands.cave.error.messageBuildFailed', [error.message]);
   }
+}
+
+// 简化 CacheManager 类
+class CacheManager {
+  private static cache = new LRU<string, any>({
+    max: 500,
+    maxAge: 5 * 60 * 1000 // 5分钟过期
+  });
 
   static async getCaveData(filePath: string, session: any): Promise<CaveObject[]> {
-    const now = Date.now();
-    if (!this.caveDataCache || now - this.lastCaveUpdate > this.cacheTimeout) {
-      this.caveDataCache = await FileHandler.readJsonData<CaveObject>(filePath, session);
-      this.lastCaveUpdate = now;
+    const cacheKey = `cave:${filePath}`;
+    let data = this.cache.get(cacheKey);
+
+    if (!data) {
+      data = await FileHandler.readJsonData<CaveObject>(filePath, session);
+      this.cache.set(cacheKey, data);
     }
-    return this.caveDataCache;
+
+    return data;
   }
 
   static async getPendingData(filePath: string, session: any): Promise<PendingCave[]> {
-    const now = Date.now();
-    if (!this.pendingDataCache || now - this.lastPendingUpdate > this.cacheTimeout) {
-      this.pendingDataCache = await FileHandler.readJsonData<PendingCave>(filePath, session);
-      this.lastPendingUpdate = now;
+    const cacheKey = `pending:${filePath}`;
+    let data = this.cache.get(cacheKey);
+
+    if (!data) {
+      data = await FileHandler.readJsonData<PendingCave>(filePath, session);
+      this.cache.set(cacheKey, data);
     }
-    return this.pendingDataCache;
+
+    return data;
   }
 
-  static updateCaveData(data: CaveObject[]) {
-    this.caveDataCache = data;
-    this.lastCaveUpdate = Date.now();
+  // 仅保留必要的缓存清理方法
+  static clearCache() {
+    this.cache.clear();
+  }
+}
+
+// 添加批处理管理器
+class BatchProcessor {
+  private static batchQueue = new Map<string, Array<{
+    data: any,
+    resolve: (value: any) => void,
+    reject: (reason: any) => void
+  }>>();
+  private static batchTimeout = 100; // 100ms 批处理窗口
+
+  static async addToBatch<T>(
+    key: string,
+    data: any,
+    processor: (items: any[]) => Promise<T[]>
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      if (!this.batchQueue.has(key)) {
+        this.batchQueue.set(key, []);
+        setTimeout(() => this.processBatch(key, processor), this.batchTimeout);
+      }
+      this.batchQueue.get(key)!.push({ data, resolve, reject });
+    });
   }
 
-  static updatePendingData(data: PendingCave[]) {
-    this.pendingDataCache = data;
-    this.lastPendingUpdate = Date.now();
+  private static async processBatch(
+    key: string,
+    processor: (items: any[]) => Promise<any[]>
+  ) {
+    const batch = this.batchQueue.get(key) || [];
+    this.batchQueue.delete(key);
+
+    try {
+      // 处理批次
+      const items = batch.map(item => item.data);
+      const results = await processor(items);
+      // 分发结果
+      batch.forEach((item, index) => item.resolve(results[index]));
+    } catch (error) {
+      batch.forEach(item => item.reject(error));
+    }
   }
 }
