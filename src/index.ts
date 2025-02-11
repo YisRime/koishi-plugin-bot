@@ -3,6 +3,7 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';  // 添加在文件顶部的导入部分
 
 // 基础定义
 export const name = 'best-cave';
@@ -365,12 +366,12 @@ export async function apply(ctx: Context, config: Config) {
     .before(async ({ session, options }) => {
       // 黑名单检查
       if (config.blacklist.includes(session.userId)) {
-        return sendTempMessage(session, 'commands.cave.message.blacklisted');
+        return sendMessage(session, 'commands.cave.message.blacklisted', [], true);
       }
       // 如果输入内容包含 "-help"，不进行权限检查
       if (session.content && session.content.includes('-help')) return;
       if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
-        return sendTempMessage(session, 'commands.cave.message.managerOnly');
+        return sendMessage(session, 'commands.cave.message.managerOnly', [], true);
       }
     })
     .action(async ({ session, options }, ...content) => {
@@ -578,18 +579,15 @@ async function saveMedia(
         ext = fileName.match(extPattern)![0].slice(1);
       }
 
-      // 清理文件名中的特殊字符
+      // 清理文件名，直接删除特殊字符
       const sanitizeFileName = (name: string) => {
-        // 移除或替换可能导致问题的字符
         return name
-          .replace(/[{}\[\]()<>%$#@!^&*+=|/\\:;"'`,?]/g, '_') // 替换特殊字符为下划线
-          .replace(/\s+/g, '_') // 替换空格为下划线
-          .replace(/__+/g, '_') // 合并多个下划线
-          .replace(/^_+|_+$/g, ''); // 移除首尾下划线
+          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '') // 只保留中文、英文、数字
+          .toLowerCase();                              // 转换为小写
       };
 
       const finalFileName = fileName
-        ? `${caveId}_${sanitizeFileName(path.basename(fileName))}`
+        ? `${caveId}_${sanitizeFileName(path.basename(fileName, path.extname(fileName)))}.${ext}`
         : `${caveId}_${i + 1}.${ext}`;
 
       const targetPath = path.join(resourceDir, finalFileName);
@@ -682,7 +680,7 @@ async function handleSingleCaveAudit(
     }
     return true;
   } catch (error) {
-    return sendTempMessage(session, 'commands.cave.error.auditProcess', [error.message]);
+    return sendMessage(session, 'commands.cave.error.auditProcess', [error.message], true);
   }
 }
 
@@ -794,8 +792,8 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           if (imgElement.file) {
             const filePath = path.join(resourceDir, imgElement.file);
             if (fs.existsSync(filePath)) {
-              // 使用 encodeURI 确保文件路径正确编码
-              const fileUrl = encodeURI(`file://${filePath}`);
+              // 使用pathToFileURL来正确构建文件URL
+              const fileUrl = pathToFileURL(filePath).href;
               lines.push(String(h('image', { src: fileUrl })));
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
@@ -824,17 +822,16 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     if (videoElements.length > 0) {
       lines.push(session.text('commands.cave.message.videoSending'));
 
-      // 异步发送视频
+      // 异步发送视频并使用pathToFileURL
       for (const videoElement of videoElements) {
         if (videoElement.file && session) {
           const filePath = path.join(resourceDir, videoElement.file);
           if (fs.existsSync(filePath)) {
-            const fileUrl = encodeURI(`file://${filePath}`);
-            await session.send(h('video', {
-              src: fileUrl
-            })).catch(error => {
-              logger.error('Failed to send video:', error);
-            });
+            const fileUrl = pathToFileURL(filePath).href;
+            await session.send(h('video', { src: fileUrl }))
+              .catch(error => {
+                logger.error('Failed to send video:', error);
+              });
           }
         }
       }
@@ -849,21 +846,18 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
 }
 
 // 添加辅助函数到文件开头的函数定义区域
-async function sendTempMessage(session: any, key: string, params: any[] = [], timeout = 10000): Promise<string> {
-  const msg = await session.send(session.text(key, params));
-  setTimeout(async () => {
-    try {
-      await session.bot.deleteMessage(session.channelId, msg);
-    } catch (error) {
-      logger.error('Failed to delete message:', error);
-    }
-  }, timeout);
-  return '';  // 返回空字符串避免重复发送
-}
-
 const messageQueue = new Map<string, Promise<void>>();
-async function sendMessage(session: any, key: string, params: any[] = [], isTemp = true, timeout = 10000): Promise<string> {
+async function sendMessage(
+  session: any,
+  key: string,
+  params: any[] = [],
+  isTemp = true,
+  timeout = 10000
+): Promise<string> {
   const channelId = session.channelId;
+  if (!messageQueue.has(channelId)) {
+    messageQueue.set(channelId, Promise.resolve());
+  }
 
   const sendOperation = async () => {
     const msg = await session.send(session.text(key, params));
@@ -877,10 +871,6 @@ async function sendMessage(session: any, key: string, params: any[] = [], isTemp
       }, timeout);
     }
   };
-
-  if (!messageQueue.has(channelId)) {
-    messageQueue.set(channelId, Promise.resolve());
-  }
 
   const currentPromise = messageQueue.get(channelId)!
     .then(sendOperation)
@@ -943,27 +933,6 @@ async function extractMediaContent(originalContent: string): Promise<{
   });
 
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
-}
-
-// 添加统一的媒体处理函数
-async function processMediaFile(
-  filePath: string,
-  mediaType: 'image' | 'video',
-  session: any
-): Promise<string | null> {
-  if (!fs.existsSync(filePath)) {
-    logger.warn(`${mediaType} file not found: ${filePath}`);
-    return null;
-  }
-
-  try {
-    const buffer = fs.readFileSync(filePath);
-    const mimeType = mediaType === 'image' ? 'image/png' : 'video/mp4';
-    return `data:${mimeType};base64,${buffer.toString('base64')}`;
-  } catch (error) {
-    logger.error(`Failed to process ${mediaType} file:`, error);
-    return null;
-  }
 }
 
 // 添加批处理管理器
