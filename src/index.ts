@@ -3,7 +3,6 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
-import LRU from 'lru-cache';
 
 // 基础定义
 export const name = 'best-cave';
@@ -46,7 +45,6 @@ export async function apply(ctx: Context, config: Config) {
 
   const lastUsed: Map<string, number> = new Map();
 
-  // 提取为独立函数
   async function processList(
     caveFilePath: string,
     session: any,
@@ -54,7 +52,7 @@ export async function apply(ctx: Context, config: Config) {
     options: any,
     config: Config
   ): Promise<string> {
-    const caveData = await CacheManager.getCaveData(caveFilePath, session);
+    const caveData = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
     const caveDir = path.dirname(caveFilePath);
     const stats: Record<string, number[]> = {};
     for (const cave of caveData) {
@@ -68,7 +66,6 @@ export async function apply(ctx: Context, config: Config) {
       return session.text('commands.cave.list.totalItems', [cid, ids.length]) + '\n' +
              session.text('commands.cave.list.idsLine', [ids.join(',')]);
     });
-    // 修改处：计算总投稿数
     const totalSubmissions = Object.values(stats).reduce((sum, arr) => sum + arr.length, 0);
     if (config.enablePagination) {
       const itemsPerPage = config.itemsPerPage;
@@ -79,7 +76,6 @@ export async function apply(ctx: Context, config: Config) {
       if (pageNum > totalPages) pageNum = totalPages;
       const start = (pageNum - 1) * itemsPerPage;
       const paginatedLines = lines.slice(start, start + itemsPerPage);
-      // 调整返回顺序：先统计头部和分页数据，再显示分页信息
       return session.text('commands.cave.list.header', [totalSubmissions]) + '\n' +
              paginatedLines.join('\n') + '\n' +
              session.text('commands.cave.list.pageInfo', [pageNum, totalPages]);
@@ -98,7 +94,7 @@ export async function apply(ctx: Context, config: Config) {
     options: any,
     content: string[]
   ): Promise<string> {
-    const pendingData = await CacheManager.getPendingData(pendingFilePath, session);
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
     const isApprove = Boolean(options.p);
     if ((options.p === true && content[0] === 'all') ||
         (options.d === true && content[0] === 'all')) {
@@ -122,11 +118,9 @@ export async function apply(ctx: Context, config: Config) {
   ): Promise<string> {
     const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
-    const data = await CacheManager.getCaveData(caveFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
     const cave = data.find(item => item.cave_id === caveId);
     if (!cave) return sendMessage(session, 'commands.cave.error.notFound', [], true);
-
-    // 调用修改后的 buildMessage 发送视频消息内部处理
     const caveContent = await buildMessage(cave, resourceDir, session);
     return caveContent;
   }
@@ -139,8 +133,7 @@ export async function apply(ctx: Context, config: Config) {
     lastUsed: Map<string, number>
   ): Promise<string | void> {
     try {
-      // 抽取符合条件的随机回声洞
-      const data = await CacheManager.getCaveData(caveFilePath, session);
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
       if (data.length === 0) {
         return sendMessage(session, 'commands.cave.error.noCave', [], true);
       }
@@ -177,8 +170,8 @@ export async function apply(ctx: Context, config: Config) {
   ): Promise<string> {
     const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
-    const data = await CacheManager.getCaveData(caveFilePath, session);
-    const pendingData = await CacheManager.getPendingData(pendingFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
     const index = data.findIndex(item => item.cave_id === caveId);
     const pendingIndex = pendingData.findIndex(item => item.cave_id === caveId);
     if (index === -1 && pendingIndex === -1) return sendMessage(session, 'commands.cave.error.notFound', [], true);
@@ -268,8 +261,8 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       // 生成新的回声洞ID及处理媒体文件
-      const pendingData = await CacheManager.getPendingData(pendingFilePath, session);
-      const data = await CacheManager.getCaveData(caveFilePath, session);
+      const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
 
       // 修复获取maxid问题：检测中间是否有空缺，使用最小可用ID
       const usedIds = new Set<number>([...data.map(item => item.cave_id), ...pendingData.map(item => item.cave_id)]);
@@ -442,12 +435,24 @@ export interface Config {
 }
 
 // 定义数据类型接口
-interface Element {
+interface BaseElement {
   type: 'text' | 'img' | 'video';
-  content?: string;      // 文本内容
-  file?: string;         // 图片或视频文件名
-  index: number;         // 排序索引
+  index: number;
 }
+
+interface TextElement extends BaseElement {
+  type: 'text';
+  content: string;
+}
+
+interface MediaElement extends BaseElement {
+  type: 'img' | 'video';
+  file?: string;
+  fileName?: string;
+  fileSize?: string;
+}
+
+type Element = TextElement | MediaElement;
 
 // 定义回声洞数据结构
 interface CaveObject {
@@ -736,14 +741,89 @@ async function handleAudit(
 
 // -------- 消息构建函数 --------
 function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
-  // 清理元素对象，移除无关属性，并排序
-  const sorted = elements.sort((a, b) => a.index - b.index);
-  return sorted.map(({ type, content, file, index }) => ({
-    type,
-    ...(keepIndex && { index }),
-    ...(content && { content }),
-    ...(file && { file })
-  }));
+  if (!elements?.length) return [];
+
+  // 深拷贝以避免修改原数组
+  const cleanedElements = elements.map(element => {
+    if (element.type === 'text') {
+      return { type: 'text' as const, index: element.index, content: (element as TextElement).content } as TextElement;
+    } else if (element.type === 'img' || element.type === 'video') {
+      const mediaElement = element as MediaElement;
+      if (mediaElement.file) {
+        return { type: element.type as 'img' | 'video', index: element.index, file: mediaElement.file } as MediaElement;
+      } else {
+        return { type: element.type as 'img' | 'video', index: element.index } as MediaElement;
+      }
+    }
+    return element;
+  });
+  return cleanedElements.sort((a, b) => a.index - b.index);
+}
+
+async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
+  if (!cave?.elements?.length) {
+    return session.text('commands.cave.error.noContent');
+  }
+
+  try {
+    const lines: string[] = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
+    const videoElements: MediaElement[] = [];
+
+    // 按索引排序并处理元素
+    const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
+
+    for (const element of sortedElements) {
+      switch (element.type) {
+        case 'text':
+          lines.push((element as TextElement).content);
+          break;
+
+        case 'img':
+          const imgElement = element as MediaElement;
+          if (imgElement.file) {
+            const filePath = path.join(resourceDir, imgElement.file);
+            if (fs.existsSync(filePath)) {
+              lines.push(String(h('image', { src: new URL(`file://${filePath}`).href })));
+            } else {
+              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
+            }
+          }
+          break;
+
+        case 'video':
+          videoElements.push(element as MediaElement);
+          break;
+      }
+    }
+
+    // 添加投稿者信息
+    lines.push(session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]));
+
+    // 如果存在视频元素，添加提示并发送视频
+    if (videoElements.length > 0) {
+      lines.push(session.text('commands.cave.message.videoSending'));
+
+      // 异步发送视频
+      for (const videoElement of videoElements) {
+        if (videoElement.file && session) {
+          const filePath = path.join(resourceDir, videoElement.file);
+          if (fs.existsSync(filePath)) {
+            await session.send(h('video', {
+              src: new URL(`file://${filePath}`).href
+            })).catch(error => {
+              logger.error('Failed to send video:', error);
+            });
+          }
+        }
+      }
+    }
+
+    return lines.join('\n');
+
+  } catch (error) {
+    logger.error('Error building message:', error);
+    return session.text('commands.cave.error.messageBuildFailed', [error.message]);
+  }
 }
 
 // 添加辅助函数到文件开头的函数定义区域
@@ -759,7 +839,6 @@ async function sendTempMessage(session: any, key: string, params: any[] = [], ti
   return '';  // 返回空字符串避免重复发送
 }
 
-// 修改 sendMessage 函数替换原有的 sendTempMessage
 const messageQueue = new Map<string, Promise<void>>();
 async function sendMessage(session: any, key: string, params: any[] = [], isTemp = true, timeout = 10000): Promise<string> {
   const channelId = session.channelId;
@@ -862,96 +941,6 @@ async function processMediaFile(
   } catch (error) {
     logger.error(`Failed to process ${mediaType} file:`, error);
     return null;
-  }
-}
-
-async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
-  try {
-    let content = session.text('commands.cave.message.caveTitle', [cave.cave_id]) + '\n';
-
-    // 首先按索引排序所有元素
-    const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
-
-    // 分开处理文本和媒体元素
-    for (const element of sortedElements) {
-      switch (element.type) {
-        case 'text':
-          content += element.content + '\n';
-          break;
-
-        case 'img':
-          if (element.file) {
-            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'image', session);
-            content += base64Data
-              ? h('image', { src: base64Data }) + '\n'
-              : session.text('commands.cave.error.mediaLoadFailed', ['图片']) + '\n';
-          }
-          break;
-
-        case 'video':
-          if (element.file && session) {
-            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'video', session);
-            if (base64Data) {
-              await session.send(h('video', { src: base64Data }))
-                .catch(error => {
-                  logger.error('Failed to send video:', error);
-                });
-            }
-          }
-          break;
-      }
-    }
-
-    // 添加投稿者信息
-    content += session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]);
-
-    // 如果包含视频，添加提示信息
-    if (sortedElements.some(el => el.type === 'video')) {
-      content += '\n' + session.text('commands.cave.message.videoSending');
-    }
-
-    return content;
-
-  } catch (error) {
-    logger.error('Error building message:', error);
-    return session.text('commands.cave.error.messageBuildFailed', [error.message]);
-  }
-}
-
-// 简化 CacheManager 类
-class CacheManager {
-  private static cache = new LRU<string, any>({
-    max: 500,
-    maxAge: 5 * 60 * 1000 // 5分钟过期
-  });
-
-  static async getCaveData(filePath: string, session: any): Promise<CaveObject[]> {
-    const cacheKey = `cave:${filePath}`;
-    let data = this.cache.get(cacheKey);
-
-    if (!data) {
-      data = await FileHandler.readJsonData<CaveObject>(filePath, session);
-      this.cache.set(cacheKey, data);
-    }
-
-    return data;
-  }
-
-  static async getPendingData(filePath: string, session: any): Promise<PendingCave[]> {
-    const cacheKey = `pending:${filePath}`;
-    let data = this.cache.get(cacheKey);
-
-    if (!data) {
-      data = await FileHandler.readJsonData<PendingCave>(filePath, session);
-      this.cache.set(cacheKey, data);
-    }
-
-    return data;
-  }
-
-  // 仅保留必要的缓存清理方法
-  static clearCache() {
-    this.cache.clear();
   }
 }
 
