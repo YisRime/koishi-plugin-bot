@@ -578,11 +578,22 @@ async function saveMedia(
         ext = fileName.match(extPattern)![0].slice(1);
       }
 
+      // 清理文件名中的特殊字符
+      const sanitizeFileName = (name: string) => {
+        // 移除或替换可能导致问题的字符
+        return name
+          .replace(/[{}\[\]()<>%$#@!^&*+=|/\\:;"'`,?]/g, '_') // 替换特殊字符为下划线
+          .replace(/\s+/g, '_') // 替换空格为下划线
+          .replace(/__+/g, '_') // 合并多个下划线
+          .replace(/^_+|_+$/g, ''); // 移除首尾下划线
+      };
+
       const finalFileName = fileName
-        ? `${caveId}_${path.basename(fileName)}`
+        ? `${caveId}_${sanitizeFileName(path.basename(fileName))}`
         : `${caveId}_${i + 1}.${ext}`;
 
       const targetPath = path.join(resourceDir, finalFileName);
+
       const response = await ctx.http(processedUrl, {
         method: 'GET',
         responseType: 'arraybuffer',
@@ -783,7 +794,9 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           if (imgElement.file) {
             const filePath = path.join(resourceDir, imgElement.file);
             if (fs.existsSync(filePath)) {
-              lines.push(String(h('image', { src: new URL(`file://${filePath}`).href })));
+              // 使用 encodeURI 确保文件路径正确编码
+              const fileUrl = encodeURI(`file://${filePath}`);
+              lines.push(String(h('image', { src: fileUrl })));
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
             }
@@ -791,7 +804,15 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           break;
 
         case 'video':
-          videoElements.push(element as MediaElement);
+          const videoElement = element as MediaElement;
+          if (videoElement.file) {
+            const filePath = path.join(resourceDir, videoElement.file);
+            if (fs.existsSync(filePath)) {
+              videoElements.push(videoElement);
+            } else {
+              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['视频']));
+            }
+          }
           break;
       }
     }
@@ -808,8 +829,9 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         if (videoElement.file && session) {
           const filePath = path.join(resourceDir, videoElement.file);
           if (fs.existsSync(filePath)) {
+            const fileUrl = encodeURI(`file://${filePath}`);
             await session.send(h('video', {
-              src: new URL(`file://${filePath}`).href
+              src: fileUrl
             })).catch(error => {
               logger.error('Failed to send video:', error);
             });
