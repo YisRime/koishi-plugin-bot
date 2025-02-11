@@ -792,7 +792,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
             const filePath = path.join(resourceDir, imgElement.file);
             if (fs.existsSync(filePath)) {
               // 使用 encodeURI 确保文件路径正确编码
-              const fileUrl = encodeURI(`file:/${filePath}`);
+              const fileUrl = encodeURI(`file:${filePath}`);
               lines.push(String(h('image', { src: fileUrl })));
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
@@ -826,7 +826,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         if (videoElement.file && session) {
           const filePath = path.join(resourceDir, videoElement.file);
           if (fs.existsSync(filePath)) {
-            const fileUrl = encodeURI(`file:/${filePath}`);
+            const fileUrl = encodeURI(`file:${filePath}`);
             await session.send(h('video', {
               src: fileUrl
             })).catch(error => {
