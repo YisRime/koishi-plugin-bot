@@ -792,12 +792,21 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         case 'img':
           const imgElement = element as MediaElement;
           if (imgElement.file) {
-            // 修改：使用完整的绝对路径
             const imgPath = path.resolve(resourceDir, imgElement.file);
             if (fs.existsSync(imgPath)) {
               try {
+                // 使用 booru-local 风格的 URL 转换
                 const url = pathToFileURL(imgPath).href;
-                lines.push(String(h('image', { src: url })));
+                lines.push(String(h('image', {
+                  src: url,
+                  // 添加额外的图片处理参数
+                  cache: true,
+                  timeout: 30000,
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    'Accept': 'image/*'
+                  }
+                })));
               } catch (error) {
                 logger.error('Image path error:', error);
                 lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
