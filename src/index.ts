@@ -92,32 +92,15 @@ export async function apply(ctx: Context, config: Config) {
     const caveData = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
     const caveDir = path.dirname(caveFilePath);
     const stats: Record<string, number[]> = {};
-    const deletedIds: number[] = [];
-    let maxId = 0;
 
-    // 处理 cave 数据,收集统计信息和计算最大ID
+    // 处理 cave 数据,收集统计信息
     for (const cave of caveData) {
       if (cave.contributor_number === '10000') continue;
       if (!stats[cave.contributor_number]) stats[cave.contributor_number] = [];
       stats[cave.contributor_number].push(cave.cave_id);
-      maxId = Math.max(maxId, cave.cave_id);
     }
 
-    // 查找所有缺失的ID
-    const usedIds = new Set(caveData.map(cave => cave.cave_id));
-    for (let i = 1; i <= maxId; i++) {
-      if (!usedIds.has(i)) {
-        deletedIds.push(i);
-      }
-    }
-
-    // 将统计信息和删除的ID一起写入stat.json
-    const statData = {
-      stats,
-      deletedIds,
-      maxId,
-      lastUpdated: new Date().toISOString()
-    };
+    const statData = { stats };
     const statFilePath = path.join(caveDir, 'stat.json');
     await fs.promises.writeFile(statFilePath, JSON.stringify(statData, null, 2), 'utf8');
 
@@ -666,7 +649,7 @@ class IdManager {
       // 读取现有状态
       const idData = fs.existsSync(this.idFilePath) ?
         JSON.parse(await fs.promises.readFile(this.idFilePath, 'utf8')) :
-        { deletedIds: [], maxId: 0 };
+        { deletedIds: [], maxId: 0, lastUpdated: new Date().toISOString() };
 
       // 加载数据
       const [caveData, pendingData] = await Promise.all([
@@ -681,7 +664,10 @@ class IdManager {
       ]);
 
       // 更新状态
-      this.maxId = Math.max(...usedIds, idData.maxId, 0);
+      const caveMaxId = usedIds.size > 0 ? Math.max(...Array.from(usedIds)) : 0;
+      this.maxId = Math.max(caveMaxId, idData.maxId || 0);
+
+      // 重新生成已删除ID列表
       this.deletedIds = new Set(
         Array.from({length: this.maxId}, (_, i) => i + 1)
           .filter(id => !usedIds.has(id))
