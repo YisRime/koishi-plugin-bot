@@ -659,87 +659,72 @@ class IdManager {
     this.statFilePath = path.join(baseDir, 'data', 'cave', 'stat.json');
   }
 
-  private async loadFromStatFile(): Promise<void> {
-    if (!fs.existsSync(this.statFilePath)) {
-      return;
-    }
-    const data = await fs.promises.readFile(this.statFilePath, 'utf8');
-    const { deletedIds, maxId } = JSON.parse(data);
-    this.deletedIds = new Set(deletedIds);
-    this.maxId = maxId;
-  }
-
-  private async saveToStatFile(): Promise<void> {
-    const statData = await fs.promises.readFile(this.statFilePath, 'utf8');
-    const currentStat = JSON.parse(statData);
-
-    currentStat.deletedIds = Array.from(this.deletedIds);
-    currentStat.maxId = this.maxId;
-    currentStat.lastUpdated = new Date().toISOString();
-
-    await fs.promises.writeFile(
-      this.statFilePath,
-      JSON.stringify(currentStat, null, 2),
-      'utf8'
-    );
-  }
-
   async initialize(caveFilePath: string, pendingFilePath: string, session: any) {
     if (this.initialized) return;
 
-    await this.loadFromStatFile();
+    try {
+      // 读取现有状态
+      const stats = fs.existsSync(this.statFilePath) ?
+        JSON.parse(await fs.promises.readFile(this.statFilePath, 'utf8')) :
+        { deletedIds: [], maxId: 0 };
 
-    // 如果没有数据,执行全量扫描
-    if (this.deletedIds.size === 0) {
+      // 加载数据
       const [caveData, pendingData] = await Promise.all([
         FileHandler.readJsonData<CaveObject>(caveFilePath, session),
         FileHandler.readJsonData<PendingCave>(pendingFilePath, session)
       ]);
 
-      this.maxId = Math.max(
-        0,
-        ...caveData.map(item => item.cave_id),
-        ...pendingData.map(item => item.cave_id)
-      );
-
+      // 计算已使用的ID
       const usedIds = new Set([
         ...caveData.map(item => item.cave_id),
         ...pendingData.map(item => item.cave_id)
       ]);
 
-      for (let i = 1; i <= this.maxId; i++) {
-        if (!usedIds.has(i)) {
-          this.deletedIds.add(i);
-        }
-      }
+      // 更新状态
+      this.maxId = Math.max(...usedIds, stats.maxId, 0);
+      this.deletedIds = new Set(
+        Array.from({length: this.maxId}, (_, i) => i + 1)
+          .filter(id => !usedIds.has(id))
+      );
 
-      await this.saveToStatFile();
+      await this.saveStats();
+      this.initialized = true;
+
+    } catch (error) {
+      logger.error(`IdManager initialization failed: ${error.message}`);
+      throw error;
     }
-
-    this.initialized = true;
   }
 
   getNextId(): number {
-    if (this.deletedIds.size > 0) {
-      const nextId = Math.min(...this.deletedIds);
-      this.deletedIds.delete(nextId);
-      this.saveToStatFile().catch(err =>
-        logger.error('Failed to save state after ID allocation:', err)
-      );
-      return nextId;
+    if (this.deletedIds.size === 0) {
+      return ++this.maxId;
     }
-    this.maxId++;
-    this.saveToStatFile().catch(err =>
-      logger.error('Failed to save state after max ID update:', err)
-    );
-    return this.maxId;
+    const nextId = Math.min(...Array.from(this.deletedIds));
+    this.deletedIds.delete(nextId);
+    this.saveStats().catch(err => logger.error(`Failed to save ID state: ${err.message}`));
+    return nextId;
   }
 
   async markDeleted(id: number) {
     if (id > 0 && id <= this.maxId) {
       this.deletedIds.add(id);
-      await this.saveToStatFile();
+      if (id === this.maxId) {
+        while (this.deletedIds.has(this.maxId)) {
+          this.deletedIds.delete(this.maxId--);
+        }
+      }
+      await this.saveStats();
     }
+  }
+
+  private async saveStats(): Promise<void> {
+    const data = {
+      deletedIds: Array.from(this.deletedIds),
+      maxId: this.maxId,
+      lastUpdated: new Date().toISOString()
+    };
+    await fs.promises.writeFile(this.statFilePath, JSON.stringify(data, null, 2), 'utf8');
   }
 }
 
