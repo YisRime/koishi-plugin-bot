@@ -529,8 +529,6 @@ interface PendingCave extends CaveObject {}
 class FileHandler {
   private static locks = new Map<string, Promise<void>>();
   private static writeQueue = new Map<string, Promise<void>>();
-  private static retryCount = 3;
-  private static retryDelay = 1000;
 
   /**
    * 文件锁机制
@@ -553,24 +551,6 @@ class FileHandler {
       this.locks.delete(key);
       complete!();
     }
-  }
-
-  // 带重试的文件操作
-  private static async withRetry<T>(operation: () => Promise<T>): Promise<T> {
-    let lastError: Error;
-
-    for (let i = 0; i < this.retryCount; i++) {
-      try {
-        return await operation();
-      } catch (error) {
-        lastError = error;
-        if (i < this.retryCount - 1) {
-          await new Promise(resolve => setTimeout(resolve, this.retryDelay));
-        }
-      }
-    }
-
-    throw lastError!;
   }
 
   static async readJsonData<T>(filePath: string, session: any, validator?: (item: any) => boolean): Promise<T[]> {
