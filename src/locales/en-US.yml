@@ -57,7 +57,6 @@ commands:
       noContent: "Entry content is empty"
       getCave: "Failed to get entry"
       noCave: "No entries found"
-      commandProcess: "Command processing failed: {0}"
       invalidId: "Please enter a valid entry ID"
       notFound: "Entry not found"
     message:

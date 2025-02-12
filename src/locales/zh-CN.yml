@@ -57,7 +57,6 @@ commands:
       noContent: "回声洞内容为空"
       getCave: "获取回声洞失败"
       noCave: "没有回声洞"
-      commandProcess: "命令处理失败：{0}"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
     message:
