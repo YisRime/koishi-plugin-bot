@@ -771,6 +771,21 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
   return cleanedElements.sort((a, b) => a.index - b.index);
 }
 
+async function processMediaFile(filePath: string, type: 'image' | 'video', session: any): Promise<string | null> {
+  try {
+    if (!fs.existsSync(filePath)) {
+      logger.error(`${type} file not found: ${filePath}`);
+      return null;
+    }
+
+    const data = await fs.promises.readFile(filePath);
+    return `data:${type}/${type === 'image' ? 'png' : 'mp4'};base64,${data.toString('base64')}`;
+  } catch (error) {
+    logger.error(`Failed to process ${type} file:`, error);
+    return null;
+  }
+}
+
 async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
   if (!cave?.elements?.length) {
     return session.text('commands.cave.error.noContent');
@@ -778,8 +793,6 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
 
   try {
     const lines: string[] = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
-    const videoElements: MediaElement[] = [];
-
     // 按索引排序并处理元素
     const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
 
@@ -790,47 +803,24 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           break;
 
         case 'img':
-          const imgElement = element as MediaElement;
-          if (imgElement.file) {
-            const imgPath = path.resolve(resourceDir, imgElement.file);
-            if (fs.existsSync(imgPath)) {
-              try {
-                // 使用 booru-local 风格的 URL 转换
-                const url = pathToFileURL(imgPath).href;
-                lines.push(String(h('image', {
-                  src: url,
-                  // 添加额外的图片处理参数
-                  cache: true,
-                  timeout: 30000,
-                  headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                    'Accept': 'image/*'
-                  }
-                })));
-              } catch (error) {
-                logger.error('Image path error:', error);
-                lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
-              }
-            } else {
-              logger.error(`Image file not found: ${imgPath}`);
-              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
-            }
+          if (element.file) {
+            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'image', session);
+            lines.push(
+              base64Data
+                ? h('image', { src: base64Data })
+                : session.text('commands.cave.error.mediaLoadFailed', ['图片'])
+            );
           }
           break;
 
         case 'video':
-          const videoElement = element as MediaElement;
-          if (videoElement.file) {
-            // 修改：使用完整的绝对路径
-            const videoPath = path.resolve(resourceDir, videoElement.file);
-            if (fs.existsSync(videoPath)) {
-              videoElements.push({
-                ...videoElement,
-                filePath: videoPath
-              });
-            } else {
-              logger.error(`Video file not found: ${videoPath}`);
-              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['视频']));
+          if (element.file && session) {
+            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'video', session);
+            if (base64Data) {
+              await session.send(h('video', { src: base64Data }))
+                .catch(error => {
+                  logger.error('Failed to send video:', error);
+                });
             }
           }
           break;
@@ -839,23 +829,6 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
 
     // 添加投稿者信息
     lines.push(session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]));
-
-    // 如果存在视频元素，添加提示并发送视频
-    if (videoElements.length > 0) {
-      lines.push(session.text('commands.cave.message.videoSending'));
-
-      // 异步发送视频
-      for (const videoElement of videoElements) {
-        if (videoElement.filePath) {
-          const fileUrl = `file://${videoElement.filePath}`;
-          await session.send(h('video', {
-            src: fileUrl
-          })).catch(error => {
-            logger.error('Failed to send video:', error);
-          });
-        }
-      }
-    }
 
     return lines.join('\n');
 
