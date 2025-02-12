@@ -3,8 +3,7 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
-import { pathToFileURL } from 'url';
-import {} from 'koishi-plugin-adapter-onebot'  // 添加onebot导入
+import {} from 'koishi-plugin-adapter-onebot'
 
 // 基础定义
 export const name = 'best-cave';
@@ -46,6 +45,9 @@ export async function apply(ctx: Context, config: Config) {
   await FileHandler.ensureJsonFile(pendingFilePath);
 
   const lastUsed: Map<string, number> = new Map();
+
+  const idManager = new IdManager(ctx.baseDir);
+  await idManager.initialize(caveFilePath, pendingFilePath, null);
 
   async function processList(
     caveFilePath: string,
@@ -134,31 +136,32 @@ export async function apply(ctx: Context, config: Config) {
     config: Config,
     lastUsed: Map<string, number>
   ): Promise<string | void> {
-    try {
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
-      if (data.length === 0) {
-        return sendMessage(session, 'commands.cave.error.noCave', [], true);
-      }
-      const guildId = session.guildId;
-      const now = Date.now();
-      const lastCall = lastUsed.get(guildId) || 0;
-      const isManager = config.manager.includes(session.userId);
-      if (!isManager && now - lastCall < config.number * 1000) {
-        const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
-        return sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
-      }
-      if (!isManager) lastUsed.set(guildId, now);
-      const cave = (() => {
-        const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
-        if (!validCaves.length) return undefined;
-        const randomIndex = Math.floor(Math.random() * validCaves.length);
-        return validCaves[randomIndex];
-      })();
-      return cave ? buildMessage(cave, resourceDir, session)
-                  : sendMessage(session, 'commands.cave.error.getCave', [], true);
-    } catch (error) {
-      return sendMessage(session, 'commands.cave.error.commandProcess', [error.message], true);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+    if (data.length === 0) {
+      return sendMessage(session, 'commands.cave.error.noCave', [], true);
     }
+
+    const guildId = session.guildId;
+    const now = Date.now();
+    const lastCall = lastUsed.get(guildId) || 0;
+    const isManager = config.manager.includes(session.userId);
+
+    if (!isManager && now - lastCall < config.number * 1000) {
+      const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
+      return sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
+    }
+
+    if (!isManager) lastUsed.set(guildId, now);
+
+    const cave = (() => {
+      const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
+      if (!validCaves.length) return undefined;
+      const randomIndex = Math.floor(Math.random() * validCaves.length);
+      return validCaves[randomIndex];
+    })();
+
+    return cave ? buildMessage(cave, resourceDir, session)
+                : sendMessage(session, 'commands.cave.error.getCave', [], true);
   }
 
   async function processDelete(
@@ -181,9 +184,14 @@ export async function apply(ctx: Context, config: Config) {
     let isPending = false;
     if (index !== -1) {
       targetCave = data[index];
+      data.splice(index, 1);
+      idManager.markDeleted(targetCave.cave_id); // 记录被删除的ID
+      await FileHandler.writeJsonData(caveFilePath, data, session);
     } else {
       targetCave = pendingData[pendingIndex];
-      isPending = true;
+      pendingData.splice(pendingIndex, 1);
+      idManager.markDeleted(targetCave.cave_id); // 记录被删除的ID
+      await FileHandler.writeJsonData(pendingFilePath, pendingData, session);
     }
     if (targetCave.contributor_number !== session.userId && !config.manager.includes(session.userId)) {
       return sendMessage(session, 'commands.cave.remove.noPermission', [], true);
@@ -229,130 +237,105 @@ export async function apply(ctx: Context, config: Config) {
     session: any,
     content: string[]
   ): Promise<string> {
-    try {
-      // 1. 收集所有输入内容
-      let inputParts: string[] = [];
+    // 1. 收集所有输入内容
+    let inputParts: string[] = [];
 
-      // 读取命令后的内容（如果有）
-      if (content.length > 0) {
-        inputParts = content;
-      }
-
-      // 如果没有任何内容，进入提示流程
-      if (!inputParts.length) {
-        await sendMessage(session, 'commands.cave.add.noContent', [], true);
-        const reply = await session.prompt({ timeout: 60000 });
-        if (!reply || reply.trim() === "") {
-          return sendMessage(session, 'commands.cave.add.operationTimeout', [], true);
-        }
-        inputParts = [reply];
-      }
-
-      // 检查是否包含本地文件路径
-      const combinedInput = inputParts.join('\n');
-      if (combinedInput.includes('/app/.config/QQ/')) {
-        return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
-      }
-
-      // 提取媒体内容
-      let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(combinedInput);
-
-      // 检查配置：是否允许添加视频
-      if (videoUrls.length > 0 && !config.allowVideo) {
-        return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
-      }
-
-      // 生成新的回声洞ID及处理媒体文件
-      const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
-
-      // 修复获取maxid问题：检测中间是否有空缺，使用最小可用ID
-      const usedIds = new Set<number>([...data.map(item => item.cave_id), ...pendingData.map(item => item.cave_id)]);
-      let caveId = 1;
-      while (usedIds.has(caveId)) {
-        caveId++;
-      }
-
-      let savedImages: string[] = [];
-      if (imageUrls.length > 0) {
-        try {
-          const imageFileNames = imageElements.map(el => el.fileName);
-          const imageFileSizes = imageElements.map(el => el.fileSize);
-          savedImages = await saveMedia(
-            imageUrls,
-            imageFileNames,
-            imageFileSizes,
-            resourceDir,
-            caveId,
-            config,
-            ctx,
-            'img',
-            session
-          );
-        } catch (error) {
-          return error.message;  // 直接使用转换后的错误消息
-        }
-      }
-
-      let savedVideos: string[] = [];
-      if (videoUrls.length > 0) {
-        try {
-          const videoFileNames = videoElements.map(el => el.fileName);
-          const videoFileSizes = videoElements.map(el => el.fileSize);
-          savedVideos = await saveMedia(
-            videoUrls,
-            videoFileNames,
-            videoFileSizes,
-            resourceDir,
-            caveId,
-            config,
-            ctx,
-            'video',
-            session
-          );
-        } catch (error) {
-          return error.message;  // 直接使用转换后的错误消息
-        }
-      }
-
-      // 合并所有元素时保持原始顺序
-      const elements: Element[] = [
-        ...textParts,
-        ...imageElements.map((el, idx) => ({
-          ...el,
-          file: savedImages[idx],
-        })),
-        ...videoElements.map((el, idx) => ({
-          ...el,
-          file: savedVideos[idx],
-        }))
-      ].sort((a, b) => a.index - b.index);
-
-      const newCave: CaveObject = {
-        cave_id: caveId,
-        elements: cleanElementsForSave(elements, true), // 保存时保留索引信息
-        contributor_number: session.userId,
-        contributor_name: session.username
-      };
-
-      // 判断是否绕过审核：白名单包括用户、群组和频道
-      const bypassAudit = config.whitelist.includes(session.userId) ||
-                      (session.guildId && config.whitelist.includes(session.guildId)) ||
-                      (session.channelId && config.whitelist.includes(session.channelId));
-      if (config.enableAudit && !bypassAudit) {
-        pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
-        await FileHandler.writeJsonData(pendingFilePath, pendingData, session);
-        await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session);
-        return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
-      } else {
-        const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
-        data.push(caveWithoutIndex);
-        await FileHandler.writeJsonData(caveFilePath, data, session);
-        return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
-      }
-    } catch (error) {
-      return sendMessage(session, 'commands.cave.error.commandProcess', [error.message], true);
+    // 读取命令后的内容（如果有）
+    if (content.length > 0) {
+      inputParts = content;
     }
+
+    // 如果没有任何内容，进入提示流程
+    if (!inputParts.length) {
+      await sendMessage(session, 'commands.cave.add.noContent', [], true);
+      const reply = await session.prompt({ timeout: 60000 });
+      if (!reply || reply.trim() === "") {
+        return sendMessage(session, 'commands.cave.add.operationTimeout', [], true);
+      }
+      inputParts = [reply];
+    }
+
+    // 检查是否包含本地文件路径
+    const combinedInput = inputParts.join('\n');
+    if (combinedInput.includes('/app/.config/QQ/')) {
+      return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
+    }
+
+    // 提取媒体内容
+    let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(combinedInput);
+
+    // 检查配置：是否允许添加视频
+    if (videoUrls.length > 0 && !config.allowVideo) {
+      return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
+    }
+
+    // 生成新的回声洞ID及处理媒体文件
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+
+    // 使用ID管理器获取新ID
+    const caveId = idManager.getNextId();
+
+    // 处理图片和视频，使用 saveMedia 函数的错误处理
+    let savedImages: string[] = imageUrls.length > 0 ? await saveMedia(
+      imageUrls,
+      imageElements.map(el => el.fileName),
+      imageElements.map(el => el.fileSize),
+      resourceDir,
+      caveId,
+      config,
+      ctx,
+      'img',
+      session
+    ) : [];
+
+    let savedVideos: string[] = videoUrls.length > 0 ? await saveMedia(
+      videoUrls,
+      videoElements.map(el => el.fileName),
+      videoElements.map(el => el.fileSize),
+      resourceDir,
+      caveId,
+      config,
+      ctx,
+      'video',
+      session
+    ) : [];
+
+    // 合并所有元素时保持原始顺序
+    const elements: Element[] = [
+      ...textParts,
+      ...imageElements.map((el, idx) => ({
+        ...el,
+        file: savedImages[idx],
+      })),
+      ...videoElements.map((el, idx) => ({
+        ...el,
+        file: savedVideos[idx],
+      }))
+    ].sort((a, b) => a.index - b.index);
+
+    const newCave: CaveObject = {
+      cave_id: caveId,
+      elements: cleanElementsForSave(elements, true),
+      contributor_number: session.userId,
+      contributor_name: session.username
+    };
+
+    // 判断是否绕过审核：白名单包括用户、群组和频道
+    const bypassAudit = config.whitelist.includes(session.userId) ||
+                    (session.guildId && config.whitelist.includes(session.guildId)) ||
+                    (session.channelId && config.whitelist.includes(session.channelId));
+    if (config.enableAudit && !bypassAudit) {
+      pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
+      await FileHandler.writeJsonData(pendingFilePath, pendingData, session);
+      await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session);
+      return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
+    }
+
+    const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
+    data.push(caveWithoutIndex);
+    await FileHandler.writeJsonData(caveFilePath, data, session);
+    return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
   }
 
   // 注册命令并配置权限检查
@@ -412,91 +395,116 @@ export async function apply(ctx: Context, config: Config) {
 const logger = new Logger('cave');
 
 // 接口定义
-export interface User {
-  userId: string;
-  username: string;
-  nickname?: string;
-}
-
-export interface getStrangerInfo {
-  user_id: string;
-  nickname: string;
-}
-
+export interface User { userId: string; username: string; nickname?: string; }
+export interface getStrangerInfo { user_id: string; nickname: string; }
 export interface Config {
   manager: string[];
   number: number;
   enableAudit: boolean;
   allowVideo: boolean;
   videoMaxSize: number;
-  imageMaxSize: number;  // 新增属性
-  blacklist: string[];  // 新增属性
-  whitelist: string[]; // 新增白名单属性
+  imageMaxSize: number;
+  blacklist: string[];
+  whitelist: string[];
   enablePagination: boolean;
   itemsPerPage: number;
 }
 
 // 定义数据类型接口
-interface BaseElement {
-  type: 'text' | 'img' | 'video';
-  index: number;
-}
-
-interface TextElement extends BaseElement {
-  type: 'text';
-  content: string;
-}
-
-interface MediaElement extends BaseElement {
-  type: 'img' | 'video';
-  file?: string;
-  fileName?: string;
-  fileSize?: string;
-  filePath?: string;
-}
-
+interface BaseElement { type: 'text' | 'img' | 'video'; index: number }
+interface TextElement extends BaseElement { type: 'text'; content: string }
+interface MediaElement extends BaseElement { type: 'img' | 'video'; file?: string; fileName?: string; fileSize?: string; filePath?: string }
 type Element = TextElement | MediaElement;
 
-// 定义回声洞数据结构
-interface CaveObject {
-  cave_id: number;             // 回声洞唯一ID
-  elements: Element[];         // 内容元素数组
-  contributor_number: string;  // 投稿者ID
-  contributor_name: string;    // 投稿者昵称
-}
-
+interface CaveObject { cave_id: number; elements: Element[]; contributor_number: string; contributor_name: string }
 interface PendingCave extends CaveObject {}
 
 // -------- 新增：文件处理类 --------
-// 修改 FileHandler 类以接收 session 参数
 class FileHandler {
+  private static locks = new Map<string, Promise<void>>();
   private static writeQueue = new Map<string, Promise<void>>();
+  private static retryCount = 3;
+  private static retryDelay = 1000;
 
-  static async readJsonData<T>(filePath: string, session: any, validator?: (item: any) => boolean): Promise<T[]> {
+  // 文件锁实现
+  private static async withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    while (this.locks.has(key)) {
+      await this.locks.get(key);
+    }
+
+    let complete: () => void;
+    const lockPromise = new Promise<void>(resolve => complete = resolve);
+    this.locks.set(key, lockPromise);
+
     try {
-      const data = await fs.promises.readFile(filePath, 'utf8');
+      return await operation();
+    } finally {
+      this.locks.delete(key);
+      complete!();
+    }
+  }
+
+  // 带重试的文件操作
+  private static async withRetry<T>(operation: () => Promise<T>): Promise<T> {
+    let lastError: Error;
+
+    for (let i = 0; i < this.retryCount; i++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        if (i < this.retryCount - 1) {
+          await new Promise(resolve => setTimeout(resolve, this.retryDelay));
+        }
+      }
+    }
+
+    throw lastError!;
+  }
+
+  // 优化后的读取方法，只在解析 JSON 时保留 try-catch
+  static async readJsonData<T>(filePath: string, session: any, validator?: (item: any) => boolean): Promise<T[]> {
+    const data = await fs.promises.readFile(filePath, 'utf8');
+    try {
       const parsed = JSON.parse(data || '[]');
-      return Array.isArray(parsed) ? (validator ? parsed.filter(validator) : parsed) : [];
+      if (!Array.isArray(parsed)) {
+        await this.backupFile(filePath);
+        return [];
+      }
+      return validator ? parsed.filter(validator) : parsed;
     } catch (error) {
-      logger.error(session.text('commands.cave.error.fileRead', [error.message]));
+      await this.backupFile(filePath);
       return [];
     }
   }
 
+  // 优化后的写入方法
   static async writeJsonData<T>(filePath: string, data: T[], session: any): Promise<void> {
     const queueKey = filePath;
 
     const writeOperation = async () => {
-      try {
+      return this.withLock(`write:${filePath}`, async () => {
+        const tempPath = `${filePath}.tmp`;
+        const backupPath = `${filePath}.bak`;
+
         const jsonString = JSON.stringify(data, null, 2);
-        await fs.promises.writeFile(filePath, jsonString, 'utf8');
-      } catch (error) {
-        logger.error(session.text('commands.cave.error.fileWrite', [error.message]));
-        throw new Error(session.text('commands.cave.error.saveFailed'));
-      }
+        await fs.promises.writeFile(tempPath, jsonString, 'utf8');
+
+        const written = await fs.promises.readFile(tempPath, 'utf8');
+        JSON.parse(written);
+
+        if (fs.existsSync(filePath)) {
+          await fs.promises.rename(filePath, backupPath);
+        }
+
+        await fs.promises.rename(tempPath, filePath);
+
+        if (fs.existsSync(backupPath)) {
+          await fs.promises.unlink(backupPath);
+        }
+      });
     };
 
-    // 队列写入操作
     if (!this.writeQueue.has(queueKey)) {
       this.writeQueue.set(queueKey, Promise.resolve());
     }
@@ -513,130 +521,186 @@ class FileHandler {
     return currentPromise;
   }
 
+  // 新增：文件备份方法
+  private static async backupFile(filePath: string): Promise<void> {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `${filePath}.${timestamp}.bak`;
+    if (fs.existsSync(filePath)) {
+      await fs.promises.copyFile(filePath, backupPath);
+    }
+  }
+
+  // 文件是否存在检查
   static async ensureDirectory(dir: string): Promise<void> {
     !fs.existsSync(dir) && await fs.promises.mkdir(dir, { recursive: true });
   }
 
+  // JSON文件初始化
   static async ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
     !fs.existsSync(filePath) && await fs.promises.writeFile(filePath, defaultContent, 'utf8');
   }
 
+  // 批量写入优化
   static async batchWriteFiles(operations: Array<{
     filePath: string,
     data: any,
     session: any
   }>): Promise<void> {
-    return BatchProcessor.addToBatch('fileWrite', operations, async (items) => {
-      const results = await Promise.all(
-        items.map(({ filePath, data, session }) =>
-          this.writeJsonData(filePath, data, session)
-        )
-      );
-      return results;
+    const grouped = new Map<string, any[]>();
+
+    // 按文件路径分组
+    operations.forEach(op => {
+      if (!grouped.has(op.filePath)) {
+        grouped.set(op.filePath, []);
+      }
+      grouped.get(op.filePath)!.push(op.data);
     });
+
+    // 并行处理每个文件的写入
+    await Promise.all(
+      Array.from(grouped.entries()).map(async ([filePath, dataArray]) => {
+        // 合并同一文件的多个写入操作
+        const mergedData = dataArray.flat();
+        await this.writeJsonData(filePath, mergedData, operations[0].session);
+      })
+    );
   }
 }
 
-// -------- 图片及视频处理函数 --------
-async function saveMedia(
-  urls: string[],
-  fileNames: (string | undefined)[],
-  fileSizes: (string | undefined)[],
-  resourceDir: string,
-  caveId: number,
-  config: Config,
-  ctx: Context,
-  mediaType: 'img' | 'video',
-  session: any
-): Promise<string[]> {
-  const defaults = mediaType === 'img'
-    ? { ext: 'png', accept: 'image/*', maxSize: config.imageMaxSize }
-    : { ext: 'mp4', accept: 'video/*', maxSize: config.videoMaxSize };
-  const extPattern = /\.[a-zA-Z0-9]+$/;
+// -------- 修改 IdManager 类 --------
+class IdManager {
+  private deletedIds: Set<number> = new Set();
+  private maxId: number = 0;
+  private initialized: boolean = false;
+  private readonly deletedIdsPath: string;
 
-  const downloadTasks = urls.map(async (url, i) => {
-    try {
-      const processedUrl = (() => {
-        try {
-          const decodedUrl = decodeURIComponent(url);
-          return decodedUrl.includes('multimedia.nt.qq.com.cn') ? decodedUrl.replace(/&amp;/g, '&') : url;
-        } catch {
-          return url;
-        }
-      })();
+  constructor(baseDir: string) {
+    // 在cave目录下存储已删除ID的文件
+    this.deletedIdsPath = path.join(baseDir, 'data', 'cave', 'deleted_ids.json');
+  }
 
-      let ext = defaults.ext;
-      const fileName = fileNames[i];
-      const fileSize = fileSizes[i];
-
-      if (fileSize) {
-        const sizeInBytes = parseInt(fileSize);
-        if (sizeInBytes > defaults.maxSize * 1024 * 1024) {
-          logger.warn(`${mediaType} size exceeded: ${sizeInBytes} bytes`);
-          throw new Error('file_size_exceeded');
-        }
-      }
-
-      if (fileName && extPattern.test(fileName)) {
-        ext = fileName.match(extPattern)![0].slice(1);
-      }
-
-      // 清理文件名，直接删除特殊字符
-      const sanitizeFileName = (name: string) => {
-        return name
-          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '') // 只保留中文、英文、数字
-          .toLowerCase();                              // 转换为小写
-      };
-
-      const finalFileName = fileName
-        ? `${caveId}_${sanitizeFileName(path.basename(fileName, path.extname(fileName)))}.${ext}`
-        : `${caveId}_${i + 1}.${ext}`;
-
-      const targetPath = path.join(resourceDir, finalFileName);
-
-      const response = await ctx.http(processedUrl, {
-        method: 'GET',
-        responseType: 'arraybuffer',
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': defaults.accept,
-          'Referer': 'https://qq.com'
-        }
-      });
-
-      if (!response.data) {
-        throw new Error('empty_response');
-      }
-
-      const fileBuffer = Buffer.from(response.data);
-      await fs.promises.writeFile(targetPath, fileBuffer);
-      return finalFileName;
-    } catch (error) {
-      // 记录详细错误信息
-      logger.error(`Failed to process ${mediaType} (${url}):`, error);
-      if (error.message === 'file_size_exceeded') {
-        throw new Error(session.text('commands.cave.message.mediaSizeExceeded', [mediaType]));
-      }
-      throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
+  // 读取持久化的已删除ID
+  private async loadDeletedIds(): Promise<void> {
+    if (!fs.existsSync(this.deletedIdsPath)) {
+      return;
     }
-  });
+    const data = await fs.promises.readFile(this.deletedIdsPath, 'utf8');
+    const { deletedIds, maxId } = JSON.parse(data);
+    this.deletedIds = new Set(deletedIds);
+    this.maxId = maxId;
+  }
 
-  // 使用 allSettled 而不是 all，以便更好地处理部分失败的情况
-  const results = await Promise.allSettled(downloadTasks);
-  const successfulResults = results
-    .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
-    .map(result => result.value);
-
-  if (successfulResults.length === 0 && results.length > 0) {
-    // 如果所有任务都失败，抛出第一个错误
-    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-    if (firstError) {
-      throw firstError.reason;
+  // 保存已删除ID到文件
+  private async saveDeletedIds(): Promise<void> {
+    try {
+      const data = {
+        deletedIds: Array.from(this.deletedIds),
+        maxId: this.maxId,
+        timestamp: new Date().toISOString()
+      };
+      await fs.promises.writeFile(
+        this.deletedIdsPath,
+        JSON.stringify(data, null, 2),
+        'utf8'
+      );
+    } catch (error) {
+      logger.error('Failed to save deleted IDs:', error);
     }
   }
 
-  return successfulResults;
+  // 初始化ID管理器
+  async initialize(caveFilePath: string, pendingFilePath: string, session: any) {
+    if (this.initialized) return;
+
+    // 首先尝试加载持久化的删除ID列表
+    await this.loadDeletedIds();
+
+    // 如果没有持久化数据,则执行全量扫描
+    if (this.deletedIds.size === 0) {
+      const [caveData, pendingData] = await Promise.all([
+        FileHandler.readJsonData<CaveObject>(caveFilePath, session),
+        FileHandler.readJsonData<PendingCave>(pendingFilePath, session)
+      ]);
+
+      // 找出最大ID
+      this.maxId = Math.max(
+        0,
+        ...caveData.map(item => item.cave_id),
+        ...pendingData.map(item => item.cave_id)
+      );
+
+      // 找出空缺的ID
+      const usedIds = new Set([
+        ...caveData.map(item => item.cave_id),
+        ...pendingData.map(item => item.cave_id)
+      ]);
+
+      // 收集1到maxId之间的空缺ID
+      for (let i = 1; i <= this.maxId; i++) {
+        if (!usedIds.has(i)) {
+          this.deletedIds.add(i);
+        }
+      }
+
+      // 保存初始扫描结果
+      await this.saveDeletedIds();
+    }
+
+    this.initialized = true;
+  }
+
+  // 获取下一个可用ID
+  getNextId(): number {
+    if (this.deletedIds.size > 0) {
+      const nextId = Math.min(...this.deletedIds);
+      this.deletedIds.delete(nextId);
+      // 当分配ID时保存状态
+      this.saveDeletedIds().catch(err => logger.error('Failed to save state after ID allocation:', err));
+      return nextId;
+    }
+    this.maxId++;
+    // 当分配新ID时保存状态
+    this.saveDeletedIds().catch(err => logger.error('Failed to save state after max ID update:', err));
+    return this.maxId;
+  }
+
+  // 记录被删除的ID
+  async markDeleted(id: number) {
+    if (id > 0 && id <= this.maxId) {
+      this.deletedIds.add(id);
+      // 当标记ID删除时保存状态
+      await this.saveDeletedIds();
+    }
+  }
+}
+
+// 添加辅助函数到文件开头的函数定义区域
+const messageQueue = new Map<string, Promise<void>>();
+async function sendMessage(
+  session: any,
+  key: string,
+  params: any[] = [],
+  isTemp = true,
+  timeout = 10000
+): Promise<string> {
+  const channelId = session.channelId;
+  const sendOperation = async () => {
+    const msg = await session.send(session.text(key, params));
+    if (isTemp) {
+      setTimeout(() => session.bot.deleteMessage(channelId, msg), timeout);
+    }
+  };
+
+  const currentPromise = (messageQueue.get(channelId) || Promise.resolve())
+    .then(sendOperation)
+    .finally(() => {
+      if (messageQueue.get(channelId) === currentPromise) {
+        messageQueue.delete(channelId);
+      }
+    });
+
+  messageQueue.set(channelId, currentPromise);
+  return '';
 }
 
 // -------- 审核相关函数 --------
@@ -660,30 +724,22 @@ async function handleSingleCaveAudit(
   isApprove: boolean,
   resourceDir: string,
   data?: CaveObject[],
-  session?: any
-): Promise<boolean | string> {
-  // 处理单个审核项，根据审批状态更新数据或删除文件
-  try {
-    if (isApprove && data) {
-      // 保存经过清理的回声洞数据
-      const caveWithoutIndex = {
-        ...cave,
-        elements: cleanElementsForSave(cave.elements, false)
-      };
-      data.push(caveWithoutIndex);
-    } else if (!isApprove && cave.elements) {
-      // 删除与回声洞关联的媒体文件
-      for (const element of cave.elements) {
-        if (element.type === 'img' && element.file) {
-          const fullPath = path.join(resourceDir, element.file);
-          if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-        }
+): Promise<boolean> {
+  if (isApprove && data) {
+    const caveWithoutIndex = {
+      ...cave,
+      elements: cleanElementsForSave(cave.elements, false)
+    };
+    data.push(caveWithoutIndex);
+  } else if (!isApprove && cave.elements) {
+    for (const element of cave.elements) {
+      if (element.type === 'img' && element.file) {
+        const fullPath = path.join(resourceDir, element.file);
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
       }
     }
-    return true;
-  } catch (error) {
-    return sendMessage(session, 'commands.cave.error.auditProcess', [error.message], true);
   }
+  return true;
 }
 
 async function handleAudit(
@@ -707,7 +763,7 @@ async function handleAudit(
     const cave = pendingData[pendingIndex];
     const data = isApprove ? await FileHandler.readJsonData<CaveObject>(caveFilePath, session) : null;
 
-    const auditResult = await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data, session);
+    const auditResult = await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data);
     if (typeof auditResult === 'string') return auditResult;
     if (isApprove && data) await FileHandler.writeJsonData(caveFilePath, data, session);
 
@@ -737,7 +793,7 @@ async function handleAudit(
   let processedCount = 0;
 
   for (const cave of pendingData) {
-    await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data, session) && processedCount++;
+    await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data) && processedCount++;
   }
 
   if (isApprove && data) await FileHandler.writeJsonData(caveFilePath, data, session);
@@ -771,19 +827,10 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
   return cleanedElements.sort((a, b) => a.index - b.index);
 }
 
-async function processMediaFile(filePath: string, type: 'image' | 'video', session: any): Promise<string | null> {
-  try {
-    if (!fs.existsSync(filePath)) {
-      logger.error(`${type} file not found: ${filePath}`);
-      return null;
-    }
-
-    const data = await fs.promises.readFile(filePath);
-    return `data:${type}/${type === 'image' ? 'png' : 'mp4'};base64,${data.toString('base64')}`;
-  } catch (error) {
-    logger.error(`Failed to process ${type} file:`, error);
-    return null;
-  }
+async function processMediaFile(filePath: string, type: 'image' | 'video'): Promise<string | null> {
+  const data = await fs.promises.readFile(filePath).catch(() => null);
+  if (!data) return null;
+  return `data:${type}/${type === 'image' ? 'png' : 'mp4'};base64,${data.toString('base64')}`;
 }
 
 async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
@@ -791,181 +838,144 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     return session.text('commands.cave.error.noContent');
   }
 
-  try {
-    const lines: string[] = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
-    // 按索引排序并处理元素
-    const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
+  const lines = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
+  const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
 
-    for (const element of sortedElements) {
-      switch (element.type) {
-        case 'text':
-          lines.push((element as TextElement).content);
-          break;
-
-        case 'img':
-          if (element.file) {
-            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'image', session);
-            lines.push(
-              base64Data
-                ? h('image', { src: base64Data })
-                : session.text('commands.cave.error.mediaLoadFailed', ['图片'])
-            );
-          }
-          break;
-
-        case 'video':
-          if (element.file && session) {
-            const base64Data = await processMediaFile(path.join(resourceDir, element.file), 'video', session);
-            if (base64Data) {
-              await session.send(h('video', { src: base64Data }))
-                .catch(error => {
-                  logger.error('Failed to send video:', error);
-                });
-            }
-          }
-          break;
-      }
+  for (const element of sortedElements) {
+    if (element.type === 'text') {
+      lines.push(element.content);
+      continue;
     }
 
-    // 添加投稿者信息
-    lines.push(session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]));
+    if (!element.file) continue;
 
-    return lines.join('\n');
+    const filePath = path.join(resourceDir, element.file);
+    const isImage = element.type === 'img';
+    const base64Data = await processMediaFile(filePath, isImage ? 'image' : 'video');
 
-  } catch (error) {
-    logger.error('Error building message:', error);
-    return session.text('commands.cave.error.messageBuildFailed', [error.message]);
-  }
-}
+    if (!base64Data) continue;
 
-// 添加辅助函数到文件开头的函数定义区域
-const messageQueue = new Map<string, Promise<void>>();
-async function sendMessage(
-  session: any,
-  key: string,
-  params: any[] = [],
-  isTemp = true,
-  timeout = 10000
-): Promise<string> {
-  const channelId = session.channelId;
-  if (!messageQueue.has(channelId)) {
-    messageQueue.set(channelId, Promise.resolve());
-  }
-
-  const sendOperation = async () => {
-    const msg = await session.send(session.text(key, params));
-    if (isTemp) {
-      setTimeout(async () => {
-        try {
-          await session.bot.deleteMessage(channelId, msg);
-        } catch (error) {
-          logger.error('Failed to delete message:', error);
-        }
-      }, timeout);
+    if (isImage) {
+      lines.push(h('image', { src: base64Data }));
+    } else if (session) {
+      await session.send(h('video', { src: base64Data }));
     }
-  };
+  }
 
-  const currentPromise = messageQueue.get(channelId)!
-    .then(sendOperation)
-    .finally(() => {
-      if (messageQueue.get(channelId) === currentPromise) {
-        messageQueue.delete(channelId);
-      }
-    });
-
-  messageQueue.set(channelId, currentPromise);
-  return '';
+  lines.push(session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]));
+  return lines.join('\n');
 }
 
 // 媒体处理及回复
 async function extractMediaContent(originalContent: string): Promise<{
   imageUrls: string[],
-  imageElements: { type: 'img'; index: number; fileName?: string; fileSize?: string }[],
+  imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>,
   videoUrls: string[],
-  videoElements: { type: 'video'; index: number; fileName?: string; fileSize?: string }[],
+  videoElements: Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>,
   textParts: Element[]
 }> {
-  // 拆分文本与媒体标签，并分别提取相关信息
-  const parsedTexts = originalContent
-    .split(/<img[^>]+>|<video[^>]+>/g)
-    .map(t => t.trim())
-    .filter(t => t);
-  const textParts: Element[] = [];
-  parsedTexts.forEach((text, idx) => {
-    textParts.push({ type: 'text', content: text, index: idx * 3 });
-  });
+  const textParts = originalContent
+    .split(/<(img|video)[^>]+>/g)
+    .map((text, idx) => text.trim() && ({
+      type: 'text' as const,
+      content: text,
+      index: idx * 3
+    }))
+    .filter(Boolean);
 
-  // 初始化数组用于存储媒体链接与元素信息
-  const imageUrls: string[] = [];
-  const imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }> = [];
-  const videoUrls: string[] = [];
-  const videoElements: Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }> = [];
+  const getMediaElements = (type: 'img' | 'video') => {
+    const regex = new RegExp(`<${type}[^>]+src="([^"]+)"[^>]*>`, 'g');
+    const elements: Array<{ type: typeof type; index: number; fileName?: string; fileSize?: string }> = [];
+    const urls: string[] = [];
 
-  // 提取 <img> 标签中的 src 和 file 属性
-  const imgMatches = originalContent.match(/<img[^>]+src="([^"]+)"[^>]*>/g) || [];
-  imgMatches.forEach((img, idx) => {
-    const srcMatch = img.match(/src="([^"]+)"/);
-    const fileName = img.match(/file="([^"]+)"/)?.[1];
-    const fileSize = img.match(/fileSize="([^"]+)"/)?.[1];
-    if (srcMatch?.[1]) {
-      imageUrls.push(srcMatch[1]);
-      imageElements.push({ type: 'img', index: idx * 3 + 1, fileName, fileSize });
+    let match;
+    let idx = 0;
+    while ((match = regex.exec(originalContent)) !== null) {
+      const element = match[0];
+      const url = match[1];
+      const fileName = element.match(/file="([^"]+)"/)?.[1];
+      const fileSize = element.match(/fileSize="([^"]+)"/)?.[1];
+
+      urls.push(url);
+      elements.push({
+        type,
+        index: idx * 3 + (type === 'img' ? 1 : 2),
+        fileName,
+        fileSize
+      });
+      idx++;
     }
-  });
+    return { urls, elements };
+  };
 
-  // 提取 <video> 标签中的 src 与 file 属性
-  const videoMatches = originalContent.match(/<video[^>]+src="([^"]+)"/g) || [];
-  videoMatches.forEach((video, idx) => {
-    const srcMatch = video.match(/src="([^"]+)"/);
-    const fileName = video.match(/file="([^"]+)"/)?.[1];
-    const fileSize = video.match(/fileSize="([^"]+)"/)?.[1];
-    if (srcMatch?.[1]) {
-      videoUrls.push(srcMatch[1]);
-      videoElements.push({ type: 'video', index: idx * 3 + 2, fileName, fileSize });
-    }
-  });
+  const { urls: imageUrls, elements: imageElementsRaw } = getMediaElements('img');
+  const imageElements = imageElementsRaw as Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>;
+  const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video');
+  const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
 
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
 
-// 添加批处理管理器
-class BatchProcessor {
-  private static batchQueue = new Map<string, Array<{
-    data: any,
-    resolve: (value: any) => void,
-    reject: (reason: any) => void
-  }>>();
-  private static batchTimeout = 100; // 100ms 批处理窗口
+// -------- 图片及视频处理函数 --------
+async function saveMedia(
+  urls: string[],
+  fileNames: (string | undefined)[],
+  fileSizes: (string | undefined)[],
+  resourceDir: string,
+  caveId: number,
+  config: Config,
+  ctx: Context,
+  mediaType: 'img' | 'video',
+  session: any
+): Promise<string[]> {
+  const { ext, accept, maxSize } = mediaType === 'img'
+    ? { ext: 'png', accept: 'image/*', maxSize: config.imageMaxSize }
+    : { ext: 'mp4', accept: 'video/*', maxSize: config.videoMaxSize };
 
-  static async addToBatch<T>(
-    key: string,
-    data: any,
-    processor: (items: any[]) => Promise<T[]>
-  ): Promise<T> {
-    return new Promise((resolve, reject) => {
-      if (!this.batchQueue.has(key)) {
-        this.batchQueue.set(key, []);
-        setTimeout(() => this.processBatch(key, processor), this.batchTimeout);
-      }
-      this.batchQueue.get(key)!.push({ data, resolve, reject });
-    });
-  }
-
-  private static async processBatch(
-    key: string,
-    processor: (items: any[]) => Promise<any[]>
-  ) {
-    const batch = this.batchQueue.get(key) || [];
-    this.batchQueue.delete(key);
-
-    try {
-      // 处理批次
-      const items = batch.map(item => item.data);
-      const results = await processor(items);
-      // 分发结果
-      batch.forEach((item, index) => item.resolve(results[index]));
-    } catch (error) {
-      batch.forEach(item => item.reject(error));
+  const downloadTasks = urls.map(async (url, i) => {
+    // 检查文件大小
+    const sizeInBytes = fileSizes[i] && parseInt(fileSizes[i]!);
+    if (sizeInBytes && sizeInBytes > maxSize * 1024 * 1024) {
+      throw new Error('file_size_exceeded');
     }
+
+    // 生成文件名
+    const fileName = fileNames[i];
+    const fileExt = fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0]?.slice(1) || ext;
+    const baseName = fileName
+      ? path.basename(fileName, path.extname(fileName)).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').toLowerCase()
+      : String(i + 1);
+    const finalFileName = `${caveId}_${baseName}.${fileExt}`;
+
+    // 下载和保存
+    const response = await ctx.http(decodeURIComponent(url).replace(/&amp;/g, '&'), {
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Accept': accept,
+        'Referer': 'https://qq.com'
+      }
+    });
+
+    if (!response.data) throw new Error('empty_response');
+
+    await fs.promises.writeFile(path.join(resourceDir, finalFileName), Buffer.from(response.data));
+    return finalFileName;
+  });
+
+  const results = await Promise.allSettled(downloadTasks);
+  const successfulResults = results
+    .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
+    .map(result => result.value);
+
+  if (!successfulResults.length) {
+    const firstError = results[0] as PromiseRejectedResult;
+    throw new Error(firstError.reason.message === 'file_size_exceeded'
+      ? session.text('commands.cave.message.mediaSizeExceeded', [mediaType])
+      : session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
   }
+
+  return successfulResults;
 }
