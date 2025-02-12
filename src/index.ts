@@ -125,8 +125,7 @@ export async function apply(ctx: Context, config: Config) {
     const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
     const cave = data.find(item => item.cave_id === caveId);
     if (!cave) return sendMessage(session, 'commands.cave.error.notFound', [], true);
-    const caveContent = await buildMessage(cave, resourceDir, session);
-    return caveContent;
+    return buildMessage(cave, resourceDir, session);
   }
 
   async function processRandom(
@@ -237,69 +236,73 @@ export async function apply(ctx: Context, config: Config) {
     session: any,
     content: string[]
   ): Promise<string> {
-    // 1. 收集所有输入内容
-    let inputParts: string[] = [];
+    // 收集输入内容
+    let inputContent = '';
 
-    // 读取命令后的内容（如果有）
+    // 读取命令后的内容
     if (content.length > 0) {
-      inputParts = content;
-    }
-
-    // 如果没有任何内容，进入提示流程
-    if (!inputParts.length) {
+      inputContent = content.join('\n');
+    } else {
+      // 如果没有内容，进入提示流程
       await sendMessage(session, 'commands.cave.add.noContent', [], true);
       const reply = await session.prompt({ timeout: 60000 });
-      if (!reply || reply.trim() === "") {
+      if (!reply) {
         return sendMessage(session, 'commands.cave.add.operationTimeout', [], true);
       }
-      inputParts = [reply];
+      inputContent = reply;
     }
 
     // 检查是否包含本地文件路径
-    const combinedInput = inputParts.join('\n');
-    if (combinedInput.includes('/app/.config/QQ/')) {
+    if (inputContent.includes('/app/.config/QQ/')) {
       return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
     }
 
     // 提取媒体内容
-    let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(combinedInput);
+    let { imageUrls, imageElements, videoUrls, videoElements, textParts } = await extractMediaContent(inputContent);
 
-    // 检查配置：是否允许添加视频
     if (videoUrls.length > 0 && !config.allowVideo) {
       return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
     }
 
-    // 生成新的回声洞ID及处理媒体文件
+    // 获取新ID并处理媒体文件
     const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
     const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
-
-    // 使用ID管理器获取新ID
     const caveId = idManager.getNextId();
 
-    // 处理图片和视频，使用 saveMedia 函数的错误处理
-    let savedImages: string[] = imageUrls.length > 0 ? await saveMedia(
-      imageUrls,
-      imageElements.map(el => el.fileName),
-      imageElements.map(el => el.fileSize),
-      resourceDir,
-      caveId,
-      config,
-      ctx,
-      'img',
-      session
-    ) : [];
+    // 处理媒体文件
+    let savedImages: string[] = [];
+    let savedVideos: string[] = [];
+    try {
+      if (imageUrls.length > 0) {
+        savedImages = await saveMedia(
+          imageUrls,
+          imageElements.map(el => el.fileName),
+          imageElements.map(el => el.fileSize),
+          resourceDir,
+          caveId,
+          config,
+          ctx,
+          'img',
+          session
+        );
+      }
 
-    let savedVideos: string[] = videoUrls.length > 0 ? await saveMedia(
-      videoUrls,
-      videoElements.map(el => el.fileName),
-      videoElements.map(el => el.fileSize),
-      resourceDir,
-      caveId,
-      config,
-      ctx,
-      'video',
-      session
-    ) : [];
+      if (videoUrls.length > 0) {
+        savedVideos = await saveMedia(
+          videoUrls,
+          videoElements.map(el => el.fileName),
+          videoElements.map(el => el.fileSize),
+          resourceDir,
+          caveId,
+          config,
+          ctx,
+          'video',
+          session
+        );
+      }
+    } catch (error) {
+      return error.message;
+    }
 
     // 合并所有元素时保持原始顺序
     const elements: Element[] = [
@@ -321,19 +324,20 @@ export async function apply(ctx: Context, config: Config) {
       contributor_name: session.username
     };
 
-    // 判断是否绕过审核：白名单包括用户、群组和频道
+    // 处理审核逻辑
     const bypassAudit = config.whitelist.includes(session.userId) ||
                     (session.guildId && config.whitelist.includes(session.guildId)) ||
                     (session.channelId && config.whitelist.includes(session.channelId));
+
     if (config.enableAudit && !bypassAudit) {
-      pendingData.push({ ...newCave, elements: cleanElementsForSave(elements, true) });
+      pendingData.push(newCave);
       await FileHandler.writeJsonData(pendingFilePath, pendingData, session);
+      // 使用公共的 buildMessage 函数
       await sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session);
       return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
     }
 
-    const caveWithoutIndex = { ...newCave, elements: cleanElementsForSave(elements, false) };
-    data.push(caveWithoutIndex);
+    data.push({ ...newCave, elements: cleanElementsForSave(elements, false) });
     await FileHandler.writeJsonData(caveFilePath, data, session);
     return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
   }
@@ -839,9 +843,8 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
   }
 
   const lines = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
-  const sortedElements = [...cave.elements].sort((a, b) => a.index - b.index);
 
-  for (const element of sortedElements) {
+  for (const element of cave.elements) {
     if (element.type === 'text') {
       lines.push(element.content);
       continue;
@@ -850,14 +853,13 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     if (!element.file) continue;
 
     const filePath = path.join(resourceDir, element.file);
-    const isImage = element.type === 'img';
-    const base64Data = await processMediaFile(filePath, isImage ? 'image' : 'video');
-
+    const base64Data = await processMediaFile(filePath, element.type === 'img' ? 'image' : 'video');
     if (!base64Data) continue;
 
-    if (isImage) {
+    if (element.type === 'img') {
       lines.push(h('image', { src: base64Data }));
     } else if (session) {
+      // 视频单独发送
       await session.send(h('video', { src: base64Data }));
     }
   }
