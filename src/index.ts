@@ -794,7 +794,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
           if (imgElement.file) {
             const filePath = path.join(process.cwd(), 'data/cave/resources', imgElement.file);
             if (fs.existsSync(filePath)) {
-              const fileUrl = `file://${filePath}`;
+              const fileUrl = `file://filePath`;
               lines.push(String(h('image', { src: fileUrl })));
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
@@ -829,7 +829,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
       // 异步发送视频
       for (const videoElement of videoElements) {
         if (videoElement.filePath) {
-          const fileUrl = `file://${videoElement.filePath}`;
+          const fileUrl = `file://videoElement.filePath`;
           await session.send(h('video', {
             src: fileUrl
           })).catch(error => {
