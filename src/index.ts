@@ -877,13 +877,13 @@ async function extractMediaContent(originalContent: string): Promise<{
   textParts: Element[]
 }> {
   const textParts = originalContent
-    .split(/<(img|video)[^>]+>/g)
+    .split(/<(img|video)[^>]+>/)
     .map((text, idx) => text.trim() && ({
       type: 'text' as const,
-      content: text,
+      content: text.replace(/^(img|video)$/, '').trim(),  // 移除单独的 img 或 video 文本
       index: idx * 3
     }))
-    .filter(Boolean);
+    .filter(text => text && text.content);  // 过滤掉空内容
 
   const getMediaElements = (type: 'img' | 'video') => {
     const regex = new RegExp(`<${type}[^>]+src="([^"]+)"[^>]*>`, 'g');
