@@ -452,6 +452,7 @@ interface MediaElement extends BaseElement {
   file?: string;
   fileName?: string;
   fileSize?: string;
+  filePath?: string;
 }
 
 type Element = TextElement | MediaElement;
@@ -791,18 +792,25 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         case 'img':
           const imgElement = element as MediaElement;
           if (imgElement.file) {
-            const filePath = path.join('data/cave/resources', imgElement.file); // 使用相对路径
-            // 使用相对路径构建 URL
-            lines.push(String(h('image', { url: filePath })));
+            const filePath = path.join(process.cwd(), 'data/cave/resources', imgElement.file);
+            if (fs.existsSync(filePath)) {
+              const fileUrl = `file://${filePath}`;
+              lines.push(String(h('image', { src: fileUrl })));
+            } else {
+              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
+            }
           }
           break;
 
         case 'video':
           const videoElement = element as MediaElement;
           if (videoElement.file) {
-            const filePath = path.join('data/cave/resources', videoElement.file); // 使用相对路径
-            if (fs.existsSync(path.join(process.cwd(), filePath))) { // 检查文件是否存在时使用绝对路径
-              videoElements.push(videoElement);
+            const filePath = path.join(process.cwd(), 'data/cave/resources', videoElement.file);
+            if (fs.existsSync(filePath)) {
+              videoElements.push({
+                ...videoElement,
+                filePath
+              });
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['视频']));
             }
@@ -820,15 +828,13 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
 
       // 异步发送视频
       for (const videoElement of videoElements) {
-        if (videoElement.file) {
-          const filePath = path.join('data/cave/resources', videoElement.file); // 使用相对路径
-          if (fs.existsSync(path.join(process.cwd(), filePath))) { // 检查文件是否存在时使用绝对路径
-            await session.send(h('video', {
-              url: filePath
-            })).catch(error => {
-              logger.error('Failed to send video:', error);
-            });
-          }
+        if (videoElement.filePath) {
+          const fileUrl = `file://${videoElement.filePath}`;
+          await session.send(h('video', {
+            src: fileUrl
+          })).catch(error => {
+            logger.error('Failed to send video:', error);
+          });
         }
       }
     }
