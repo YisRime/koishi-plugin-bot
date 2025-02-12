@@ -653,10 +653,10 @@ class IdManager {
   private deletedIds: Set<number> = new Set();
   private maxId: number = 0;
   private initialized: boolean = false;
-  private readonly statFilePath: string;
+  private readonly idFilePath: string;
 
   constructor(baseDir: string) {
-    this.statFilePath = path.join(baseDir, 'data', 'cave', 'stat.json');
+    this.idFilePath = path.join(baseDir, 'data', 'cave', 'id.json');
   }
 
   async initialize(caveFilePath: string, pendingFilePath: string, session: any) {
@@ -664,8 +664,8 @@ class IdManager {
 
     try {
       // 读取现有状态
-      const stats = fs.existsSync(this.statFilePath) ?
-        JSON.parse(await fs.promises.readFile(this.statFilePath, 'utf8')) :
+      const idData = fs.existsSync(this.idFilePath) ?
+        JSON.parse(await fs.promises.readFile(this.idFilePath, 'utf8')) :
         { deletedIds: [], maxId: 0 };
 
       // 加载数据
@@ -681,13 +681,13 @@ class IdManager {
       ]);
 
       // 更新状态
-      this.maxId = Math.max(...usedIds, stats.maxId, 0);
+      this.maxId = Math.max(...usedIds, idData.maxId, 0);
       this.deletedIds = new Set(
         Array.from({length: this.maxId}, (_, i) => i + 1)
           .filter(id => !usedIds.has(id))
       );
 
-      await this.saveStats();
+      await this.saveIds();
       this.initialized = true;
 
     } catch (error) {
@@ -702,7 +702,7 @@ class IdManager {
     }
     const nextId = Math.min(...Array.from(this.deletedIds));
     this.deletedIds.delete(nextId);
-    this.saveStats().catch(err => logger.error(`Failed to save ID state: ${err.message}`));
+    this.saveIds().catch(err => logger.error(`Failed to save ID state: ${err.message}`));
     return nextId;
   }
 
@@ -714,17 +714,17 @@ class IdManager {
           this.deletedIds.delete(this.maxId--);
         }
       }
-      await this.saveStats();
+      await this.saveIds();
     }
   }
 
-  private async saveStats(): Promise<void> {
+  private async saveIds(): Promise<void> {
     const data = {
       deletedIds: Array.from(this.deletedIds),
       maxId: this.maxId,
       lastUpdated: new Date().toISOString()
     };
-    await fs.promises.writeFile(this.statFilePath, JSON.stringify(data, null, 2), 'utf8');
+    await fs.promises.writeFile(this.idFilePath, JSON.stringify(data, null, 2), 'utf8');
   }
 }
 
