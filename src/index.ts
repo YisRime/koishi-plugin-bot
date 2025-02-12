@@ -3,6 +3,8 @@
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
+import {} from 'koishi-plugin-adapter-onebot'  // 添加onebot导入
 
 // 基础定义
 export const name = 'best-cave';
@@ -789,22 +791,17 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         case 'img':
           const imgElement = element as MediaElement;
           if (imgElement.file) {
-            const filePath = path.join(resourceDir, imgElement.file);
-            if (fs.existsSync(filePath)) {
-              // 使用 encodeURI 确保文件路径正确编码
-              const fileUrl = encodeURI(`file:${filePath}`);
-              lines.push(String(h('image', { src: fileUrl })));
-            } else {
-              lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
-            }
+            const filePath = path.join('data/cave/resources', imgElement.file); // 使用相对路径
+            // 使用相对路径构建 URL
+            lines.push(String(h('image', { url: filePath })));
           }
           break;
 
         case 'video':
           const videoElement = element as MediaElement;
           if (videoElement.file) {
-            const filePath = path.join(resourceDir, videoElement.file);
-            if (fs.existsSync(filePath)) {
+            const filePath = path.join('data/cave/resources', videoElement.file); // 使用相对路径
+            if (fs.existsSync(path.join(process.cwd(), filePath))) { // 检查文件是否存在时使用绝对路径
               videoElements.push(videoElement);
             } else {
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['视频']));
@@ -823,12 +820,11 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
 
       // 异步发送视频
       for (const videoElement of videoElements) {
-        if (videoElement.file && session) {
-          const filePath = path.join(resourceDir, videoElement.file);
-          if (fs.existsSync(filePath)) {
-            const fileUrl = encodeURI(`file:${filePath}`);
+        if (videoElement.file) {
+          const filePath = path.join('data/cave/resources', videoElement.file); // 使用相对路径
+          if (fs.existsSync(path.join(process.cwd(), filePath))) { // 检查文件是否存在时使用绝对路径
             await session.send(h('video', {
-              src: fileUrl
+              url: filePath
             })).catch(error => {
               logger.error('Failed to send video:', error);
             });
