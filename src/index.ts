@@ -792,11 +792,18 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         case 'img':
           const imgElement = element as MediaElement;
           if (imgElement.file) {
-            const filePath = path.join(process.cwd(), 'data/cave/resources', imgElement.file);
-            if (fs.existsSync(filePath)) {
-              const fileUrl = `file://filePath`;
-              lines.push(String(h('image', { src: fileUrl })));
+            // 修改：使用完整的绝对路径
+            const imgPath = path.resolve(resourceDir, imgElement.file);
+            if (fs.existsSync(imgPath)) {
+              try {
+                const url = pathToFileURL(imgPath).href;
+                lines.push(String(h('image', { src: url })));
+              } catch (error) {
+                logger.error('Image path error:', error);
+                lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
+              }
             } else {
+              logger.error(`Image file not found: ${imgPath}`);
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['图片']));
             }
           }
@@ -805,13 +812,15 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
         case 'video':
           const videoElement = element as MediaElement;
           if (videoElement.file) {
-            const filePath = path.join(process.cwd(), 'data/cave/resources', videoElement.file);
-            if (fs.existsSync(filePath)) {
+            // 修改：使用完整的绝对路径
+            const videoPath = path.resolve(resourceDir, videoElement.file);
+            if (fs.existsSync(videoPath)) {
               videoElements.push({
                 ...videoElement,
-                filePath
+                filePath: videoPath
               });
             } else {
+              logger.error(`Video file not found: ${videoPath}`);
               lines.push(session.text('commands.cave.error.mediaLoadFailed', ['视频']));
             }
           }
@@ -829,7 +838,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
       // 异步发送视频
       for (const videoElement of videoElements) {
         if (videoElement.filePath) {
-          const fileUrl = `file://videoElement.filePath`;
+          const fileUrl = `file://${videoElement.filePath}`;
           await session.send(h('video', {
             src: fileUrl
           })).catch(error => {
