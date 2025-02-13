@@ -359,7 +359,7 @@ export async function apply(ctx: Context, config: Config) {
             // 保持原始文本和图片的相对位置
             index: el.index
           }))
-        ].sort((a, b) => a.index - b.index),
+        ].sort((a, b) => a.index - a.index),
         contributor_number: session.userId,
         contributor_name: session.username
       };
@@ -397,7 +397,12 @@ export async function apply(ctx: Context, config: Config) {
 
     } catch (error) {
       logger.error(`Failed to process add command: ${error.message}`);
-      return sendMessage(session, `commands.cave.error.${error.code || 'unknown'}`, [], true);
+      return sendMessage(
+        session,
+        `commands.cave.error.${error.code || 'failed'}`,
+        [],
+        true
+      );
     }
   }
 
@@ -1230,8 +1235,6 @@ async function extractMediaContent(originalContent: string, config: Config, sess
 
   // 如果启用了查重,先进行预检测
   if (config.enableDuplicateCheck && imageUrls.length > 0) {
-    await session.send(session.text('commands.cave.message.duplicateChecking'));
-
     const imgBuffers = await Promise.all(
       imageUrls.map(url =>
         ctx.http.get(decodeURIComponent(url).replace(/&amp;/g, '&'), {
@@ -1264,8 +1267,7 @@ async function extractMediaContent(originalContent: string, config: Config, sess
           await session.send(await buildMessage(originalCave, resourceDir, session));
         }
       }
-      await session.send(session.text('commands.cave.message.uploadCanceled'));
-      throw new Error('duplicate_images_found');
+      throw { code: 'duplicate_images_found' };
     }
   }
 
@@ -1350,27 +1352,73 @@ async function saveMedia(
  * 图片哈希计算类
  */
 class ImageHasher {
-  private static readonly HASH_SIZE = 16;
-  private static readonly BLUR_SIZE = 2;
+  // 增加哈希尺寸以提高精度
+  private static readonly HASH_SIZE = 32; // 从16增加到32
+  private static readonly BLUR_SIZE = 1.5; // 从2减小到1.5以保留更多细节
+  private static readonly EDGE_THRESHOLD = 10; // 边缘检测阈值
 
   static async calculateHash(imgBuffer: Buffer): Promise<string> {
     const sharp = require('sharp');
     try {
-      // 简化预处理步骤,只保留最必要的操作
-      const processed = await sharp(imgBuffer)
-        .grayscale()
-        .blur(this.BLUR_SIZE)
-        .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
-        .raw()
-        .toBuffer();
+      // 增加预处理步骤,提取更多图像特征
+      const image = sharp(imgBuffer);
 
-      // 计算中值而不是平均值,对噪声更鲁棒
-      const pixels = Array.from(processed);
-      pixels.sort((a, b) => Number(a) - Number(b));
-      const median = pixels[Math.floor(pixels.length / 2)];
+      // 并行处理两个特征分支
+      const [normalHash, edgeHash] = await Promise.all([
+        // 常规处理分支
+        image
+          .clone()
+          .grayscale()
+          .blur(this.BLUR_SIZE)
+          .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
+          .raw()
+          .toBuffer(),
 
-      // 生成哈希字符串
-      return pixels.map(p => p > median ? '1' : '0').join('');
+        // 边缘检测分支
+        image
+          .clone()
+          .grayscale()
+          .convolve({
+            width: 3,
+            height: 3,
+            kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1]
+          })
+          .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
+          .raw()
+          .toBuffer()
+      ]);
+
+      // 合并两个特征的结果
+      const normalPixels: number[] = Array.from(normalHash);
+      const edgePixels: number[] = Array.from(edgeHash);
+
+      // 使用中值而不是平均值来提高鲁棒性
+      normalPixels.sort((a, b) => Number(a) - Number(b));
+      const normalMedian = normalPixels[Math.floor(normalPixels.length / 2)];
+
+      // 对边缘特征使用动态阈值
+      const edgeMedian = edgePixels.reduce((sum, p) => sum + p, 0) / edgePixels.length;
+      const edgeThreshold = edgeMedian + this.EDGE_THRESHOLD;
+
+      // 生成混合哈希
+      let hashHex = '';
+      for (let i = 0; i < normalPixels.length; i += 4) {
+        let value = 0;
+        // 每4个像素点合并为1个16进制数字
+        for (let j = 0; j < 4 && (i + j) < normalPixels.length; j++) {
+          const pixel = normalPixels[i + j];
+          const hasStrongEdge = edgePixels[i + j] > edgeThreshold;
+          // 使用边缘信息和像素值综合判断
+          if (hasStrongEdge || pixel > normalMedian) {
+            value |= (1 << (3 - j));
+          }
+        }
+        // 转换为16进制并补零
+        hashHex += value.toString(16).padStart(1, '0');
+      }
+
+      return hashHex;
+
     } catch (error) {
       logger.error(`Failed to calculate image hash: ${error.message}`);
       throw error;
@@ -1378,7 +1426,7 @@ class ImageHasher {
   }
 
   /**
-   * 计算汉明距离(优化位运算)
+   * 改进的汉明距离计算
    */
   static getHammingDistance(hash1: string, hash2: string): number {
     if (hash1.length !== hash2.length) {
@@ -1386,19 +1434,61 @@ class ImageHasher {
     }
 
     let distance = 0;
-    for (let i = 0; i < hash1.length; i++) {
-      if (hash1[i] !== hash2[i]) distance++;
+    const len = hash1.length;
+
+    // 使用分块比较来减少误差影响
+    const blockSize = 8;
+    const blocks = Math.floor(len / blockSize);
+
+    for (let i = 0; i < blocks; i++) {
+      let blockDiff = 0;
+      const start = i * blockSize;
+      const end = start + blockSize;
+
+      // 计算每个块内的差异
+      for (let j = start; j < end; j++) {
+        const n1 = parseInt(hash1[j], 16);
+        const n2 = parseInt(hash2[j], 16);
+        blockDiff += this.popCount(n1 ^ n2);
+      }
+
+      // 如果块内差异过大,说明这个区域差异显著
+      if (blockDiff > blockSize / 2) {
+        distance += blockSize;
+      } else {
+        distance += blockDiff;
+      }
     }
+
+    // 处理剩余的位
+    const remainStart = blocks * blockSize;
+    for (let i = remainStart; i < len; i++) {
+      const n1 = parseInt(hash1[i], 16);
+      const n2 = parseInt(hash2[i], 16);
+      distance += this.popCount(n1 ^ n2);
+    }
+
     return distance;
   }
 
+  // 计算二进制中1的个数
+  private static popCount(x: number): number {
+    x = x - ((x >> 1) & 0x55555555);
+    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+    x = (x + (x >> 4)) & 0x0f0f0f0f;
+    x = x + (x >> 8);
+    x = x + (x >> 16);
+    return x & 0x3f;
+  }
+
   /**
-   * 判断两个哈希是否相似
+   * 改进的相似度计算
    */
   static isSimilar(hash1: string, hash2: string, threshold: number): boolean {
     const distance = this.getHammingDistance(hash1, hash2);
-    // 直接计算相似度百分比
-    const similarity = 10 * (1 - distance / hash1.length);
+    // 使用更精确的相似度计算公式
+    const maxDistance = hash1.length * 4; // 每个16进制字符代表4位
+    const similarity = 10 * Math.pow(1 - distance / maxDistance, 2);
     return similarity >= threshold;
   }
 }
@@ -1446,7 +1536,8 @@ class HashStorage {
     for (const [fileName, { hash: existingHash, caveId }] of this.hashes.entries()) {
       try {
         const distance = ImageHasher.getHammingDistance(hash, existingHash);
-        const similarity = 10 * (1 - distance / hash.length);
+        // 使用改进的相似度计算公式
+        const similarity = 10 * Math.pow(1 - distance / hash.length, 2);
 
         if (similarity >= threshold && similarity > maxSimilarity) {
           maxSimilarity = similarity;

@@ -61,7 +61,9 @@ commands:
       noCave: "No entries found"
       invalidId: "Please enter a valid entry ID"
       notFound: "Entry not found"
-      duplicateImage: "Detected image similarity with entry #{0} reaching {1}, addition cancelled. Original entry content:"
+      duplicateImage: "Found similarity {1}% with cave #{0}, here's the original content:"
+      failed: "Submission failed"
+      duplicate_images_found: "Duplicate image detected, submission cancelled"
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is restricted to administrators"

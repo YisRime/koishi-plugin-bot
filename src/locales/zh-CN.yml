@@ -61,7 +61,9 @@ commands:
       noCave: "没有回声洞"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
-      duplicateImage: "检测到图片与回声洞 #{0} 相似度达到 {1}，已终止添加。以下是原回声洞内容："
+      duplicateImage: "检测到与回声洞 #{0} 相似度为 {1}%，以下是原始内容："
+      failed: "投稿失败"
+      duplicate_images_found: "检测到重复图片，投稿已取消"
     message:
       blacklisted: "你已被列入黑名单"
       managerOnly: "此操作仅限管理员可用"
