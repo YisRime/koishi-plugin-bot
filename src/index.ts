@@ -306,7 +306,7 @@ export async function apply(ctx: Context, config: Config) {
                          config.whitelist.includes(session.guildId) ||
                          config.whitelist.includes(session.channelId);
 
-      const { imageUrls, imageElements, videoUrls, videoElements, textParts } =
+      const { imageUrls, imageElements, videoUrls, videoElements, textParts, ...rest } =
         await extractMediaContent(inputContent, config, session);
 
       if (videoUrls.length > 0 && !config.allowVideo) {
@@ -334,31 +334,30 @@ export async function apply(ctx: Context, config: Config) {
         ) : []
       ]);
 
+      // 所有元素合并时保持原始顺序
+      const allElements = [
+        ...textParts,
+        ...imageElements.map((el, idx) => ({
+          ...el,
+          file: savedImages[idx]
+        })),
+        ...videoElements.map((el, idx) => ({
+          ...el,
+          file: savedVideos[idx]
+        })),
+        ...rest.audioElements,
+        ...rest.fileElements,
+        ...rest.jsonElements,
+        ...rest.markdownElements
+      ];
+
       // 内联 buildCaveObject
       const newCave: CaveObject = {
         cave_id: caveId,
-        elements: [
-          ...textParts,
-          ...imageElements.map((el, idx) => ({ ...el, file: savedImages[idx] }))
-        ].sort((a, b) => a.index - b.index)
-         .map(element => {
-           if (element.type === 'text') {
-             return { type: 'text' as const, content: element.content, index: element.index };
-           }
-           return { type: element.type, file: element.file, index: element.index };
-         }),
+        elements: allElements,
         contributor_number: session.userId,
         contributor_name: session.username
       };
-
-      // 如果有视频，直接添加到elements末尾
-      if (videoUrls.length > 0 && savedVideos.length > 0) {
-        newCave.elements.push({
-          type: 'video',
-          file: savedVideos[0],
-          index: Number.MAX_SAFE_INTEGER
-        });
-      }
 
       // 处理审核逻辑
       if (config.enableAudit && !bypassAudit) {
@@ -581,7 +580,9 @@ export interface Config {
 }
 
 // 定义数据类型接口
-interface BaseElement { type: 'text' | 'img' | 'video' | 'audio' | 'file' | 'json' | 'markdown'; index: number }
+interface BaseElement {
+  type: 'text' | 'img' | 'video' | 'audio' | 'file' | 'json' | 'markdown';
+}
 interface TextElement extends BaseElement { type: 'text'; content: string }
 interface MediaElement extends BaseElement {
   type: 'img' | 'video' | 'audio' | 'file';
@@ -906,20 +907,34 @@ ${session.text('commands.cave.audit.from')}${cave.contributor_number}`;
 function cleanElementsForSave(elements: Element[]): Element[] {
   if (!elements?.length) return [];
 
-  const cleanedElements = elements.map(element => {
+  return elements.map(element => {
     if (element.type === 'text') {
-      return { type: 'text' as const, index: element.index, content: (element as TextElement).content } as TextElement;
-    } else if (element.type === 'img' || element.type === 'video') {
+      return {
+        type: 'text' as const,
+        content: (element as TextElement).content
+      };
+    } else if (['img', 'video', 'audio', 'file'].includes(element.type)) {
       const mediaElement = element as MediaElement;
       if (mediaElement.file) {
-        return { type: mediaElement.type, index: element.index, file: mediaElement.file } as MediaElement;
-      } else {
-        return { type: mediaElement.type, index: element.index } as MediaElement;
+        return {
+          type: mediaElement.type,
+          file: mediaElement.file
+        };
       }
+      return { type: mediaElement.type };
+    } else if (element.type === 'json') {
+      return {
+        type: 'json',
+        content: (element as JsonElement).content
+      };
+    } else if (element.type === 'markdown') {
+      return {
+        type: 'markdown',
+        content: (element as MarkdownElement).content
+      };
     }
     return element;
   });
-  return cleanedElements.sort((a, b) => a.index - b.index);
 }
 
 // 处理媒体文件
@@ -943,7 +958,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     return session.text('commands.cave.error.noContent');
   }
 
-  // 分离需要单独发送的元素和其他元素
+  // 保持原始顺序处理元素
   const separateElements = cave.elements.filter((el): el is MediaElement | JsonElement | MarkdownElement =>
     ['video', 'audio', 'file', 'json', 'markdown'].includes(el.type)
   );
@@ -1031,7 +1046,11 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
  * - videoElements: 视频元素对象列表
  * - textParts: 文本元素列表
  */
-async function extractMediaContent(originalContent: string, config: Config, session: any): Promise<{
+async function extractMediaContent(
+  originalContent: string,
+  config: Config,
+  session: any
+): Promise<{
   imageUrls: string[],
   imageElements: MediaElement[],
   videoUrls: string[],
@@ -1044,80 +1063,110 @@ async function extractMediaContent(originalContent: string, config: Config, sess
   markdownElements: MarkdownElement[],
   textParts: TextElement[]
 }> {
-  const textParts = originalContent
-    .split(/<(img|video)[^>]+>/)
-    .map((text, idx) => text.trim() && ({
-      type: 'text' as const,
-      content: text.replace(/^(img|video)$/, '').trim(),
-      index: idx * 3
-    }))
-    .filter(text => text && text.content);
+  const elements: (TextElement | MediaElement | JsonElement | MarkdownElement)[] = [];
+  const urls: Record<string, string[]> = {
+    img: [], video: [], audio: [], file: []
+  };
 
-  const getMediaElements = (type: 'img' | 'video' | 'audio' | 'file', maxSize: number) => {
-    const regex = new RegExp(`<${type}[^>]+src="([^"]+)"[^>]*>`, 'g');
-    const elements: MediaElement[] = [];
-    const urls: string[] = [];
+  const tagPattern = /<(img|video|audio|file|json|markdown)(?:[^>]*?src="([^"]*)")?(?:[^>]*?file="([^"]*)")?(?:[^>]*?fileSize="([^"]*)")?[^>]*>(?:([\s\S]*?)<\/\1>)?/g;
 
-    let match;
-    let idx = 0;
-    while ((match = regex.exec(originalContent)) !== null) {
-      const element = match[0];
-      const url = match[1];
-      const fileName = element.match(/file="([^"]+)"/)?.[1];
-      const fileSize = element.match(/fileSize="([^"]+)"/)?.[1];
+  let lastMatchEnd = 0;
+  let text = '';
 
-      // 提前检查文件大小
-      if (fileSize) {
-        const sizeInBytes = parseInt(fileSize);
-        if (sizeInBytes > maxSize * 1024 * 1024) {
-          throw new Error(session.text('commands.cave.message.mediaSizeExceeded', [type]));
-        }
+  while (true) {
+    const match = tagPattern.exec(originalContent);
+    if (!match) {
+      // 处理剩余的文本
+      text = originalContent.slice(lastMatchEnd);
+      if (text.trim()) {
+        elements.push({
+          type: 'text',
+          content: text
+        });
       }
-
-      urls.push(url);
-      elements.push({
-        type,
-        index: idx * 3 + (type === 'img' ? 1 : 2),
-        fileName,
-        fileSize
-      });
-      idx++;
+      break;
     }
-    return { urls, elements };
-  };
 
-  const getContentElements = (type: 'json' | 'markdown') => {
-    const regex = new RegExp(`<${type}>([^<]+)</${type}>`, 'g');
-    const elements: (JsonElement | MarkdownElement)[] = [];
-    let match;
-    let idx = 0;
-
-    while ((match = regex.exec(originalContent)) !== null) {
+    // 处理标签前的文本
+    text = originalContent.slice(lastMatchEnd, match.index);
+    if (text.trim()) {
       elements.push({
-        type,
-        content: match[1],
-        index: idx * 3 + 2
+        type: 'text',
+        content: text
       });
-      idx++;
     }
-    return elements;
-  };
 
-  const { urls: imageUrls, elements: imageElements } = getMediaElements('img', config.imageMaxSize);
-  const { urls: videoUrls, elements: videoElements } = getMediaElements('video', config.videoMaxSize);
-  const { urls: audioUrls, elements: audioElements } = getMediaElements('audio', config.imageMaxSize);
-  const { urls: fileUrls, elements: fileElements } = getMediaElements('file', config.imageMaxSize);
+    // 记录本次匹配结束位置
+    lastMatchEnd = match.index + match[0].length;
 
-  const jsonElements = getContentElements('json') as JsonElement[];
-  const markdownElements = getContentElements('markdown') as MarkdownElement[];
+    const [fullMatch, type, src, fileName, fileSize, content] = match;
+
+    // 如果是未识别的标签，保留原始文本
+    if (!src && !content && (type === 'audio' || type === 'video' || type === 'file')) {
+      elements.push({
+        type: 'text',
+        content: fullMatch
+      });
+      continue;
+    }
+
+    switch (type) {
+      case 'img':
+      case 'video':
+      case 'audio':
+      case 'file':
+        if (src) {
+          if (fileSize) {
+            const size = parseInt(fileSize);
+            const maxSize = type === 'video' ? config.videoMaxSize : config.imageMaxSize;
+            if (size > maxSize * 1024 * 1024) {
+              throw new Error(session.text('commands.cave.message.mediaSizeExceeded', [type]));
+            }
+          }
+          urls[type].push(src);
+          elements.push({
+            type,
+            fileName: fileName || undefined,
+            fileSize: fileSize || undefined
+          });
+        } else {
+          // 保留未识别的媒体标签
+          elements.push({
+            type: 'text',
+            content: fullMatch
+          });
+        }
+        break;
+      case 'json':
+      case 'markdown':
+        if (content) {
+          elements.push({
+            type,
+            content: content.trim()
+          });
+        } else {
+          // 保留空的 json/markdown 标签
+          elements.push({
+            type: 'text',
+            content: fullMatch
+          });
+        }
+        break;
+    }
+  }
 
   return {
-    imageUrls, imageElements,
-    videoUrls, videoElements,
-    audioUrls, audioElements,
-    fileUrls, fileElements,
-    jsonElements, markdownElements,
-    textParts
+    imageUrls: urls.img,
+    imageElements: elements.filter((el): el is MediaElement => el.type === 'img'),
+    videoUrls: urls.video,
+    videoElements: elements.filter((el): el is MediaElement => el.type === 'video'),
+    audioUrls: urls.audio,
+    audioElements: elements.filter((el): el is MediaElement => el.type === 'audio'),
+    fileUrls: urls.file,
+    fileElements: elements.filter((el): el is MediaElement => el.type === 'file'),
+    jsonElements: elements.filter((el): el is JsonElement => el.type === 'json'),
+    markdownElements: elements.filter((el): el is MarkdownElement => el.type === 'markdown'),
+    textParts: elements.filter((el): el is TextElement => el.type === 'text')
   };
 }
 
