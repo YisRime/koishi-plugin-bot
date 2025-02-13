@@ -439,6 +439,8 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
         }
+        // 拒绝审核时将ID标记为已删除
+        await idManager.markDeleted(targetId);
       }
 
       const remainingCount = newPendingData.length;
@@ -489,9 +491,9 @@ export async function apply(ctx: Context, config: Config) {
         }
       ]);
     } else {
-      await FileHandler.writeJsonData(pendingFilePath, []);
-      // 删除所有被拒绝投稿的媒体文件
+      // 批量拒绝时处理每个待审核项
       for (const cave of pendingData) {
+        // 删除媒体文件
         if (cave.elements) {
           for (const element of cave.elements) {
             if ((element.type === 'img' || element.type === 'video') && element.file) {
@@ -502,8 +504,11 @@ export async function apply(ctx: Context, config: Config) {
             }
           }
         }
+        // 将ID标记为已删除
+        await idManager.markDeleted(cave.cave_id);
         processedCount++;
       }
+      await FileHandler.writeJsonData(pendingFilePath, []);
     }
 
     return sendMessage(session, 'commands.cave.audit.batchAuditResult', [
@@ -576,10 +581,18 @@ export interface Config {
 }
 
 // 定义数据类型接口
-interface BaseElement { type: 'text' | 'img' | 'video'; index: number }
+interface BaseElement { type: 'text' | 'img' | 'video' | 'audio' | 'file' | 'json' | 'markdown'; index: number }
 interface TextElement extends BaseElement { type: 'text'; content: string }
-interface MediaElement extends BaseElement { type: 'img' | 'video'; file?: string; fileName?: string; fileSize?: string; filePath?: string }
-type Element = TextElement | MediaElement;
+interface MediaElement extends BaseElement {
+  type: 'img' | 'video' | 'audio' | 'file';
+  file?: string;
+  fileName?: string;
+  fileSize?: string;
+  filePath?: string
+}
+interface JsonElement extends BaseElement { type: 'json'; content: string }
+interface MarkdownElement extends BaseElement { type: 'markdown'; content: string }
+type Element = TextElement | MediaElement | JsonElement | MarkdownElement;
 
 interface CaveObject { cave_id: number; elements: Element[]; contributor_number: string; contributor_name: string }
 interface PendingCave extends CaveObject {}
@@ -910,10 +923,18 @@ function cleanElementsForSave(elements: Element[]): Element[] {
 }
 
 // 处理媒体文件
-async function processMediaFile(filePath: string, type: 'image' | 'video'): Promise<string | null> {
+async function processMediaFile(filePath: string, type: 'image' | 'video' | 'audio' | 'file'): Promise<string | null> {
   const data = await fs.promises.readFile(filePath).catch(() => null);
   if (!data) return null;
-  return `data:${type}/${type === 'image' ? 'png' : 'mp4'};base64,${data.toString('base64')}`;
+
+  const mimeTypes = {
+    image: 'image/png',
+    video: 'video/mp4',
+    audio: 'audio/mpeg',
+    file: 'application/octet-stream'
+  };
+
+  return `data:${mimeTypes[type]};base64,${data.toString('base64')}`;
 }
 
 // 构建消息内容
@@ -922,34 +943,63 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     return session.text('commands.cave.error.noContent');
   }
 
-  // 分离视频元素和其他元素
-  const videoElement = cave.elements.find((el): el is MediaElement => el.type === 'video');
-  const nonVideoElements = cave.elements.filter(el => el.type !== 'video');
+  // 分离需要单独发送的元素和其他元素
+  const separateElements = cave.elements.filter((el): el is MediaElement | JsonElement | MarkdownElement =>
+    ['video', 'audio', 'file', 'json', 'markdown'].includes(el.type)
+  );
+  const normalElements = cave.elements.filter(el =>
+    !['video', 'audio', 'file', 'json', 'markdown'].includes(el.type)
+  );
 
-  // 如果有视频元素，先发送基本信息，然后单独发送视频
-  if (videoElement?.file) {
-    // 构建基本信息
-    const basicInfo = [
+  // 构建基本信息
+  const basicInfo = [
     session.text('commands.cave.message.caveTitle', [cave.cave_id]),
     session.text('commands.cave.message.contributorSuffix', [cave.contributor_name])
-    ].join('\n');
+  ].join('\n');
 
+  // 如果有需要单独发送的元素
+  if (separateElements.length > 0) {
     // 先发送标题和作者信息
     await session?.send(basicInfo);
 
-    // 发送视频
-    const filePath = path.join(resourceDir, videoElement.file);
-    const base64Data = await processMediaFile(filePath, 'video');
-    if (base64Data && session) {
-      await session.send(h('video', { src: base64Data }));
+    // 依次处理每个需要单独发送的元素
+    for (const element of separateElements) {
+      switch (element.type) {
+        case 'video':
+        case 'audio':
+        case 'file':
+          if (element.file) {
+            const filePath = path.join(resourceDir, element.file);
+            const base64Data = await processMediaFile(filePath, element.type);
+            if (base64Data && session) {
+              await session.send(h(element.type, { src: base64Data }));
+            }
+          }
+          break;
+        case 'json':
+          if (session) {
+            try {
+              const jsonContent = JSON.parse(element.content);
+              await session.send(h('json', { content: jsonContent }));
+            } catch (error) {
+              logger.error(`Invalid JSON content: ${error.message}`);
+            }
+          }
+          break;
+        case 'markdown':
+          if (session) {
+            await session.send(h('markdown', { content: element.content }));
+          }
+          break;
+      }
     }
-    return ''; // 返回空字符串因为消息已经发送
+    return ''; // 已经发送完所有内容
   }
 
-  // 如果没有视频，按原来的方式处理
+  // 如果只有普通元素，按原来的方式处理
   const lines = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
 
-  for (const element of nonVideoElements) {
+  for (const element of normalElements) {
     if (element.type === 'text') {
       lines.push(element.content);
     } else if (element.type === 'img' && element.file) {
@@ -983,10 +1033,16 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
  */
 async function extractMediaContent(originalContent: string, config: Config, session: any): Promise<{
   imageUrls: string[],
-  imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>,
+  imageElements: MediaElement[],
   videoUrls: string[],
-  videoElements: Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>,
-  textParts: Element[]
+  videoElements: MediaElement[],
+  audioUrls: string[],
+  audioElements: MediaElement[],
+  fileUrls: string[],
+  fileElements: MediaElement[],
+  jsonElements: JsonElement[],
+  markdownElements: MarkdownElement[],
+  textParts: TextElement[]
 }> {
   const textParts = originalContent
     .split(/<(img|video)[^>]+>/)
@@ -997,9 +1053,9 @@ async function extractMediaContent(originalContent: string, config: Config, sess
     }))
     .filter(text => text && text.content);
 
-  const getMediaElements = (type: 'img' | 'video', maxSize: number) => {
+  const getMediaElements = (type: 'img' | 'video' | 'audio' | 'file', maxSize: number) => {
     const regex = new RegExp(`<${type}[^>]+src="([^"]+)"[^>]*>`, 'g');
-    const elements: Array<{ type: typeof type; index: number; fileName?: string; fileSize?: string }> = [];
+    const elements: MediaElement[] = [];
     const urls: string[] = [];
 
     let match;
@@ -1030,13 +1086,39 @@ async function extractMediaContent(originalContent: string, config: Config, sess
     return { urls, elements };
   };
 
-  // 分别检查图片和视频
-  const { urls: imageUrls, elements: imageElementsRaw } = getMediaElements('img', config.imageMaxSize);
-  const imageElements = imageElementsRaw as Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>;
-  const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video', config.videoMaxSize);
-  const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
+  const getContentElements = (type: 'json' | 'markdown') => {
+    const regex = new RegExp(`<${type}>([^<]+)</${type}>`, 'g');
+    const elements: (JsonElement | MarkdownElement)[] = [];
+    let match;
+    let idx = 0;
 
-  return { imageUrls, imageElements, videoUrls, videoElements, textParts };
+    while ((match = regex.exec(originalContent)) !== null) {
+      elements.push({
+        type,
+        content: match[1],
+        index: idx * 3 + 2
+      });
+      idx++;
+    }
+    return elements;
+  };
+
+  const { urls: imageUrls, elements: imageElements } = getMediaElements('img', config.imageMaxSize);
+  const { urls: videoUrls, elements: videoElements } = getMediaElements('video', config.videoMaxSize);
+  const { urls: audioUrls, elements: audioElements } = getMediaElements('audio', config.imageMaxSize);
+  const { urls: fileUrls, elements: fileElements } = getMediaElements('file', config.imageMaxSize);
+
+  const jsonElements = getContentElements('json') as JsonElement[];
+  const markdownElements = getContentElements('markdown') as MarkdownElement[];
+
+  return {
+    imageUrls, imageElements,
+    videoUrls, videoElements,
+    audioUrls, audioElements,
+    fileUrls, fileElements,
+    jsonElements, markdownElements,
+    textParts
+  };
 }
 
 /**
