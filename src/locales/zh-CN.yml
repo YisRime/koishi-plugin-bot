@@ -9,6 +9,8 @@ _config:
   imageMaxSize: "图片最大大小（MB）"
   enablePagination: "启用统计分页"
   itemsPerPage: "每页显示数目"
+  enableDuplicateCheck: "启用图片查重"
+  duplicateThreshold: "图片相似度阈值(0-10,越小越严格)"
 
 commands:
   cave:
@@ -59,6 +61,7 @@ commands:
       noCave: "没有回声洞"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
+      duplicateImage: "发现重复图片,与 {0} 相似度过高"
     message:
       blacklisted: "你已被列入黑名单"
       managerOnly: "此操作仅限管理员可用"

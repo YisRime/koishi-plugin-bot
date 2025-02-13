@@ -9,6 +9,8 @@ _config:
   imageMaxSize: "Maximum Image Size (MB)"
   enablePagination: "Enable Statistics Pagination"
   itemsPerPage: "Items Per Page"
+  enableDuplicateCheck: "Enable Image Duplicate Check"
+  duplicateThreshold: "Image Similarity Threshold (0-10, smaller is stricter)"
 
 commands:
   cave:
@@ -59,6 +61,7 @@ commands:
       noCave: "No entries found"
       invalidId: "Please enter a valid entry ID"
       notFound: "Entry not found"
+      duplicateImage: "Duplicate image found, too similar to {0}"
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is restricted to administrators"
