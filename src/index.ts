@@ -144,7 +144,7 @@ export async function apply(ctx: Context, config: Config) {
     const isApprove = Boolean(options.p);
     if ((options.p === true && content[0] === 'all') ||
         (options.d === true && content[0] === 'all')) {
-      return await handleAudit(ctx, pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session);
+      return await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session);
     }
     const id = parseInt(content[0] ||
       (typeof options.p === 'string' ? options.p : '') ||
@@ -152,7 +152,7 @@ export async function apply(ctx: Context, config: Config) {
     if (isNaN(id)) {
       return sendMessage(session, 'commands.cave.error.invalidId', [], true);
     }
-    return sendMessage(session, await handleAudit(ctx, pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, id), [], true);
+    return sendMessage(session, await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, id), [], true);
   }
 
   async function processView(
@@ -160,14 +160,8 @@ export async function apply(ctx: Context, config: Config) {
     resourceDir: string,
     session: any,
     options: any,
-    content: string[],
-    config: Config
+    content: string[]
   ): Promise<string> {
-    // 添加冷却检查
-    if (!await checkCooldown(session, config)) {
-      return '';
-    }
-
     const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
     const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
@@ -179,17 +173,11 @@ export async function apply(ctx: Context, config: Config) {
   async function processRandom(
     caveFilePath: string,
     resourceDir: string,
-    session: any,
-    config: Config
+    session: any
   ): Promise<string | void> {
     const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
     if (data.length === 0) {
       return sendMessage(session, 'commands.cave.error.noCave', [], true);
-    }
-
-    // 使用冷却检查
-    if (!await checkCooldown(session, config)) {
-      return '';
     }
 
     const cave = (() => {
@@ -249,7 +237,7 @@ export async function apply(ctx: Context, config: Config) {
       }
     }
 
-    // 从数组中移除目标对象（使用 filter 而不是 splice）
+    // 从数组中移除目标对象
     if (isPending) {
       const newPendingData = pendingData.filter(item => item.cave_id !== caveId);
       await FileHandler.writeJsonData(pendingFilePath, newPendingData);
@@ -279,7 +267,6 @@ export async function apply(ctx: Context, config: Config) {
     content: string[]
   ): Promise<string> {
     try {
-      // 内联 getInputWithTimeout
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
         await sendMessage(session, 'commands.cave.add.noContent', [], true);
         const reply = await session.prompt({ timeout: 60000 });
@@ -326,7 +313,6 @@ export async function apply(ctx: Context, config: Config) {
         ) : []
       ]);
 
-      // 内联 buildCaveObject
       const newCave: CaveObject = {
         cave_id: caveId,
         elements: [
@@ -381,7 +367,6 @@ export async function apply(ctx: Context, config: Config) {
 
   // 合并审核相关函数
   async function handleAudit(
-    ctx: Context,
     pendingData: PendingCave[],
     isApprove: boolean,
     caveFilePath: string,
@@ -408,8 +393,7 @@ export async function apply(ctx: Context, config: Config) {
         // 确保cave_id保持不变
         const newCaveData = [...oldCaveData, {
           ...targetCave,
-          cave_id: targetId, // 明确指定ID
-          // 保存到 cave.json 时移除 index
+          cave_id: targetId,
           elements: cleanElementsForSave(targetCave.elements, false)
         }];
 
@@ -477,8 +461,7 @@ export async function apply(ctx: Context, config: Config) {
             for (const cave of pendingData) {
               newData.push({
                 ...cave,
-                cave_id: cave.cave_id, // 确保ID保持不变
-                // 保存到 cave.json 时移除 index
+                cave_id: cave.cave_id,
                 elements: cleanElementsForSave(cave.elements, false)
               });
               processedCount++;
@@ -524,23 +507,6 @@ export async function apply(ctx: Context, config: Config) {
     ], false);
   }
 
-  // 添加冷却检查辅助函数
-  async function checkCooldown(session: any, config: Config): Promise<boolean> {
-    const guildId = session.guildId;
-    const now = Date.now();
-    const lastTime = lastUsed.get(guildId) || 0;
-    const isManager = config.manager.includes(session.userId);
-
-    if (!isManager && now - lastTime < config.number * 1000) {
-      const waitTime = Math.ceil((config.number * 1000 - (now - lastTime)) / 1000);
-      await sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
-      return false;
-    }
-
-    lastUsed.set(guildId, now);
-    return true;
-  }
-
   // 注册命令并配置权限检查
   ctx.command('cave [message]')
     .option('a', '添加回声洞')
@@ -554,7 +520,7 @@ export async function apply(ctx: Context, config: Config) {
       if (config.blacklist.includes(session.userId)) {
         return sendMessage(session, 'commands.cave.message.blacklisted', [], true);
       }
-      // 只检查审核命令的权限
+      // 审核命令权限检查
       if ((options.p || options.d) && !config.manager.includes(session.userId)) {
         return sendMessage(session, 'commands.cave.message.managerOnly', [], true);
       }
@@ -566,11 +532,27 @@ export async function apply(ctx: Context, config: Config) {
       const resourceDir = path.join(caveDir, 'resources');
       const pendingFilePath = path.join(caveDir, 'pending.json');
 
+      // 基础检查 - 需要冷却的命令
+      const needsCooldown = !options.l && !options.a && !options.p && !options.d;
+      if (needsCooldown) {
+        const guildId = session.guildId;
+        const now = Date.now();
+        const lastTime = lastUsed.get(guildId) || 0;
+        const isManager = config.manager.includes(session.userId);
+
+        if (!isManager && now - lastTime < config.number * 1000) {
+          const waitTime = Math.ceil((config.number * 1000 - (now - lastTime)) / 1000);
+          return sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
+        }
+
+        lastUsed.set(guildId, now);
+      }
+
+      // 处理各种命令
       if (options.l !== undefined) {
         const input = typeof options.l === 'string' ? options.l : content[0];
         const num = parseInt(input);
 
-        // 管理员可以查看所有内容
         if (config.manager.includes(session.userId)) {
           if (!isNaN(num)) {
             if (num < 10000) {
@@ -583,7 +565,6 @@ export async function apply(ctx: Context, config: Config) {
           }
           return await processList(session, config);
         } else {
-          // 非管理员只能查看自己的投稿
           return await processList(session, config, session.userId);
         }
       }
@@ -592,7 +573,7 @@ export async function apply(ctx: Context, config: Config) {
         return await processAudit(ctx, pendingFilePath, caveFilePath, resourceDir, session, options, content);
       }
       if (options.g) {
-        return await processView(caveFilePath, resourceDir, session, options, content, config);
+        return await processView(caveFilePath, resourceDir, session, options, content);
       }
       if (options.r) {
         return await processDelete(caveFilePath, resourceDir, pendingFilePath, session, config, options, content);
@@ -600,7 +581,7 @@ export async function apply(ctx: Context, config: Config) {
       if (options.a) {
         return await processAdd(ctx, config, caveFilePath, resourceDir, pendingFilePath, session, content);
       }
-      return await processRandom(caveFilePath, resourceDir, session, config);
+      return await processRandom(caveFilePath, resourceDir, session);
     });
 }
 
@@ -853,20 +834,18 @@ class IdManager {
       // 处理ID冲突
       if (conflicts.size > 0) {
         logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
-        for (const [conflictId, items] of conflicts) {
+        for (const items of conflicts.values()) {
           // 保留原始ID的第一个条目，为其他条目分配新ID
-          items.forEach((item, index) => {
-            if (index > 0) { // 跳过第一个条目
-              // 找到一个未使用的ID
-              let newId = this.maxId + 1;
-              while (this.usedIds.has(newId)) {
-                newId++;
-              }
-              logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
-              item.cave_id = newId;
-              this.usedIds.add(newId);
-              this.maxId = Math.max(this.maxId, newId);
+          items.slice(1).forEach(item => {
+            // 找到一个未使用的ID
+            let newId = this.maxId + 1;
+            while (this.usedIds.has(newId)) {
+              newId++;
             }
+            logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
+            item.cave_id = newId;
+            this.usedIds.add(newId);
+            this.maxId = Math.max(this.maxId, newId);
           });
         }
 
@@ -1119,7 +1098,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     if (base64Data && session) {
       await session.send(h('video', { src: base64Data }));
     }
-    return ''; // 返回空字符串因为消息已经发送
+    return '';
   }
 
   // 如果没有视频，按原来的方式处理
@@ -1196,7 +1175,7 @@ async function extractMediaContent(originalContent: string, config: Config, sess
       urls.push(url);
       elements.push({
         type,
-        index: type === 'video' ? Number.MAX_SAFE_INTEGER : idx * 3 + 1, // 视频始终在最后
+        index: type === 'video' ? Number.MAX_SAFE_INTEGER : idx * 3 + 1,
         fileName,
         fileSize
       });
@@ -1235,16 +1214,13 @@ async function saveMedia(
   ctx: Context,
   session: any
 ): Promise<string[]> {
-  const { ext, accept } = mediaType === 'img'
-    ? { ext: 'png', accept: 'image/*' }
-    : { ext: 'mp4', accept: 'video/*' };
+  const accept = mediaType === 'img' ? 'image/*' : 'video/*';
 
   const downloadTasks = urls.map(async (url, i) => {
     const fileName = fileNames[i];
-    const fileExt = fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0]?.slice(1) || ext;
-    const baseName = fileName
-      path.basename(fileName, path.extname(fileName)).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-    const finalFileName = `${caveId}_${baseName}.${fileExt}`;
+    const ext = path.extname(fileName || url) || (mediaType === 'img' ? '.png' : '.mp4');
+    const baseName = path.basename(fileName || 'media', ext).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+    const finalFileName = `${caveId}_${baseName}${ext}`;
     const filePath = path.join(resourceDir, finalFileName);
 
     try {
