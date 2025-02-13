@@ -160,8 +160,14 @@ export async function apply(ctx: Context, config: Config) {
     resourceDir: string,
     session: any,
     options: any,
-    content: string[]
+    content: string[],
+    config: Config
   ): Promise<string> {
+    // 添加冷却检查
+    if (!await checkCooldown(session, config)) {
+      return '';
+    }
+
     const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
     const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
@@ -181,17 +187,10 @@ export async function apply(ctx: Context, config: Config) {
       return sendMessage(session, 'commands.cave.error.noCave', [], true);
     }
 
-    const guildId = session.guildId;
-    const now = Date.now();
-    const lastTime = lastUsed.get(guildId) || 0;
-    const isManager = config.manager.includes(session.userId);
-
-    if (!isManager && now - lastTime < config.number * 1000) {
-      const waitTime = Math.ceil((config.number * 1000 - (now - lastTime)) / 1000);
-      return sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
+    // 使用冷却检查
+    if (!await checkCooldown(session, config)) {
+      return '';
     }
-
-    lastUsed.set(guildId, now);
 
     const cave = (() => {
       const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
@@ -525,6 +524,23 @@ export async function apply(ctx: Context, config: Config) {
     ], false);
   }
 
+  // 添加冷却检查辅助函数
+  async function checkCooldown(session: any, config: Config): Promise<boolean> {
+    const guildId = session.guildId;
+    const now = Date.now();
+    const lastTime = lastUsed.get(guildId) || 0;
+    const isManager = config.manager.includes(session.userId);
+
+    if (!isManager && now - lastTime < config.number * 1000) {
+      const waitTime = Math.ceil((config.number * 1000 - (now - lastTime)) / 1000);
+      await sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
+      return false;
+    }
+
+    lastUsed.set(guildId, now);
+    return true;
+  }
+
   // 注册命令并配置权限检查
   ctx.command('cave [message]')
     .option('a', '添加回声洞')
@@ -538,7 +554,8 @@ export async function apply(ctx: Context, config: Config) {
       if (config.blacklist.includes(session.userId)) {
         return sendMessage(session, 'commands.cave.message.blacklisted', [], true);
       }
-      if ((options.l || options.p || options.d) && !config.manager.includes(session.userId)) {
+      // 只检查审核命令的权限
+      if ((options.p || options.d) && !config.manager.includes(session.userId)) {
         return sendMessage(session, 'commands.cave.message.managerOnly', [], true);
       }
     })
@@ -551,21 +568,31 @@ export async function apply(ctx: Context, config: Config) {
 
       if (options.l !== undefined) {
         const input = typeof options.l === 'string' ? options.l : content[0];
-        // 尝试解析为数字（页码）或作为用户ID处理
-        const pageNum = parseInt(input);
-        if (!isNaN(pageNum)) {
-          return await processList(session, config, undefined, pageNum);
-        } else if (input) {
-          return await processList(session, config, input);
+        const num = parseInt(input);
+
+        // 管理员可以查看所有内容
+        if (config.manager.includes(session.userId)) {
+          if (!isNaN(num)) {
+            if (num < 10000) {
+              return await processList(session, config, undefined, num);
+            } else {
+              return await processList(session, config, num.toString());
+            }
+          } else if (input) {
+            return await processList(session, config, input);
+          }
+          return await processList(session, config);
+        } else {
+          // 非管理员只能查看自己的投稿
+          return await processList(session, config, session.userId);
         }
-        return await processList(session, config);
       }
 
       if (options.p || options.d) {
         return await processAudit(ctx, pendingFilePath, caveFilePath, resourceDir, session, options, content);
       }
       if (options.g) {
-        return await processView(caveFilePath, resourceDir, session, options, content);
+        return await processView(caveFilePath, resourceDir, session, options, content, config);
       }
       if (options.r) {
         return await processDelete(caveFilePath, resourceDir, pendingFilePath, session, config, options, content);
