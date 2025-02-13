@@ -1122,29 +1122,86 @@ async function extractMediaContent(originalContent: string, config: Config, sess
 }
 
 /**
+ * 使用 OneBot API 下载媒体文件
+ */
+async function downloadMediaWithOneBot(
+  bot: any,
+  url: string,
+  mediaType: 'img' | 'record' | 'video' | 'file',
+  fileName?: string
+): Promise<string> {
+  try {
+    // 检查是否为 OneBot 格式的文件名
+    const isOneBotFile = fileName && /^[A-F0-9]{32}\.(jpg|png|gif|silk|amr|mp3|mp4|json|txt)$/i.test(fileName);
+
+    if (isOneBotFile) {
+      let apiName: string;
+      const params: any = { file: fileName };
+
+      // 根据媒体类型选择对应的 API
+      switch (mediaType) {
+        case 'img':
+          apiName = 'get_image';
+          break;
+        case 'record':
+          apiName = 'get_record';
+          params.out_format = 'mp3';
+          break;
+        case 'video':
+          // 一些 OneBot 实现可能支持 get_video
+          apiName = 'get_video';
+          break;
+        case 'file':
+          // 一些 OneBot 实现可能支持 get_file
+          apiName = 'get_file';
+          break;
+        default:
+          return '';
+      }
+
+      // 尝试调用 OneBot API
+      try {
+        const response = await bot.call(apiName, params);
+        return response.file;
+      } catch (apiError) {
+        // 如果 API 不支持，尝试获取原始文件路径
+        try {
+          const fileInfo = await bot.call('get_file_info', { file: fileName });
+          if (fileInfo && fileInfo.file) {
+            return fileInfo.file;
+          }
+        } catch {
+          // 忽略错误，使用常规下载
+        }
+      }
+    }
+    return ''; // 返回空字符串表示需要使用常规下载
+  } catch (error) {
+    logger.error(`Failed to download media using OneBot API: ${error.message}`);
+    return ''; // 出错时也返回空字符串
+  }
+}
+
+/**
  * 保存媒体文件
- * @description 下载并保存媒体文件到本地
- * @param urls 媒体文件URL列表
- * @param fileNames 文件名列表
- * @param resourceDir 资源目录
- * @param caveId 回声洞ID
- * @param mediaType 媒体类型(img/video)
- * @param ctx Koishi上下文
- * @param session 会话上下文
- * @returns 保存后的文件名列表
  */
 async function saveMedia(
   urls: string[],
   fileNames: (string | undefined)[],
   resourceDir: string,
   caveId: number,
-  mediaType: 'img' | 'video',
+  mediaType: 'img' | 'video' | 'record' | 'file',
   ctx: Context,
   session: any
 ): Promise<string[]> {
-  const { ext, accept } = mediaType === 'img'
-    ? { ext: 'png', accept: 'image/*' }
-    : { ext: 'mp4', accept: 'video/*' };
+  const { ext, accept } = (() => {
+    switch (mediaType) {
+      case 'img': return { ext: 'png', accept: 'image/*' };
+      case 'video': return { ext: 'mp4', accept: 'video/*' };
+      case 'record': return { ext: 'mp3', accept: 'audio/*' };
+      case 'file': return { ext: 'dat', accept: '*/*' };
+    }
+  })();
 
   const downloadTasks = urls.map(async (url, i) => {
     const fileName = fileNames[i];
@@ -1156,6 +1213,23 @@ async function saveMedia(
     const filePath = path.join(resourceDir, finalFileName);
 
     try {
+      // 尝试使用 OneBot API 下载
+      if (session?.bot) {
+        const oneBotFile = await downloadMediaWithOneBot(
+          session.bot,
+          url,
+          mediaType,
+          fileName
+        );
+
+        if (oneBotFile) {
+          // 复制 OneBot 下载的文件到目标位置
+          await fs.promises.copyFile(oneBotFile, filePath);
+          return finalFileName;
+        }
+      }
+
+      // 如果 OneBot API 下载失败，使用常规下载方式
       const response = await ctx.http(decodeURIComponent(url).replace(/&amp;/g, '&'), {
         method: 'GET',
         responseType: 'arraybuffer',
@@ -1167,10 +1241,11 @@ async function saveMedia(
         }
       });
 
-      if (!response.data) throw new Error('empty_response');
+      if (!response?.data) throw new Error('empty_response');
 
       await FileHandler.saveMediaFile(filePath, Buffer.from(response.data));
       return finalFileName;
+
     } catch (error) {
       logger.error(`Failed to download media: ${error.message}`);
       throw error;
@@ -1183,7 +1258,13 @@ async function saveMedia(
     .map(result => result.value);
 
   if (!successfulResults.length) {
-    throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
+    const errorTypes = {
+      img: 'Image',
+      video: 'Video',
+      record: 'Audio',
+      file: 'File'
+    };
+    throw new Error(session.text(`commands.cave.error.upload${errorTypes[mediaType]}Failed`));
   }
 
   return successfulResults;
