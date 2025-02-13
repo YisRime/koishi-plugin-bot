@@ -67,10 +67,10 @@ export async function apply(ctx: Context, config: Config) {
   await FileHandler.ensureJsonFile(caveFilePath);
   await FileHandler.ensureJsonFile(pendingFilePath);
 
-  const lastUsed: Map<string, number> = new Map();
-
   const idManager = new IdManager(ctx.baseDir);
-  await idManager.initialize(caveFilePath, pendingFilePath, null);
+  await idManager.initialize(caveFilePath, pendingFilePath);
+
+  const lastUsed = new Map<string, number>();
 
   /**
    * 处理列表查询
@@ -89,7 +89,7 @@ export async function apply(ctx: Context, config: Config) {
     options: any,
     config: Config
   ): Promise<string> {
-    const caveData = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+    const caveData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
     const caveDir = path.dirname(caveFilePath);
     const stats: Record<string, number[]> = {};
 
@@ -148,7 +148,7 @@ export async function apply(ctx: Context, config: Config) {
     options: any,
     content: string[]
   ): Promise<string> {
-    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
     const isApprove = Boolean(options.p);
     if ((options.p === true && content[0] === 'all') ||
         (options.d === true && content[0] === 'all')) {
@@ -172,7 +172,7 @@ export async function apply(ctx: Context, config: Config) {
   ): Promise<string> {
     const caveId = parseInt(content[0] || (typeof options.g === 'string' ? options.g : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
-    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
     const cave = data.find(item => item.cave_id === caveId);
     if (!cave) return sendMessage(session, 'commands.cave.error.notFound', [], true);
     return buildMessage(cave, resourceDir, session);
@@ -182,25 +182,24 @@ export async function apply(ctx: Context, config: Config) {
     caveFilePath: string,
     resourceDir: string,
     session: any,
-    config: Config,
-    lastUsed: Map<string, number>
+    config: Config
   ): Promise<string | void> {
-    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
     if (data.length === 0) {
       return sendMessage(session, 'commands.cave.error.noCave', [], true);
     }
 
     const guildId = session.guildId;
     const now = Date.now();
-    const lastCall = lastUsed.get(guildId) || 0;
+    const lastTime = lastUsed.get(guildId) || 0;
     const isManager = config.manager.includes(session.userId);
 
-    if (!isManager && now - lastCall < config.number * 1000) {
-      const waitTime = Math.ceil((config.number * 1000 - (now - lastCall)) / 1000);
+    if (!isManager && now - lastTime < config.number * 1000) {
+      const waitTime = Math.ceil((config.number * 1000 - (now - lastTime)) / 1000);
       return sendMessage(session, 'commands.cave.message.cooldown', [waitTime], true);
     }
 
-    if (!isManager) lastUsed.set(guildId, now);
+    lastUsed.set(guildId, now);
 
     const cave = (() => {
       const validCaves = data.filter(cave => cave.elements && cave.elements.length > 0);
@@ -225,8 +224,8 @@ export async function apply(ctx: Context, config: Config) {
     const caveId = parseInt(content[0] || (typeof options.r === 'string' ? options.r : ''));
     if (isNaN(caveId)) return sendMessage(session, 'commands.cave.error.invalidId', [], true);
 
-    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
-    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
 
     // 根据 cave_id 查找而不是索引查找
     const targetInData = data.find(item => item.cave_id === caveId);
@@ -262,10 +261,10 @@ export async function apply(ctx: Context, config: Config) {
     // 从数组中移除目标对象（使用 filter 而不是 splice）
     if (isPending) {
       const newPendingData = pendingData.filter(item => item.cave_id !== caveId);
-      await FileHandler.writeJsonData(pendingFilePath, newPendingData, session);
+      await FileHandler.writeJsonData(pendingFilePath, newPendingData);
     } else {
       const newData = data.filter(item => item.cave_id !== caveId);
-      await FileHandler.writeJsonData(caveFilePath, newData, session);
+      await FileHandler.writeJsonData(caveFilePath, newData);
     }
 
     // 标记 ID 为已删除
@@ -288,22 +287,27 @@ export async function apply(ctx: Context, config: Config) {
     content: string[]
   ): Promise<string> {
     try {
-      const [inputContent, caveId] = await Promise.all([
-        content.length > 0 ? content.join('\n') : getInputWithTimeout(session),
-        idManager.getNextId()
-      ]);
+      // 内联 getInputWithTimeout
+      const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
+        await sendMessage(session, 'commands.cave.add.noContent', [], true);
+        const reply = await session.prompt({ timeout: 60000 });
+        if (!reply) throw new Error(session.text('commands.cave.add.operationTimeout'));
+        return reply;
+      })();
+
+      const caveId = await idManager.getNextId();
 
       if (inputContent.includes('/app/.config/QQ/')) {
         return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
       }
 
-      const [
-        { imageUrls, imageElements, videoUrls, videoElements, textParts },
-        bypassAudit
-      ] = await Promise.all([
-        extractMediaContent(inputContent, config, session),
-        checkBypassAudit(config, session)
-      ]);
+      // 内联 checkBypassAudit
+      const bypassAudit = config.whitelist.includes(session.userId) ||
+                         config.whitelist.includes(session.guildId) ||
+                         config.whitelist.includes(session.channelId);
+
+      const { imageUrls, imageElements, videoUrls, videoElements, textParts } =
+        await extractMediaContent(inputContent, config, session);
 
       if (videoUrls.length > 0 && !config.allowVideo) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
@@ -313,7 +317,6 @@ export async function apply(ctx: Context, config: Config) {
         imageUrls.length > 0 ? saveMedia(
           imageUrls,
           imageElements.map(el => el.fileName),
-          imageElements.map(el => el.fileSize),
           resourceDir,
           caveId,
           'img',
@@ -323,7 +326,6 @@ export async function apply(ctx: Context, config: Config) {
         videoUrls.length > 0 ? saveMedia(
           videoUrls,
           videoElements.map(el => el.fileName),
-          videoElements.map(el => el.fileSize),
           resourceDir,
           caveId,
           'video',
@@ -332,8 +334,22 @@ export async function apply(ctx: Context, config: Config) {
         ) : []
       ]);
 
-      // 构建基础cave对象，仅包含文本和图片
-      const newCave = buildCaveObject(caveId, textParts, imageElements, savedImages, session);
+      // 内联 buildCaveObject
+      const newCave: CaveObject = {
+        cave_id: caveId,
+        elements: [
+          ...textParts,
+          ...imageElements.map((el, idx) => ({ ...el, file: savedImages[idx] }))
+        ].sort((a, b) => a.index - b.index)
+         .map(element => {
+           if (element.type === 'text') {
+             return { type: 'text' as const, content: element.content, index: element.index };
+           }
+           return { type: element.type, file: element.file, index: element.index };
+         }),
+        contributor_number: session.userId,
+        contributor_name: session.username
+      };
 
       // 如果有视频，直接添加到elements末尾
       if (videoUrls.length > 0 && savedVideos.length > 0) {
@@ -346,14 +362,19 @@ export async function apply(ctx: Context, config: Config) {
 
       // 处理审核逻辑
       if (config.enableAudit && !bypassAudit) {
-        await handlePendingSubmission(ctx, config, newCave, pendingFilePath, resourceDir, session);
+        const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
+        pendingData.push(newCave);
+        await Promise.all([
+          FileHandler.writeJsonData(pendingFilePath, pendingData),
+          sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session)
+        ]);
         return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
       }
 
       // 7. 直接保存
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath, session);
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
       data.push(newCave);
-      await FileHandler.writeJsonData(caveFilePath, data, session);
+      await FileHandler.writeJsonData(caveFilePath, data);
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
@@ -362,71 +383,135 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  // 新增辅助函数
-  async function getInputWithTimeout(session: any): Promise<string> {
-    await sendMessage(session, 'commands.cave.add.noContent', [], true);
-    const reply = await session.prompt({ timeout: 60000 });
-    if (!reply) {
-      throw new Error(session.text('commands.cave.add.operationTimeout'));
-    }
-    return reply;
-  }
-
-  function checkBypassAudit(config: Config, session: any): boolean {
-    return config.whitelist.includes(session.userId) ||
-           config.whitelist.includes(session.guildId) ||
-           config.whitelist.includes(session.channelId);
-  }
-
-  function buildCaveObject(
-    caveId: number,
-    textParts: Element[],
-    imageElements: any[],
-    savedImages: string[],
-    session: any
-  ): CaveObject {
-    const elements = [
-      ...textParts,
-      ...imageElements.map((el, idx) => ({ ...el, file: savedImages[idx] }))
-    ]
-    .sort((a, b) => a.index - b.index)
-    .map(element => {
-      if (element.type === 'text') {
-        return { type: 'text' as const, content: element.content, index: element.index };
-      }
-      return { type: element.type, file: element.file, index: element.index };
-    });
-
-    return {
-      cave_id: caveId,
-      elements,
-      contributor_number: session.userId,
-      contributor_name: session.username
-    };
-  }
-
-  async function handlePendingSubmission(
+  // 合并审核相关函数
+  async function handleAudit(
     ctx: Context,
-    config: Config,
-    newCave: CaveObject,
-    pendingFilePath: string,
+    pendingData: PendingCave[],
+    isApprove: boolean,
+    caveFilePath: string,
     resourceDir: string,
-    session: any
-  ): Promise<void> {
-    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath, session);
-    pendingData.push(newCave);
-    await Promise.all([
-      FileHandler.writeJsonData(pendingFilePath, pendingData, session),
-      sendAuditMessage(
-        ctx,
-        config,
-        newCave,
-        await buildMessage(newCave, resourceDir, session),
-        session
-      )
-    ]);
-  }
+    pendingFilePath: string,
+    session: any,
+    targetId?: number
+  ): Promise<string> {
+    if (pendingData.length === 0) {
+      return sendMessage(session, 'commands.cave.audit.noPending', [], true);
+    }
 
+    // 处理单条审核
+    if (typeof targetId === 'number') {
+      const targetCave = pendingData.find(item => item.cave_id === targetId);
+      if (!targetCave) {
+        return sendMessage(session, 'commands.cave.audit.pendingNotFound', [], true);
+      }
+
+      const newPendingData = pendingData.filter(item => item.cave_id !== targetId);
+
+      if (isApprove) {
+        const oldCaveData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+        const newCaveData = [...oldCaveData, {
+          ...targetCave,
+          elements: cleanElementsForSave(targetCave.elements)
+        }];
+
+        await FileHandler.withTransaction([
+          {
+            filePath: caveFilePath,
+            operation: async () => FileHandler.writeJsonData(caveFilePath, newCaveData),
+            rollback: async () => FileHandler.writeJsonData(caveFilePath, oldCaveData)
+          },
+          {
+            filePath: pendingFilePath,
+            operation: async () => FileHandler.writeJsonData(pendingFilePath, newPendingData),
+            rollback: async () => FileHandler.writeJsonData(pendingFilePath, pendingData)
+          }
+        ]);
+      } else {
+        await FileHandler.writeJsonData(pendingFilePath, newPendingData);
+        // 删除关联的媒体文件
+        if (targetCave.elements) {
+          for (const element of targetCave.elements) {
+            if ((element.type === 'img' || element.type === 'video') && element.file) {
+              const fullPath = path.join(resourceDir, element.file);
+              if (fs.existsSync(fullPath)) {
+                await fs.promises.unlink(fullPath);
+              }
+            }
+          }
+        }
+      }
+
+      const remainingCount = newPendingData.length;
+      if (remainingCount > 0) {
+        const remainingIds = newPendingData.map(c => c.cave_id).join(', ');
+        const action = isApprove ? 'auditPassed' : 'auditRejected';
+        return sendMessage(session, 'commands.cave.audit.pendingResult', [
+          session.text(`commands.cave.audit.${action}`),
+          remainingCount,
+          remainingIds
+        ], false);
+      }
+      return sendMessage(
+        session,
+        isApprove ? 'commands.cave.audit.auditPassed' : 'commands.cave.audit.auditRejected',
+        [],
+        false
+      );
+    }
+
+    // 处理批量审核
+    const data = isApprove ? await FileHandler.readJsonData<CaveObject>(caveFilePath) : null;
+    let processedCount = 0;
+
+    if (isApprove && data) {
+      const oldData = [...data];
+      const newData = [...data];
+
+      await FileHandler.withTransaction([
+        {
+          filePath: caveFilePath,
+          operation: async () => {
+            for (const cave of pendingData) {
+              newData.push({
+                ...cave,
+                elements: cleanElementsForSave(cave.elements)
+              });
+              processedCount++;
+            }
+            return FileHandler.writeJsonData(caveFilePath, newData);
+          },
+          rollback: async () => FileHandler.writeJsonData(caveFilePath, oldData)
+        },
+        {
+          filePath: pendingFilePath,
+          operation: async () => FileHandler.writeJsonData(pendingFilePath, []),
+          rollback: async () => FileHandler.writeJsonData(pendingFilePath, pendingData)
+        }
+      ]);
+    } else {
+      await FileHandler.writeJsonData(pendingFilePath, []);
+      // 删除所有被拒绝投稿的媒体文件
+      for (const cave of pendingData) {
+        if (cave.elements) {
+          for (const element of cave.elements) {
+            if ((element.type === 'img' || element.type === 'video') && element.file) {
+              const fullPath = path.join(resourceDir, element.file);
+              if (fs.existsSync(fullPath)) {
+                await fs.promises.unlink(fullPath);
+              }
+            }
+          }
+        }
+        processedCount++;
+      }
+    }
+
+    return sendMessage(session, 'commands.cave.audit.batchAuditResult', [
+      isApprove ? '通过' : '拒绝',
+      processedCount,
+      pendingData.length
+    ], false);
+  }
 
   // 注册命令并配置权限检查
   ctx.command('cave [message]')
@@ -467,7 +552,7 @@ export async function apply(ctx: Context, config: Config) {
       if (options.a) {
         return await processAdd(ctx, config, caveFilePath, resourceDir, pendingFilePath, session, content);
       }
-      return await processRandom(caveFilePath, resourceDir, session, config, lastUsed);
+      return await processRandom(caveFilePath, resourceDir, session, config);
     });
 }
 
@@ -501,130 +586,159 @@ interface PendingCave extends CaveObject {}
 
 /**
  * 文件处理工具类
- * @description 提供文件操作的安全性保证，包含锁机制和重试逻辑
  */
 class FileHandler {
-  private static locks = new Map<string, Promise<void>>();
-  private static writeQueue = new Map<string, Promise<void>>();
+  private static locks = new Map<string, Promise<any>>();
+  private static readonly RETRY_COUNT = 3;
+  private static readonly RETRY_DELAY = 1000;
+  private static readonly CONCURRENCY_LIMIT = 5;
 
   /**
-   * 文件锁机制
-   * @description 确保同一时间对同一文件只有一个写操作
-   * @param key 锁标识
-   * @param operation 需要执行的操作
+   * 并发控制
    */
-  private static async withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  private static async withConcurrencyLimit<T>(
+    operation: () => Promise<T>,
+    limit = this.CONCURRENCY_LIMIT
+  ): Promise<T> {
+    while (this.locks.size >= limit) {
+      await Promise.race(this.locks.values());
+    }
+    return operation();
+  }
+
+  /**
+   * 统一的文件操作包装器
+   */
+  private static async withFileOp<T>(
+    filePath: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const key = filePath;
+
     while (this.locks.has(key)) {
       await this.locks.get(key);
     }
 
-    let complete: () => void;
-    const lockPromise = new Promise<void>(resolve => complete = resolve);
-    this.locks.set(key, lockPromise);
+    const operationPromise = (async () => {
+      for (let i = 0; i < this.RETRY_COUNT; i++) {
+        try {
+          return await operation();
+        } catch (error) {
+          if (i === this.RETRY_COUNT - 1) throw error;
+          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
+        }
+      }
+      throw new Error('Operation failed after retries');
+    })();
 
+    this.locks.set(key, operationPromise);
     try {
-      return await operation();
+      return await operationPromise;
     } finally {
       this.locks.delete(key);
-      complete!();
     }
   }
 
-  static async readJsonData<T>(filePath: string, session: any, validator?: (item: any) => boolean): Promise<T[]> {
-    const data = await fs.promises.readFile(filePath, 'utf8');
-    const parsed = JSON.parse(data || '[]');
-    if (!Array.isArray(parsed)) {
-      await this.backupFile(filePath);
-      return [];
-    }
-    return validator ? parsed.filter(validator) : parsed;
-  }
+  /**
+   * 事务处理
+   */
+  static async withTransaction<T>(
+    operations: Array<{
+      filePath: string;
+      operation: () => Promise<T>;
+      rollback?: () => Promise<void>;
+    }>
+  ): Promise<T[]> {
+    const results: T[] = [];
+    const completed = new Set<string>();
 
-  // 优化后的写入方法
-  static async writeJsonData<T>(filePath: string, data: T[], session: any): Promise<void> {
-    const queueKey = filePath;
-
-    const writeOperation = async () => {
-      return this.withLock(`write:${filePath}`, async () => {
-        const tempPath = `${filePath}.tmp`;
-        const backupPath = `${filePath}.bak`;
-
-        const jsonString = JSON.stringify(data, null, 2);
-        await fs.promises.writeFile(tempPath, jsonString, 'utf8');
-
-        const written = await fs.promises.readFile(tempPath, 'utf8');
-        JSON.parse(written);
-
-        if (fs.existsSync(filePath)) {
-          await fs.promises.rename(filePath, backupPath);
-        }
-
-        await fs.promises.rename(tempPath, filePath);
-
-        if (fs.existsSync(backupPath)) {
-          await fs.promises.unlink(backupPath);
-        }
-      });
-    };
-
-    if (!this.writeQueue.has(queueKey)) {
-      this.writeQueue.set(queueKey, Promise.resolve());
-    }
-
-    const currentPromise = this.writeQueue.get(queueKey)!
-      .then(writeOperation)
-      .finally(() => {
-        if (this.writeQueue.get(queueKey) === currentPromise) {
-          this.writeQueue.delete(queueKey);
-        }
-      });
-
-    this.writeQueue.set(queueKey, currentPromise);
-    return currentPromise;
-  }
-
-  // 新增：文件备份方法
-  private static async backupFile(filePath: string): Promise<void> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupPath = `${filePath}.${timestamp}.bak`;
-    if (fs.existsSync(filePath)) {
-      await fs.promises.copyFile(filePath, backupPath);
-    }
-  }
-
-  // 文件是否存在检查
-  static async ensureDirectory(dir: string): Promise<void> {
-    !fs.existsSync(dir) && await fs.promises.mkdir(dir, { recursive: true });
-  }
-
-  // JSON文件初始化
-  static async ensureJsonFile(filePath: string, defaultContent = '[]'): Promise<void> {
-    !fs.existsSync(filePath) && await fs.promises.writeFile(filePath, defaultContent, 'utf8');
-  }
-
-  // 批量写入优化
-  static async batchWriteFiles(operations: Array<{
-    filePath: string,
-    data: any,
-    session: any
-  }>): Promise<void> {
-    const grouped = new Map<string, any[]>();
-
-    // 按文件路径分组
-    operations.forEach(op => {
-      if (!grouped.has(op.filePath)) {
-        grouped.set(op.filePath, []);
+    try {
+      for (const {filePath, operation} of operations) {
+        const result = await this.withFileOp(filePath, operation);
+        results.push(result);
+        completed.add(filePath);
       }
-      grouped.get(op.filePath)!.push(op.data);
-    });
+      return results;
+    } catch (error) {
+      // 并行执行所有回滚操作
+      await Promise.all(
+        operations
+          .filter(({filePath}) => completed.has(filePath))
+          .map(async ({filePath, rollback}) => {
+            if (rollback) {
+              await this.withFileOp(filePath, rollback).catch(e =>
+                logger.error(`Rollback failed for ${filePath}: ${e.message}`)
+              );
+            }
+          })
+      );
+      throw error;
+    }
+  }
 
-    // 并行处理每个文件的写入
-    await Promise.all(
-      Array.from(grouped.entries()).map(async ([filePath, dataArray]) => {
-        const mergedData = dataArray.flat();
-        await this.writeJsonData(filePath, mergedData, operations[0].session);
-      })
-    );
+  /**
+   * JSON文件读写
+   */
+  static async readJsonData<T>(filePath: string): Promise<T[]> {
+    return this.withFileOp(filePath, async () => {
+      try {
+        const data = await fs.promises.readFile(filePath, 'utf8');
+        return JSON.parse(data || '[]');
+      } catch (error) {
+        return [];
+      }
+    });
+  }
+
+  static async writeJsonData<T>(filePath: string, data: T[]): Promise<void> {
+    const tmpPath = `${filePath}.tmp`;
+    await this.withFileOp(filePath, async () => {
+      await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2));
+      await fs.promises.rename(tmpPath, filePath);
+    });
+  }
+
+  /**
+   * 文件系统操作
+   */
+  static async ensureDirectory(dir: string): Promise<void> {
+    await this.withConcurrencyLimit(async () => {
+      if (!fs.existsSync(dir)) {
+        await fs.promises.mkdir(dir, { recursive: true });
+      }
+    });
+  }
+
+  static async ensureJsonFile(filePath: string): Promise<void> {
+    await this.withFileOp(filePath, async () => {
+      if (!fs.existsSync(filePath)) {
+        await fs.promises.writeFile(filePath, '[]', 'utf8');
+      }
+    });
+  }
+
+  /**
+   * 媒体文件操作
+   */
+  static async saveMediaFile(
+    filePath: string,
+    data: Buffer | string
+  ): Promise<void> {
+    await this.withConcurrencyLimit(async () => {
+      const dir = path.dirname(filePath);
+      await this.ensureDirectory(dir);
+      await this.withFileOp(filePath, () =>
+        fs.promises.writeFile(filePath, data)
+      );
+    });
+  }
+
+  static async deleteMediaFile(filePath: string): Promise<void> {
+    await this.withFileOp(filePath, async () => {
+      if (fs.existsSync(filePath)) {
+        await fs.promises.unlink(filePath);
+      }
+    });
   }
 }
 
@@ -637,12 +751,13 @@ class IdManager {
   private maxId: number = 0;
   private initialized: boolean = false;
   private readonly idFilePath: string;
+  private static readonly MAX_DELETED_IDS = 10000;
 
   constructor(baseDir: string) {
     this.idFilePath = path.join(baseDir, 'data', 'cave', 'id.json');
   }
 
-  async initialize(caveFilePath: string, pendingFilePath: string, session: any) {
+  async initialize(caveFilePath: string, pendingFilePath: string) {
     if (this.initialized) return;
 
     try {
@@ -653,8 +768,8 @@ class IdManager {
 
       // 加载数据
       const [caveData, pendingData] = await Promise.all([
-        FileHandler.readJsonData<CaveObject>(caveFilePath, session),
-        FileHandler.readJsonData<PendingCave>(pendingFilePath, session)
+        FileHandler.readJsonData<CaveObject>(caveFilePath),
+        FileHandler.readJsonData<PendingCave>(pendingFilePath)
       ]);
 
       // 计算已使用的ID
@@ -700,6 +815,11 @@ class IdManager {
           this.deletedIds.delete(this.maxId--);
         }
       }
+      if (this.deletedIds.size >= IdManager.MAX_DELETED_IDS) {
+        // 清理过期ID
+        const oldestIds = Array.from(this.deletedIds).slice(0, 1000);
+        oldestIds.forEach(id => this.deletedIds.delete(id));
+      }
       await this.saveIds();
     }
   }
@@ -713,12 +833,6 @@ class IdManager {
     await fs.promises.writeFile(this.idFilePath, JSON.stringify(data, null, 2), 'utf8');
   }
 }
-
-/**
- * 消息处理工具函数
- */
-// 消息发送队列，确保消息按顺序发送
-const messageQueue = new Map<string, Promise<void>>();
 
 /**
  * 发送消息
@@ -735,23 +849,20 @@ async function sendMessage(
   isTemp = true,
   timeout = 10000
 ): Promise<string> {
-  const channelId = session.channelId;
-  const sendOperation = async () => {
+  try {
     const msg = await session.send(session.text(key, params));
-    if (isTemp) {
-      setTimeout(() => session.bot.deleteMessage(channelId, msg), timeout);
+    if (isTemp && msg) {
+      setTimeout(async () => {
+        try {
+          await session.bot.deleteMessage(session.channelId, msg);
+        } catch (error) {
+          logger.debug(`Failed to delete temporary message: ${error.message}`);
+        }
+      }, timeout);
     }
-  };
-
-  const currentPromise = (messageQueue.get(channelId) || Promise.resolve())
-    .then(sendOperation)
-    .finally(() => {
-      if (messageQueue.get(channelId) === currentPromise) {
-        messageQueue.delete(channelId);
-      }
-    });
-
-  messageQueue.set(channelId, currentPromise);
+  } catch (error) {
+    logger.error(`Failed to send message: ${error.message}`);
+  }
   return '';
 }
 
@@ -775,107 +886,11 @@ ${session.text('commands.cave.audit.from')}${cave.contributor_number}`;
   }
 }
 
-// 审核相关函数
-async function handleSingleCaveAudit(
-  ctx: Context,
-  cave: PendingCave,
-  isApprove: boolean,
-  resourceDir: string,
-  data?: CaveObject[],
-): Promise<boolean> {
-  if (isApprove && data) {
-    const caveWithoutIndex = {
-      ...cave,
-      elements: cleanElementsForSave(cave.elements, false)
-    };
-    data.push(caveWithoutIndex);
-  } else if (!isApprove) {
-    // 删除文件时使用 Promise.all
-    if (cave.elements) {
-      await Promise.all(cave.elements.map(async element => {
-        if ((element.type === 'img' || element.type === 'video') && element.file) {
-          const fullPath = path.join(resourceDir, element.file);
-          if (fs.existsSync(fullPath)) {
-            await fs.promises.unlink(fullPath);
-          }
-        }
-      }));
-    }
-  }
-  return true;
-}
-
-async function handleAudit(
-  ctx: Context,
-  pendingData: PendingCave[],
-  isApprove: boolean,
-  caveFilePath: string,
-  resourceDir: string,
-  pendingFilePath: string,
-  session: any,
-  targetId?: number
-): Promise<string> {
-  if (pendingData.length === 0) return sendMessage(session, 'commands.cave.audit.noPending', [], true);
-
-  // 处理单条审核
-  if (typeof targetId === 'number') {
-    // 使用 find 而不是 findIndex
-    const targetCave = pendingData.find(item => item.cave_id === targetId);
-    if (!targetCave) return sendMessage(session, 'commands.cave.audit.pendingNotFound', [], true);
-
-    const data = isApprove ? await FileHandler.readJsonData<CaveObject>(caveFilePath, session) : null;
-
-    const auditResult = await handleSingleCaveAudit(ctx, targetCave, isApprove, resourceDir, data);
-    if (typeof auditResult === 'string') return auditResult;
-    if (isApprove && data) await FileHandler.writeJsonData(caveFilePath, data, session);
-
-    // 使用 filter 而不是 splice
-    const newPendingData = pendingData.filter(item => item.cave_id !== targetId);
-    await FileHandler.writeJsonData(pendingFilePath, newPendingData, session);
-
-    const remainingCount = newPendingData.length;
-    if (remainingCount > 0) {
-      const remainingIds = newPendingData.map(c => c.cave_id).join(', ');
-      const action = isApprove ? 'auditPassed' : 'auditRejected';
-      return sendMessage(session, 'commands.cave.audit.pendingResult', [
-        session.text(`commands.cave.audit.${action}`),
-        remainingCount,
-        remainingIds
-      ], false);
-    }
-    return sendMessage(
-      session,
-      isApprove ? 'commands.cave.audit.auditPassed' : 'commands.cave.audit.auditRejected',
-      [],
-      false
-    );
-  }
-
-  // 处理批量审核
-  const data = isApprove ? await FileHandler.readJsonData<CaveObject>(caveFilePath, session) : null;
-  let processedCount = 0;
-
-  // 使用 Promise.all 确保所有处理都完成
-  await Promise.all(pendingData.map(async cave => {
-    const success = await handleSingleCaveAudit(ctx, cave, isApprove, resourceDir, data);
-    if (success) processedCount++;
-  }));
-
-  if (isApprove && data) await FileHandler.writeJsonData(caveFilePath, data, session);
-  await FileHandler.writeJsonData(pendingFilePath, [], session);
-
-  return sendMessage(session, 'commands.cave.audit.batchAuditResult', [
-    isApprove ? '通过' : '拒绝',
-    processedCount,
-    pendingData.length
-  ], false);
-}
-
 /**
  * 消息构建工具
  */
 // 清理元素数据用于保存
-function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
+function cleanElementsForSave(elements: Element[]): Element[] {
   if (!elements?.length) return [];
 
   const cleanedElements = elements.map(element => {
@@ -959,7 +974,6 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
  * @description 从原始内容中提取文本、图片和视频元素
  * @param originalContent 原始内容字符串
  * @param config 插件配置
- * @param session 会话上下文
  * @returns 分类后的媒体元素
  * - imageUrls: 图片URL列表
  * - imageElements: 图片元素对象列表
@@ -1030,7 +1044,6 @@ async function extractMediaContent(originalContent: string, config: Config, sess
  * @description 下载并保存媒体文件到本地
  * @param urls 媒体文件URL列表
  * @param fileNames 文件名列表
- * @param fileSizes 文件大小列表
  * @param resourceDir 资源目录
  * @param caveId 回声洞ID
  * @param mediaType 媒体类型(img/video)
@@ -1041,7 +1054,6 @@ async function extractMediaContent(originalContent: string, config: Config, sess
 async function saveMedia(
   urls: string[],
   fileNames: (string | undefined)[],
-  fileSizes: (string | undefined)[],
   resourceDir: string,
   caveId: number,
   mediaType: 'img' | 'video',
@@ -1053,16 +1065,15 @@ async function saveMedia(
     : { ext: 'mp4', accept: 'video/*' };
 
   const downloadTasks = urls.map(async (url, i) => {
-    // 生成文件名
     const fileName = fileNames[i];
     const fileExt = fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0]?.slice(1) || ext;
     const baseName = fileName
       ? path.basename(fileName, path.extname(fileName)).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').toLowerCase()
       : String(i + 1);
     const finalFileName = `${caveId}_${baseName}.${fileExt}`;
+    const filePath = path.join(resourceDir, finalFileName);
 
     try {
-      // 下载和保存
       const response = await ctx.http(decodeURIComponent(url).replace(/&amp;/g, '&'), {
         method: 'GET',
         responseType: 'arraybuffer',
@@ -1076,7 +1087,7 @@ async function saveMedia(
 
       if (!response.data) throw new Error('empty_response');
 
-      await fs.promises.writeFile(path.join(resourceDir, finalFileName), Buffer.from(response.data));
+      await FileHandler.saveMediaFile(filePath, Buffer.from(response.data));
       return finalFileName;
     } catch (error) {
       logger.error(`Failed to download media: ${error.message}`);
