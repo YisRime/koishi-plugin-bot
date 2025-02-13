@@ -1191,8 +1191,7 @@ async function saveMedia(
     const fileName = fileNames[i];
     const fileExt = fileName?.match(/\.[a-zA-Z0-9]+$/)?.[0]?.slice(1) || ext;
     const baseName = fileName
-      ? path.basename(fileName, path.extname(fileName)).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '').toLowerCase()
-      : String(i + 1);
+      path.basename(fileName, path.extname(fileName)).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
     const finalFileName = `${caveId}_${baseName}.${fileExt}`;
     const filePath = path.join(resourceDir, finalFileName);
 
