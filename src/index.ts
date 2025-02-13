@@ -83,39 +83,22 @@ export async function apply(ctx: Context, config: Config) {
    * @description 统计每个用户的投稿数量并生成报告
    */
   async function processList(
-    caveFilePath: string,
     session: any,
-    content: string[],
-    options: any,
     config: Config
   ): Promise<string> {
-    const caveData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-    const caveDir = path.dirname(caveFilePath);
-    const stats: Record<string, number[]> = {};
-
-    // 处理 cave 数据,收集统计信息
-    for (const cave of caveData) {
-      if (cave.contributor_number === '10000') continue;
-      if (!stats[cave.contributor_number]) stats[cave.contributor_number] = [];
-      stats[cave.contributor_number].push(cave.cave_id);
-    }
-
-    const statData = { stats };
-    const statFilePath = path.join(caveDir, 'stat.json');
-    await fs.promises.writeFile(statFilePath, JSON.stringify(statData, null, 2), 'utf8');
+    const stats = idManager.getStats();
 
     const lines: string[] = Object.entries(stats).map(([cid, ids]) => {
       return session.text('commands.cave.list.totalItems', [cid, ids.length]) + '\n' +
              session.text('commands.cave.list.idsLine', [ids.join(',')]);
     });
+
     const totalSubmissions = Object.values(stats).reduce((sum, arr) => sum + arr.length, 0);
+
     if (config.enablePagination) {
       const itemsPerPage = config.itemsPerPage;
       const totalPages = Math.max(1, Math.ceil(lines.length / itemsPerPage));
-      let query = (content[0] || String(options.l) || '').trim();
-      let pageNum = parseInt(query, 10);
-      if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
-      if (pageNum > totalPages) pageNum = totalPages;
+      const pageNum = 1; // 这里需要从options中获取页码
       const start = (pageNum - 1) * itemsPerPage;
       const paginatedLines = lines.slice(start, start + itemsPerPage);
       return session.text('commands.cave.list.header', [totalSubmissions]) + '\n' +
@@ -265,6 +248,7 @@ export async function apply(ctx: Context, config: Config) {
     } else {
       const newData = data.filter(item => item.cave_id !== caveId);
       await FileHandler.writeJsonData(caveFilePath, newData);
+      await idManager.removeStat(targetCave.contributor_number, caveId);
     }
 
     // 标记 ID 为已删除
@@ -339,30 +323,30 @@ export async function apply(ctx: Context, config: Config) {
         cave_id: caveId,
         elements: [
           ...textParts,
-          ...imageElements.map((el, idx) => ({ ...el, file: savedImages[idx] }))
-        ].sort((a, b) => a.index - b.index)
-         .map(element => {
-           if (element.type === 'text') {
-             return { type: 'text' as const, content: element.content, index: element.index };
-           }
-           return { type: element.type, file: element.file, index: element.index };
-         }),
+          ...imageElements.map((el, idx) => ({
+            ...el,
+            file: savedImages[idx],
+            // 保持原始文本和图片的相对位置
+            index: el.index
+          }))
+        ].sort((a, b) => a.index - b.index),
         contributor_number: session.userId,
         contributor_name: session.username
       };
 
-      // 如果有视频，直接添加到elements末尾
+      // 如果有视频，直接添加到elements末尾，不需要计算index
       if (videoUrls.length > 0 && savedVideos.length > 0) {
         newCave.elements.push({
           type: 'video',
           file: savedVideos[0],
-          index: Number.MAX_SAFE_INTEGER
+          index: Number.MAX_SAFE_INTEGER // 确保视频总是在最后
         });
       }
 
       // 处理审核逻辑
       if (config.enableAudit && !bypassAudit) {
         const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
+        // 保存到 pending.json 时保留 index
         pendingData.push(newCave);
         await Promise.all([
           FileHandler.writeJsonData(pendingFilePath, pendingData),
@@ -371,10 +355,14 @@ export async function apply(ctx: Context, config: Config) {
         return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
       }
 
-      // 7. 直接保存
+      // 直接保存到 cave.json 时移除 index
       const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-      data.push(newCave);
+      data.push({
+        ...newCave,
+        elements: cleanElementsForSave(newCave.elements, false)
+      });
       await FileHandler.writeJsonData(caveFilePath, data);
+      await idManager.addStat(session.userId, caveId);
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
@@ -409,9 +397,12 @@ export async function apply(ctx: Context, config: Config) {
 
       if (isApprove) {
         const oldCaveData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+        // 确保cave_id保持不变
         const newCaveData = [...oldCaveData, {
           ...targetCave,
-          elements: cleanElementsForSave(targetCave.elements)
+          cave_id: targetId, // 明确指定ID
+          // 保存到 cave.json 时移除 index
+          elements: cleanElementsForSave(targetCave.elements, false)
         }];
 
         await FileHandler.withTransaction([
@@ -426,8 +417,12 @@ export async function apply(ctx: Context, config: Config) {
             rollback: async () => FileHandler.writeJsonData(pendingFilePath, pendingData)
           }
         ]);
+        await idManager.addStat(targetCave.contributor_number, targetId);
       } else {
+        // 拒绝审核时，需要将ID标记为已删除
         await FileHandler.writeJsonData(pendingFilePath, newPendingData);
+        await idManager.markDeleted(targetId);
+
         // 删除关联的媒体文件
         if (targetCave.elements) {
           for (const element of targetCave.elements) {
@@ -474,9 +469,12 @@ export async function apply(ctx: Context, config: Config) {
             for (const cave of pendingData) {
               newData.push({
                 ...cave,
-                elements: cleanElementsForSave(cave.elements)
+                cave_id: cave.cave_id, // 确保ID保持不变
+                // 保存到 cave.json 时移除 index
+                elements: cleanElementsForSave(cave.elements, false)
               });
               processedCount++;
+              await idManager.addStat(cave.contributor_number, cave.cave_id);
             }
             return FileHandler.writeJsonData(caveFilePath, newData);
           },
@@ -489,6 +487,11 @@ export async function apply(ctx: Context, config: Config) {
         }
       ]);
     } else {
+      // 拒绝审核时，需要将所有ID标记为已删除
+      for (const cave of pendingData) {
+        await idManager.markDeleted(cave.cave_id);
+      }
+
       await FileHandler.writeJsonData(pendingFilePath, []);
       // 删除所有被拒绝投稿的媒体文件
       for (const cave of pendingData) {
@@ -538,7 +541,7 @@ export async function apply(ctx: Context, config: Config) {
       const pendingFilePath = path.join(caveDir, 'pending.json');
 
       if (options.l !== undefined) {
-        return await processList(caveFilePath, session, content, options, config);
+        return await processList(session, config);
       }
       if (options.p || options.d) {
         return await processAudit(ctx, pendingFilePath, caveFilePath, resourceDir, session, options, content);
@@ -750,21 +753,27 @@ class IdManager {
   private deletedIds: Set<number> = new Set();
   private maxId: number = 0;
   private initialized: boolean = false;
-  private readonly idFilePath: string;
-  private static readonly MAX_DELETED_IDS = 10000;
+  private readonly statusFilePath: string;
+  private stats: Record<string, number[]> = {};
+  private usedIds: Set<number> = new Set(); // 新增：跟踪所有使用中的ID
 
   constructor(baseDir: string) {
-    this.idFilePath = path.join(baseDir, 'data', 'cave', 'id.json');
+    const caveDir = path.join(baseDir, 'data', 'cave');
+    this.statusFilePath = path.join(caveDir, 'status.json');
   }
 
   async initialize(caveFilePath: string, pendingFilePath: string) {
     if (this.initialized) return;
 
     try {
-      // 读取现有状态
-      const idData = fs.existsSync(this.idFilePath) ?
-        JSON.parse(await fs.promises.readFile(this.idFilePath, 'utf8')) :
-        { deletedIds: [], maxId: 0, lastUpdated: new Date().toISOString() };
+      // 读取现有状态数据
+      const status = fs.existsSync(this.statusFilePath) ?
+        JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
+          deletedIds: [],
+          maxId: 0,
+          stats: {},
+          lastUpdated: new Date().toISOString()
+        };
 
       // 加载数据
       const [caveData, pendingData] = await Promise.all([
@@ -772,23 +781,77 @@ class IdManager {
         FileHandler.readJsonData<PendingCave>(pendingFilePath)
       ]);
 
-      // 计算已使用的ID
-      const usedIds = new Set([
-        ...caveData.map(item => item.cave_id),
-        ...pendingData.map(item => item.cave_id)
-      ]);
+      // 收集所有使用中的ID
+      this.usedIds.clear();
+      const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
 
-      // 更新状态
-      const caveMaxId = usedIds.size > 0 ? Math.max(...Array.from(usedIds)) : 0;
-      this.maxId = Math.max(caveMaxId, idData.maxId || 0);
+      const collectIds = (items: Array<CaveObject | PendingCave>) => {
+        items.forEach(item => {
+          if (this.usedIds.has(item.cave_id)) {
+            // 发现重复ID，记录冲突
+            if (!conflicts.has(item.cave_id)) {
+              conflicts.set(item.cave_id, []);
+            }
+            conflicts.get(item.cave_id)?.push(item);
+          } else {
+            this.usedIds.add(item.cave_id);
+          }
+        });
+      };
 
-      // 重新生成已删除ID列表
-      this.deletedIds = new Set(
-        Array.from({length: this.maxId}, (_, i) => i + 1)
-          .filter(id => !usedIds.has(id))
+      collectIds(caveData);
+      collectIds(pendingData);
+
+      // 处理ID冲突
+      if (conflicts.size > 0) {
+        logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
+        for (const [conflictId, items] of conflicts) {
+          // 保留原始ID的第一个条目，为其他条目分配新ID
+          items.forEach((item, index) => {
+            if (index > 0) { // 跳过第一个条目
+              // 找到一个未使用的ID
+              let newId = this.maxId + 1;
+              while (this.usedIds.has(newId)) {
+                newId++;
+              }
+              logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
+              item.cave_id = newId;
+              this.usedIds.add(newId);
+              this.maxId = Math.max(this.maxId, newId);
+            }
+          });
+        }
+
+        // 保存修改后的数据
+        await Promise.all([
+          FileHandler.writeJsonData(caveFilePath, caveData),
+          FileHandler.writeJsonData(pendingFilePath, pendingData)
+        ]);
+      }
+
+      // 更新maxId
+      this.maxId = Math.max(
+        this.maxId,
+        status.maxId || 0,
+        ...[...this.usedIds]
       );
 
-      await this.saveIds();
+      // 重建已删除ID列表
+      this.deletedIds = new Set(
+        status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
+      );
+
+      // 恢复统计数据
+      this.stats = {};
+      for (const cave of caveData) {
+        if (cave.contributor_number === '10000') continue;
+        if (!this.stats[cave.contributor_number]) {
+          this.stats[cave.contributor_number] = [];
+        }
+        this.stats[cave.contributor_number].push(cave.cave_id);
+      }
+
+      await this.saveStatus();
       this.initialized = true;
 
     } catch (error) {
@@ -798,39 +861,91 @@ class IdManager {
   }
 
   getNextId(): number {
-    if (this.deletedIds.size === 0) {
-      return ++this.maxId;
+    if (!this.initialized) {
+      throw new Error('IdManager not initialized');
     }
-    const nextId = Math.min(...Array.from(this.deletedIds));
-    this.deletedIds.delete(nextId);
-    this.saveIds().catch(err => logger.error(`Failed to save ID state: ${err.message}`));
+
+    let nextId: number;
+    if (this.deletedIds.size === 0) {
+      nextId = ++this.maxId;
+    } else {
+      nextId = Math.min(...Array.from(this.deletedIds));
+      this.deletedIds.delete(nextId);
+    }
+
+    // 确保ID不重复
+    while (this.usedIds.has(nextId)) {
+      nextId = ++this.maxId;
+    }
+
+    this.usedIds.add(nextId);
+
+    // 异步保存状态
+    this.saveStatus().catch(err =>
+      logger.error(`Failed to save status after getNextId: ${err.message}`)
+    );
+
     return nextId;
   }
 
   async markDeleted(id: number) {
-    if (id > 0 && id <= this.maxId) {
-      this.deletedIds.add(id);
-      if (id === this.maxId) {
-        while (this.deletedIds.has(this.maxId)) {
-          this.deletedIds.delete(this.maxId--);
-        }
+    if (!this.initialized) {
+      throw new Error('IdManager not initialized');
+    }
+
+    this.deletedIds.add(id);
+    this.usedIds.delete(id);
+
+    // 如果删除的是最大ID，尝试收缩最大ID范围
+    if (id === this.maxId) {
+      const maxUsedId = Math.max(...Array.from(this.usedIds));
+      this.maxId = maxUsedId;
+    }
+
+    await this.saveStatus();
+  }
+
+  // 添加新的统计记录
+  async addStat(contributorNumber: string, caveId: number) {
+    if (contributorNumber === '10000') return;
+    if (!this.stats[contributorNumber]) {
+      this.stats[contributorNumber] = [];
+    }
+    this.stats[contributorNumber].push(caveId);
+    await this.saveStatus();
+  }
+
+  // 删除统计记录
+  async removeStat(contributorNumber: string, caveId: number) {
+    if (this.stats[contributorNumber]) {
+      this.stats[contributorNumber] = this.stats[contributorNumber].filter(id => id !== caveId);
+      if (this.stats[contributorNumber].length === 0) {
+        delete this.stats[contributorNumber];
       }
-      if (this.deletedIds.size >= IdManager.MAX_DELETED_IDS) {
-        // 清理过期ID
-        const oldestIds = Array.from(this.deletedIds).slice(0, 1000);
-        oldestIds.forEach(id => this.deletedIds.delete(id));
-      }
-      await this.saveIds();
+      await this.saveStatus();
     }
   }
 
-  private async saveIds(): Promise<void> {
-    const data = {
-      deletedIds: Array.from(this.deletedIds),
+  // 获取统计信息
+  getStats(): Record<string, number[]> {
+    return this.stats;
+  }
+
+  private async saveStatus(): Promise<void> {
+    if (!this.initialized) {
+      throw new Error('IdManager not initialized');
+    }
+
+    const status = {
+      deletedIds: Array.from(this.deletedIds).sort((a, b) => a - b),
       maxId: this.maxId,
+      stats: this.stats,
       lastUpdated: new Date().toISOString()
     };
-    await fs.promises.writeFile(this.idFilePath, JSON.stringify(data, null, 2), 'utf8');
+
+    const tmpPath = `${this.statusFilePath}.tmp`;
+    await fs.promises.writeFile(tmpPath, JSON.stringify(status, null, 2), 'utf8');
+    await fs.promises.rename(tmpPath, this.statusFilePath);
   }
 }
 
@@ -890,23 +1005,30 @@ ${session.text('commands.cave.audit.from')}${cave.contributor_number}`;
  * 消息构建工具
  */
 // 清理元素数据用于保存
-function cleanElementsForSave(elements: Element[]): Element[] {
+function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
   if (!elements?.length) return [];
 
   const cleanedElements = elements.map(element => {
     if (element.type === 'text') {
-      return { type: 'text' as const, index: element.index, content: (element as TextElement).content } as TextElement;
+      const cleanedElement: Partial<TextElement> = {
+        type: 'text' as const,
+        content: (element as TextElement).content
+      };
+      if (keepIndex) cleanedElement.index = element.index;
+      return cleanedElement as TextElement;
     } else if (element.type === 'img' || element.type === 'video') {
       const mediaElement = element as MediaElement;
-      if (mediaElement.file) {
-        return { type: mediaElement.type, index: element.index, file: mediaElement.file } as MediaElement;
-      } else {
-        return { type: mediaElement.type, index: element.index } as MediaElement;
-      }
+      const cleanedElement: Partial<MediaElement> = {
+        type: mediaElement.type
+      };
+      if (mediaElement.file) cleanedElement.file = mediaElement.file;
+      if (keepIndex) cleanedElement.index = element.index;
+      return cleanedElement as MediaElement;
     }
     return element;
   });
-  return cleanedElements.sort((a, b) => a.index - b.index);
+
+  return keepIndex ? cleanedElements.sort((a, b) => (a.index || 0) - (b.index || 0)) : cleanedElements;
 }
 
 // 处理媒体文件
@@ -922,9 +1044,11 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
     return session.text('commands.cave.error.noContent');
   }
 
-  // 分离视频元素和其他元素
+  // 分离视频元素和其他元素，并确保按index排序
   const videoElement = cave.elements.find((el): el is MediaElement => el.type === 'video');
-  const nonVideoElements = cave.elements.filter(el => el.type !== 'video');
+  const nonVideoElements = cave.elements
+    .filter(el => el.type !== 'video')
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
 
   // 如果有视频元素，先发送基本信息，然后单独发送视频
   if (videoElement?.file) {
@@ -1010,7 +1134,6 @@ async function extractMediaContent(originalContent: string, config: Config, sess
       const fileName = element.match(/file="([^"]+)"/)?.[1];
       const fileSize = element.match(/fileSize="([^"]+)"/)?.[1];
 
-      // 提前检查文件大小
       if (fileSize) {
         const sizeInBytes = parseInt(fileSize);
         if (sizeInBytes > maxSize * 1024 * 1024) {
@@ -1021,7 +1144,7 @@ async function extractMediaContent(originalContent: string, config: Config, sess
       urls.push(url);
       elements.push({
         type,
-        index: idx * 3 + (type === 'img' ? 1 : 2),
+        index: type === 'video' ? Number.MAX_SAFE_INTEGER : idx * 3 + 1, // 视频始终在最后
         fileName,
         fileSize
       });
