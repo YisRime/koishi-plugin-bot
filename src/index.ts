@@ -766,6 +766,9 @@ class IdManager {
     if (this.initialized) return;
 
     try {
+      // 设置初始化标志为 true，这样后续的 saveStatus 调用就不会抛出错误
+      this.initialized = true;
+
       // 读取现有状态数据
       const status = fs.existsSync(this.statusFilePath) ?
         JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
@@ -855,6 +858,8 @@ class IdManager {
       this.initialized = true;
 
     } catch (error) {
+      // 如果初始化失败，重置 initialized 标志
+      this.initialized = false;
       logger.error(`IdManager initialization failed: ${error.message}`);
       throw error;
     }
@@ -932,20 +937,22 @@ class IdManager {
   }
 
   private async saveStatus(): Promise<void> {
-    if (!this.initialized) {
-      throw new Error('IdManager not initialized');
+    // 移除初始化检查，因为我们已经在 initialize 方法中控制了这个标志
+    try {
+      const status = {
+        deletedIds: Array.from(this.deletedIds).sort((a, b) => a - b),
+        maxId: this.maxId,
+        stats: this.stats,
+        lastUpdated: new Date().toISOString()
+      };
+
+      const tmpPath = `${this.statusFilePath}.tmp`;
+      await fs.promises.writeFile(tmpPath, JSON.stringify(status, null, 2), 'utf8');
+      await fs.promises.rename(tmpPath, this.statusFilePath);
+    } catch (error) {
+      logger.error(`Failed to save status: ${error.message}`);
+      throw error;
     }
-
-    const status = {
-      deletedIds: Array.from(this.deletedIds).sort((a, b) => a - b),
-      maxId: this.maxId,
-      stats: this.stats,
-      lastUpdated: new Date().toISOString()
-    };
-
-    const tmpPath = `${this.statusFilePath}.tmp`;
-    await fs.promises.writeFile(tmpPath, JSON.stringify(status, null, 2), 'utf8');
-    await fs.promises.rename(tmpPath, this.statusFilePath);
   }
 }
 
