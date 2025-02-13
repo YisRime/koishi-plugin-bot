@@ -84,9 +84,18 @@ export async function apply(ctx: Context, config: Config) {
    */
   async function processList(
     session: any,
-    config: Config
+    config: Config,
+    userId?: string,
+    pageNum: number = 1
   ): Promise<string> {
     const stats = idManager.getStats();
+
+    // 如果指定了用户ID，只返回该用户的统计信息
+    if (userId && userId in stats) {
+      const ids = stats[userId];
+      return session.text('commands.cave.list.totalItems', [userId, ids.length]) + '\n' +
+             session.text('commands.cave.list.idsLine', [ids.join(',')]);
+    }
 
     const lines: string[] = Object.entries(stats).map(([cid, ids]) => {
       return session.text('commands.cave.list.totalItems', [cid, ids.length]) + '\n' +
@@ -98,7 +107,7 @@ export async function apply(ctx: Context, config: Config) {
     if (config.enablePagination) {
       const itemsPerPage = config.itemsPerPage;
       const totalPages = Math.max(1, Math.ceil(lines.length / itemsPerPage));
-      const pageNum = 1; // 这里需要从options中获取页码
+      pageNum = Math.min(Math.max(1, pageNum), totalPages);
       const start = (pageNum - 1) * itemsPerPage;
       const paginatedLines = lines.slice(start, start + itemsPerPage);
       return session.text('commands.cave.list.header', [totalSubmissions]) + '\n' +
@@ -541,8 +550,17 @@ export async function apply(ctx: Context, config: Config) {
       const pendingFilePath = path.join(caveDir, 'pending.json');
 
       if (options.l !== undefined) {
+        const input = typeof options.l === 'string' ? options.l : content[0];
+        // 尝试解析为数字（页码）或作为用户ID处理
+        const pageNum = parseInt(input);
+        if (!isNaN(pageNum)) {
+          return await processList(session, config, undefined, pageNum);
+        } else if (input) {
+          return await processList(session, config, input);
+        }
         return await processList(session, config);
       }
+
       if (options.p || options.d) {
         return await processAudit(ctx, pendingFilePath, caveFilePath, resourceDir, session, options, content);
       }
