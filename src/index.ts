@@ -64,18 +64,42 @@ export async function apply(ctx: Context, config: Config) {
   const caveFilePath = path.join(caveDir, 'cave.json');
   const resourceDir = path.join(caveDir, 'resources');
   const pendingFilePath = path.join(caveDir, 'pending.json');
+  const hashFilePath = path.join(caveDir, 'hash.json');
 
   await FileHandler.ensureDirectory(dataDir);
   await FileHandler.ensureDirectory(caveDir);
   await FileHandler.ensureDirectory(resourceDir);
   await FileHandler.ensureJsonFile(caveFilePath);
   await FileHandler.ensureJsonFile(pendingFilePath);
+  await FileHandler.ensureJsonFile(hashFilePath);
 
   const idManager = new IdManager(ctx.baseDir);
   await idManager.initialize(caveFilePath, pendingFilePath);
 
-  const hashStorage = new HashStorage(dataDir);
+  const hashStorage = new HashStorage(caveDir);
   await hashStorage.initialize();
+
+  // 初始化时计算已有图片的哈希值
+  if (config.enableDuplicateCheck) {
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+    for (const cave of data) {
+      for (const element of cave.elements) {
+        if (element.type === 'img' && element.file) {
+          const filePath = path.join(resourceDir, element.file);
+          try {
+            if (fs.existsSync(filePath)) {
+              const imgBuffer = await fs.promises.readFile(filePath);
+              const imageHash = await ImageHasher.calculateHash(imgBuffer);
+              hashStorage.addHash(element.file, imageHash, cave.cave_id);
+            }
+          } catch (error) {
+            logger.error(`Failed to calculate hash for ${element.file}: ${error.message}`);
+          }
+        }
+      }
+    }
+    await hashStorage.save();
+  }
 
   const lastUsed = new Map<string, number>();
 
@@ -234,6 +258,10 @@ export async function apply(ctx: Context, config: Config) {
 
     // 删除相关的媒体文件
     if (targetCave.elements) {
+      // 更新哈希存储
+      const hashStorage = new HashStorage(caveDir);
+      await hashStorage.initialize();
+      await hashStorage.updateCaveHashes(caveId);
       for (const element of targetCave.elements) {
         if ((element.type === 'img' || element.type === 'video') && element.file) {
           const fullPath = path.join(resourceDir, element.file);
@@ -292,7 +320,7 @@ export async function apply(ctx: Context, config: Config) {
                          config.whitelist.includes(session.channelId);
 
       const { imageUrls, imageElements, videoUrls, videoElements, textParts } =
-        await extractMediaContent(inputContent, config, session);
+        await extractMediaContent(inputContent, config, session, ctx, resourceDir);
 
       if (videoUrls.length > 0 && !config.allowVideo) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
@@ -1146,7 +1174,7 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
  * - videoElements: 视频元素对象列表
  * - textParts: 文本元素列表
  */
-async function extractMediaContent(originalContent: string, config: Config, session: any): Promise<{
+async function extractMediaContent(originalContent: string, config: Config, session: any, ctx: Context, resourceDir: string): Promise<{
   imageUrls: string[],
   imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>,
   videoUrls: string[],
@@ -1199,6 +1227,47 @@ async function extractMediaContent(originalContent: string, config: Config, sess
   const imageElements = imageElementsRaw as Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>;
   const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video', config.videoMaxSize);
   const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
+
+  // 如果启用了查重,先进行预检测
+  if (config.enableDuplicateCheck && imageUrls.length > 0) {
+    await session.send(session.text('commands.cave.message.duplicateChecking'));
+
+    const imgBuffers = await Promise.all(
+      imageUrls.map(url =>
+        ctx.http.get(decodeURIComponent(url).replace(/&amp;/g, '&'), {
+          responseType: 'arraybuffer'
+        })
+      )
+    );
+
+    const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
+    await hashStorage.initialize();
+
+    const duplicateResults = await hashStorage.batchCheckDuplicates(
+      imgBuffers.map(resp => Buffer.from(resp)),
+      config.duplicateThreshold
+    );
+
+    const duplicates = duplicateResults.filter(result => result !== null);
+    if (duplicates.length > 0) {
+      // 获取重复图片的原始内容
+      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+
+      for (const duplicate of duplicates) {
+        const originalCave = data.find(item => item.cave_id === duplicate.caveId);
+        if (originalCave) {
+          await session.send(session.text('commands.cave.error.duplicateImage', [
+            duplicate.caveId,
+            duplicate.similarity.toFixed(2)
+          ]));
+          await session.send(await buildMessage(originalCave, resourceDir, session));
+        }
+      }
+      await session.send(session.text('commands.cave.message.uploadCanceled'));
+      throw new Error('duplicate_images_found');
+    }
+  }
 
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
@@ -1253,13 +1322,7 @@ async function saveMedia(
         const hashStorage = new HashStorage(dataDir);
         await hashStorage.initialize();
         const imageHash = await ImageHasher.calculateHash(Buffer.from(response.data));
-        const duplicate = hashStorage.findDuplicate(imageHash, config.duplicateThreshold);
-
-        if (duplicate) {
-          throw new Error(session.text('commands.cave.error.duplicateImage', [duplicate]));
-        }
-
-        hashStorage.addHash(finalFileName, imageHash);
+        hashStorage.addHash(finalFileName, imageHash, caveId);
         await hashStorage.save();
       }
 
@@ -1287,33 +1350,27 @@ async function saveMedia(
  * 图片哈希计算类
  */
 class ImageHasher {
-  private static readonly HASH_SIZE = 8;
+  private static readonly HASH_SIZE = 16;
   private static readonly BLUR_SIZE = 2;
 
-  /**
-   * 计算图片的感知哈希值
-   */
   static async calculateHash(imgBuffer: Buffer): Promise<string> {
     const sharp = require('sharp');
     try {
-      const img = sharp(imgBuffer);
-      const resized = await img
+      // 简化预处理步骤,只保留最必要的操作
+      const processed = await sharp(imgBuffer)
         .grayscale()
         .blur(this.BLUR_SIZE)
         .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
         .raw()
         .toBuffer();
 
-      // 计算平均值
-      const avg = resized.reduce((sum, val) => sum + val, 0) / (this.HASH_SIZE * this.HASH_SIZE);
+      // 计算中值而不是平均值,对噪声更鲁棒
+      const pixels = Array.from(processed);
+      pixels.sort((a, b) => Number(a) - Number(b));
+      const median = pixels[Math.floor(pixels.length / 2)];
 
-      // 生成二进制哈希
-      let hash = '';
-      for(let i = 0; i < resized.length; i++) {
-        hash += resized[i] > avg ? '1' : '0';
-      }
-
-      return hash;
+      // 生成哈希字符串
+      return pixels.map(p => p > median ? '1' : '0').join('');
     } catch (error) {
       logger.error(`Failed to calculate image hash: ${error.message}`);
       throw error;
@@ -1321,36 +1378,41 @@ class ImageHasher {
   }
 
   /**
-   * 计算两个哈希值的汉明距离
+   * 计算汉明距离(优化位运算)
    */
   static getHammingDistance(hash1: string, hash2: string): number {
+    if (hash1.length !== hash2.length) {
+      throw new Error('Hash lengths must be equal');
+    }
+
     let distance = 0;
-    for(let i = 0; i < hash1.length; i++) {
-      if(hash1[i] !== hash2[i]) distance++;
+    for (let i = 0; i < hash1.length; i++) {
+      if (hash1[i] !== hash2[i]) distance++;
     }
     return distance;
   }
 
   /**
-   * 判断两个图片是否相似
+   * 判断两个哈希是否相似
    */
   static isSimilar(hash1: string, hash2: string, threshold: number): boolean {
     const distance = this.getHammingDistance(hash1, hash2);
-    const similarity = 10 * (1 - distance / (this.HASH_SIZE * this.HASH_SIZE));
+    // 直接计算相似度百分比
+    const similarity = 10 * (1 - distance / hash1.length);
     return similarity >= threshold;
   }
 }
 
-/**
- * 图片哈希存储类
- */
+// 修改 HashStorage 类中的 findDuplicate 方法
 class HashStorage {
-  private static readonly HASH_FILE = 'image_hashes.json';
-  private hashes: Map<string, string> = new Map();
+  private static readonly HASH_FILE = 'hash.json';
+  private hashes: Map<string, { hash: string; caveId: number }> = new Map();
   private filePath: string;
+  private hashCache: Map<string, {hash: string, timestamp: number}> = new Map();
+  private static readonly CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
-  constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, HashStorage.HASH_FILE);
+  constructor(caveDir: string) {
+    this.filePath = path.join(caveDir, HashStorage.HASH_FILE);
   }
 
   async initialize() {
@@ -1373,16 +1435,84 @@ class HashStorage {
     }
   }
 
-  addHash(fileName: string, hash: string) {
-    this.hashes.set(fileName, hash);
+  addHash(fileName: string, hash: string, caveId: number) {
+    this.hashes.set(fileName, { hash, caveId });
   }
 
-  findDuplicate(hash: string, threshold: number): string | null {
-    for (const [fileName, existingHash] of this.hashes.entries()) {
-      if (ImageHasher.isSimilar(hash, existingHash, threshold)) {
-        return fileName;
+  findDuplicate(hash: string, threshold: number): { fileName: string; caveId: number; similarity: number } | null {
+    let maxSimilarity = 0;
+    let mostSimilarFile = null;
+
+    for (const [fileName, { hash: existingHash, caveId }] of this.hashes.entries()) {
+      try {
+        const distance = ImageHasher.getHammingDistance(hash, existingHash);
+        const similarity = 10 * (1 - distance / hash.length);
+
+        if (similarity >= threshold && similarity > maxSimilarity) {
+          maxSimilarity = similarity;
+          mostSimilarFile = { fileName, caveId };
+        }
+      } catch (error) {
+        logger.error(`Failed to compare hashes: ${error.message}`);
+        continue;
       }
     }
-    return null;
+
+    return mostSimilarFile ? { ...mostSimilarFile, similarity: maxSimilarity } : null;
+  }
+
+  // 添加一个方法用于更新或删除特定回声洞的哈希
+  async updateCaveHashes(caveId: number, elements?: Element[], resourceDir?: string) {
+    // 删除旧的哈希
+    for (const [fileName, value] of this.hashes.entries()) {
+      if (value.caveId === caveId) {
+        this.hashes.delete(fileName);
+      }
+    }
+
+    // 如果提供了新元素,则添加新的哈希
+    if (elements && resourceDir) {
+      for (const element of elements) {
+        if (element.type === 'img' && element.file) {
+          const filePath = path.join(resourceDir, element.file);
+          try {
+            if (fs.existsSync(filePath)) {
+              const imgBuffer = await fs.promises.readFile(filePath);
+              const imageHash = await ImageHasher.calculateHash(imgBuffer);
+              this.addHash(element.file, imageHash, caveId);
+            }
+          } catch (error) {
+            logger.error(`Failed to update hash for ${element.file}: ${error.message}`);
+          }
+        }
+      }
+    }
+
+    await this.save();
+  }
+
+  /**
+   * 预检测图片是否重复
+   */
+  async preCheckDuplicate(imgBuffer: Buffer, threshold: number): Promise<{ caveId: number; similarity: number } | null> {
+    const hash = await ImageHasher.calculateHash(imgBuffer);
+    const duplicate = this.findDuplicate(hash, threshold);
+    return duplicate ? { caveId: duplicate.caveId, similarity: duplicate.similarity } : null;
+  }
+
+  /**
+   * 批量检查图片
+   */
+  async batchCheckDuplicates(
+    imgBuffers: Buffer[],
+    threshold: number
+  ): Promise<Array<{ index: number; caveId: number; similarity: number } | null>> {
+    const results = await Promise.all(
+      imgBuffers.map(async (buffer, index) => {
+        const result = await this.preCheckDuplicate(buffer, threshold);
+        return result ? { index, ...result } : null;
+      })
+    );
+    return results;
   }
 }

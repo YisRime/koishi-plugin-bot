@@ -61,7 +61,7 @@ commands:
       noCave: "没有回声洞"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
-      duplicateImage: "发现重复图片,与 {0} 相似度过高"
+      duplicateImage: "检测到图片与回声洞 #{0} 相似度达到 {1}，已终止添加。以下是原回声洞内容："
     message:
       blacklisted: "你已被列入黑名单"
       managerOnly: "此操作仅限管理员可用"
@@ -69,3 +69,6 @@ commands:
       caveTitle: "回声洞 —— （{0}）"
       contributorSuffix: "—— {0}"
       mediaSizeExceeded: "{0}文件大小超过限制"
+      duplicateChecking: "正在进行图片查重检查..."
+      originalContent: "原回声洞内容如下："
+      uploadCanceled: "由于图片重复，投稿已取消。"

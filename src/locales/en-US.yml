@@ -61,7 +61,7 @@ commands:
       noCave: "No entries found"
       invalidId: "Please enter a valid entry ID"
       notFound: "Entry not found"
-      duplicateImage: "Duplicate image found, too similar to {0}"
+      duplicateImage: "Detected image similarity with entry #{0} reaching {1}, addition cancelled. Original entry content:"
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is restricted to administrators"
@@ -69,3 +69,6 @@ commands:
       caveTitle: "Echo Cave —— ({0})"
       contributorSuffix: "—— {0}"
       mediaSizeExceeded: "{0} file size exceeds limit"
+      duplicateChecking: "Performing image duplicate check..."
+      originalContent: "Original entry content:"
+      uploadCanceled: "Submission cancelled due to duplicate image."
