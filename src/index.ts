@@ -297,9 +297,9 @@ export async function apply(ctx: Context, config: Config) {
 
       const caveId = await idManager.getNextId();
 
-      if (inputContent.includes('/app/.config/QQ/')) {
+      /* if (inputContent.includes('/app/.config/QQ/')) {
         return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
-      }
+      } */
 
       // 内联 checkBypassAudit
       const bypassAudit = config.whitelist.includes(session.userId) ||
