@@ -361,9 +361,16 @@ export async function apply(ctx: Context, config: Config) {
       await hashStorage.initialize();
       const hashStatus = await hashStorage.getStatus();
 
-      // 如果没有hash记录,先进行一次检测
+      // 如果没有hash记录,先检查是否有需要检测的图片
       if (!hashStatus.lastUpdated || hashStatus.entries.length === 0) {
-        await hashStorage.updateAllCaves(caveFilePath, resourceDir);
+        const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+        const hasImages = existingData.some(cave =>
+          cave.elements?.some(element => element.type === 'img' && element.file)
+        );
+
+        if (hasImages) {
+          await hashStorage.updateAllCaves(true);
+        }
       }
 
       // 处理审核逻辑
@@ -396,12 +403,6 @@ export async function apply(ctx: Context, config: Config) {
 
     } catch (error) {
       logger.error(`Failed to process add command: ${error.message}`);
-      return sendMessage(
-        session,
-        `commands.cave.error.${error.code || 'failed'}`,
-        [],
-        true
-      );
     }
   }
 
@@ -921,7 +922,7 @@ async function saveMedia(
 
         if (result.length > 0 && result[0] !== null) {
           const duplicate = result[0];
-          const similarity = duplicate.similarity * 10; // 转换为百分比
+          const similarity = duplicate.similarity * 10;
 
           if (similarity >= config.duplicateThreshold * 10) {
             const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
@@ -930,7 +931,7 @@ async function saveMedia(
 
             if (originalCave) {
               const message = session.text('commands.cave.error.duplicateFound', [similarity.toFixed(1)]);
-              await session.send(message + '\n' + await buildMessage(originalCave, resourceDir, session));
+              await session.send(message + await buildMessage(originalCave, resourceDir, session));
               throw new Error('duplicate_found');
             }
           }
@@ -948,7 +949,7 @@ async function saveMedia(
       if (error.message === 'duplicate_found') {
         throw error;
       }
-      logger.error(`下载媒体失败: ${error.message}`);
+      logger.error(`Failed to download media: ${error.message}`);
       throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
     }
   });

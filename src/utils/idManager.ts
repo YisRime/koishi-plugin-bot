@@ -9,7 +9,6 @@ const logger = new Logger('idManager');
 interface CaveObject {
   cave_id: number;
   contributor_number: string;
-  // ...其他属性
 }
 
 interface PendingCave extends CaveObject {}
@@ -97,11 +96,11 @@ export class IdManager {
       // 保存更新后的状态
       await this.saveStatus();
       this.initialized = true;
-      logger.success('ID管理器初始化完成');
+      logger.success('ID Manager initialized');
 
     } catch (error) {
       this.initialized = false;
-      logger.error(`ID管理器初始化失败: ${error.message}`);
+      logger.error(`ID Manager initialization failed: ${error.message}`);
       throw error;
     }
   }
@@ -113,16 +112,16 @@ export class IdManager {
     caveData: CaveObject[],
     pendingData: PendingCave[]
   ): Promise<void> {
-    logger.warn(`发现 ${conflicts.size} 个ID冲突，正在修复...`);
+    logger.warn(`Found ${conflicts.size} ID conflicts`);
 
     let modified = false;
-    for (const [conflictId, items] of conflicts) {
+    for (const items of conflicts.values()) {
       items.slice(1).forEach(item => {
         let newId = this.maxId + 1;
         while (this.usedIds.has(newId)) {
           newId++;
         }
-        logger.info(`重新分配ID ${item.cave_id} -> ${newId}`);
+        logger.info(`Reassigning ID: ${item.cave_id} -> ${newId}`);
         item.cave_id = newId;
         this.usedIds.add(newId);
         this.maxId = Math.max(this.maxId, newId);
@@ -135,7 +134,7 @@ export class IdManager {
         FileHandler.writeJsonData(caveFilePath, caveData),
         FileHandler.writeJsonData(pendingFilePath, pendingData)
       ]);
-      logger.success('ID冲突修复完成');
+      logger.success('ID conflicts resolved');
     }
   }
 
@@ -217,7 +216,7 @@ export class IdManager {
       await fs.promises.writeFile(tmpPath, JSON.stringify(status, null, 2), 'utf8');
       await fs.promises.rename(tmpPath, this.statusFilePath);
     } catch (error) {
-      logger.error(`Failed to save status: ${error.message}`);
+      logger.error(`Status save failed: ${error.message}`);
       throw error;
     }
   }

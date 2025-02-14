@@ -60,7 +60,6 @@ commands:
       noCave: "没有回声洞"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
-      failed: "添加失败"
       duplicateFound: "发现相似度为 {0}% 的"
     message:
       blacklisted: "你已被列入黑名单"

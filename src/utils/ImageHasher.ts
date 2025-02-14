@@ -25,8 +25,35 @@ export class ImageHasher {
       // 计算特征区域平均值
       const mean = features.reduce((sum, val) => sum + val, 0) / features.length;
 
-      // 生成hash
-      return features.map(val => val > mean ? '1' : '0').join('');
+      // 生成hash并转换为16进制
+      const binaryHash = features.map(val => val > mean ? '1' : '0').join('');
+      return this.binaryToHex(binaryHash);
+  }
+
+  /**
+   * 将二进制字符串转换为16进制
+   */
+  private static binaryToHex(binary: string): string {
+    const hex = [];
+    // 每4位二进制转换为1位16进制
+    for (let i = 0; i < binary.length; i += 4) {
+      const chunk = binary.slice(i, i + 4);
+      hex.push(parseInt(chunk, 2).toString(16));
+    }
+    return hex.join('');
+  }
+
+  /**
+   * 将16进制字符串转换为二进制
+   */
+  private static hexToBinary(hex: string): string {
+    let binary = '';
+    for (const char of hex) {
+      // 将每个16进制字符转为4位二进制
+      const bin = parseInt(char, 16).toString(2).padStart(4, '0');
+      binary += bin;
+    }
+    return binary;
   }
 
   /**
@@ -107,10 +134,13 @@ export class ImageHasher {
       throw new Error('Hash lengths must be equal');
     }
 
-    // 计算不同位的数量
+    // 转换为二进制后计算距离
+    const bin1 = this.hexToBinary(hash1);
+    const bin2 = this.hexToBinary(hash2);
+
     let distance = 0;
-    for (let i = 0; i < hash1.length; i++) {
-      if (hash1[i] !== hash2[i]) distance++;
+    for (let i = 0; i < bin1.length; i++) {
+      if (bin1[i] !== bin2[i]) distance++;
     }
     return distance;
   }

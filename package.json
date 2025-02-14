@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-bot",
   "description": "A Bot",
-  "version": "1.2.50",
+  "version": "1.2.51",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -15,11 +15,10 @@
     "koishi",
     "plugin"
   ],
-  "devDependencies": {
-    "@types/sharp": "^0.31.1"
-  },
+  "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.18.3",
+    "sharp": "^0.32.6",
     "koishi-plugin-adapter-onebot": "^6.1.3"
   },
   "dependencies": {
