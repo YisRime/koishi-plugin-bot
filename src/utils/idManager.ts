@@ -35,94 +35,107 @@ export class IdManager {
     if (this.initialized) return;
 
     try {
-      // 避免重复初始化
-      if (!this.initialized) {
-        // 读取状态文件
-        const status = fs.existsSync(this.statusFilePath) ?
-          JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
-            deletedIds: [],
-            maxId: 0,
-            stats: {},
-            lastUpdated: new Date().toISOString()
-          };
-
-        const [caveData, pendingData] = await Promise.all([
-          FileHandler.readJsonData<CaveObject>(caveFilePath),
-          FileHandler.readJsonData<PendingCave>(pendingFilePath)
-        ]);
-
-        this.usedIds.clear();
-        const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
-
-        // 收集和处理ID
-        const processItems = (items: Array<CaveObject | PendingCave>) => {
-          items.forEach(item => {
-            if (this.usedIds.has(item.cave_id)) {
-              if (!conflicts.has(item.cave_id)) {
-                conflicts.set(item.cave_id, []);
-              }
-              conflicts.get(item.cave_id)?.push(item);
-            } else {
-              this.usedIds.add(item.cave_id);
-            }
-          });
+      // 读取状态文件
+      const status = fs.existsSync(this.statusFilePath) ?
+        JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
+          deletedIds: [],
+          maxId: 0,
+          stats: {},
+          lastUpdated: new Date().toISOString()
         };
 
-        processItems(caveData);
-        processItems(pendingData);
+      // 读取数据文件
+      const [caveData, pendingData] = await Promise.all([
+        FileHandler.readJsonData<CaveObject>(caveFilePath),
+        FileHandler.readJsonData<PendingCave>(pendingFilePath)
+      ]);
 
-        // 处理冲突
-        if (conflicts.size > 0) {
-          logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
-          for (const items of conflicts.values()) {
-            items.slice(1).forEach(item => {
-              let newId = this.maxId + 1;
-              while (this.usedIds.has(newId)) {
-                newId++;
+      // 重置状态
+      this.usedIds.clear();
+      this.stats = {};
+      const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
+
+      // 处理ID冲突和构建统计
+      for (const data of [caveData, pendingData]) {
+        for (const item of data) {
+          // ID 冲突检查
+          if (this.usedIds.has(item.cave_id)) {
+            if (!conflicts.has(item.cave_id)) {
+              conflicts.set(item.cave_id, []);
+            }
+            conflicts.get(item.cave_id)?.push(item);
+          } else {
+            this.usedIds.add(item.cave_id);
+
+            // 只为正式数据构建统计
+            if (data === caveData && item.contributor_number !== '10000') {
+              if (!this.stats[item.contributor_number]) {
+                this.stats[item.contributor_number] = [];
               }
-              logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
-              item.cave_id = newId;
-              this.usedIds.add(newId);
-              this.maxId = Math.max(this.maxId, newId);
-            });
+              this.stats[item.contributor_number].push(item.cave_id);
+            }
           }
-
-          await Promise.all([
-            FileHandler.writeJsonData(caveFilePath, caveData),
-            FileHandler.writeJsonData(pendingFilePath, pendingData)
-          ]);
         }
-
-        // 更新maxId
-        this.maxId = Math.max(
-          status.maxId || 0,
-          ...[...this.usedIds],
-          0 // 确保至少为0
-        );
-
-        // 更新deletedIds
-        this.deletedIds = new Set(
-          status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
-        );
-
-        // 重新构建stats
-        this.stats = {};
-        for (const cave of caveData) {
-          if (cave.contributor_number === '10000') continue;
-          if (!this.stats[cave.contributor_number]) {
-            this.stats[cave.contributor_number] = [];
-          }
-          this.stats[cave.contributor_number].push(cave.cave_id);
-        }
-
-        // 确保统计数据更新
-        await this.saveStatus();
-        this.initialized = true;
       }
+
+      // 处理冲突
+      if (conflicts.size > 0) {
+        await this.handleConflicts(conflicts, caveFilePath, pendingFilePath, caveData, pendingData);
+      }
+
+      // 更新maxId和deletedIds
+      this.maxId = Math.max(
+        status.maxId || 0,
+        ...[...this.usedIds],
+        0
+      );
+
+      this.deletedIds = new Set(
+        status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
+      );
+
+      // 保存更新后的状态
+      await this.saveStatus();
+      this.initialized = true;
+      logger.success('ID管理器初始化完成');
+
     } catch (error) {
       this.initialized = false;
-      logger.error(`IdManager initialization failed: ${error.message}`);
+      logger.error(`ID管理器初始化失败: ${error.message}`);
       throw error;
+    }
+  }
+
+  private async handleConflicts(
+    conflicts: Map<number, Array<CaveObject | PendingCave>>,
+    caveFilePath: string,
+    pendingFilePath: string,
+    caveData: CaveObject[],
+    pendingData: PendingCave[]
+  ): Promise<void> {
+    logger.warn(`发现 ${conflicts.size} 个ID冲突，正在修复...`);
+
+    let modified = false;
+    for (const [conflictId, items] of conflicts) {
+      items.slice(1).forEach(item => {
+        let newId = this.maxId + 1;
+        while (this.usedIds.has(newId)) {
+          newId++;
+        }
+        logger.info(`重新分配ID ${item.cave_id} -> ${newId}`);
+        item.cave_id = newId;
+        this.usedIds.add(newId);
+        this.maxId = Math.max(this.maxId, newId);
+        modified = true;
+      });
+    }
+
+    if (modified) {
+      await Promise.all([
+        FileHandler.writeJsonData(caveFilePath, caveData),
+        FileHandler.writeJsonData(pendingFilePath, pendingData)
+      ]);
+      logger.success('ID冲突修复完成');
     }
   }
 
