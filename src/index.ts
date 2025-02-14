@@ -1,10 +1,6 @@
-/**
- * 回声洞插件 - 主文件
- * @module best-cave
- * @description 提供回声洞功能的Koishi插件,支持文本、图片、视频投稿与管理
- */
+// 回声洞插件 - 提供文本、图片、视频的投稿与管理功能
 
-// 导入核心依赖
+// 导入依赖
 import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
@@ -18,42 +14,30 @@ export const name = 'best-cave';
 export const inject = ['database'];
 
 /**
- * 插件配置模式定义
- * @description 定义插件的所有配置项及其验证规则
- * manager: 管理员用户ID列表
- * number: 命令冷却时间(秒)
- * enableAudit: 是否启用投稿审核
- * imageMaxSize: 图片文件大小限制(MB)
- * duplicateThreshold: 图片查重相似度阈值(0-10,越小越严格)
- * allowVideo: 是否允许视频投稿
- * videoMaxSize: 视频文件大小限制(MB)
- * enablePagination: 是否启用分页显示
- * itemsPerPage: 每页显示条目数
- * blacklist: 黑名单用户ID列表
- * whitelist: 白名单用户ID列表(可跳过审核)
+ * 插件配置项
+ * @type {Schema}
  */
 export const Config: Schema<Config> = Schema.object({
-  manager: Schema.array(Schema.string()).required(),
-  number: Schema.number().default(60),
-  enableAudit: Schema.boolean().default(false),
-  imageMaxSize: Schema.number().default(4),
-  duplicateThreshold: Schema.number().default(0.8),
-  allowVideo: Schema.boolean().default(true),
-  videoMaxSize: Schema.number().default(16),
-  enablePagination: Schema.boolean().default(false),
-  itemsPerPage: Schema.number().default(10),
-  blacklist: Schema.array(Schema.string()).default([]),
-  whitelist: Schema.array(Schema.string()).default([]),
+  manager: Schema.array(Schema.string()).required(), // 管理员用户ID
+  number: Schema.number().default(60),              // 冷却时间(秒)
+  enableAudit: Schema.boolean().default(false),     // 启用审核
+  imageMaxSize: Schema.number().default(4),         // 图片大小限制(MB)
+  duplicateThreshold: Schema.number().default(0.8), // 查重阈值(0-1)
+  allowVideo: Schema.boolean().default(true),       // 允许视频
+  videoMaxSize: Schema.number().default(16),        // 视频大小限制(MB)
+  enablePagination: Schema.boolean().default(false),// 启用分页
+  itemsPerPage: Schema.number().default(10),        // 每页条数
+  blacklist: Schema.array(Schema.string()).default([]), // 黑名单
+  whitelist: Schema.array(Schema.string()).default([]), // 白名单
 }).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
 });
 
 /**
- * 主插件入口
- * @param ctx Koishi上下文,提供各种API接口
- * @param config 插件配置对象
- * @description 初始化插件环境,注册命令与处理函数
+ * 插件主入口
+ * @param {Context} ctx - Koishi上下文
+ * @param {Config} config - 插件配置
  */
 export async function apply(ctx: Context, config: Config) {
   // 初始化国际化
@@ -84,16 +68,7 @@ export async function apply(ctx: Context, config: Config) {
 
   const lastUsed = new Map<string, number>();
 
-  /**
-   * 处理列表查询
-   * @param caveFilePath cave数据文件路径
-   * @param session 会话上下文
-   * @param content 命令内容
-   * @param options 命令选项
-   * @param config 插件配置
-   * @returns 格式化的列表信息
-   * @description 统计每个用户的投稿数量并生成报告
-   */
+  // 处理列表查询
   async function processList(
     session: any,
     config: Config,
@@ -131,20 +106,8 @@ export async function apply(ctx: Context, config: Config) {
     }
   }
 
-  /**
-   * 处理审核操作
-   * @description 处理单条或批量审核请求
-   * @param ctx Koishi上下文
-   * @param pendingFilePath 待审核文件路径
-   * @param caveFilePath cave数据文件路径
-   * @param resourceDir 资源目录
-   * @param session 会话上下文
-   * @param options 命令选项
-   * @param content 命令内容
-   * @returns 审核结果消息
-   */
+  // 处理审核操作
   async function processAudit(
-    ctx: Context,
     pendingFilePath: string,
     caveFilePath: string,
     resourceDir: string,
@@ -303,7 +266,7 @@ export async function apply(ctx: Context, config: Config) {
                          config.whitelist.includes(session.channelId);
 
       const { imageUrls, imageElements, videoUrls, videoElements, textParts } =
-        await extractMediaContent(inputContent, config, session, ctx, resourceDir);
+        await extractMediaContent(inputContent, config, session);
 
       if (videoUrls.length > 0 && !config.allowVideo) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
@@ -611,7 +574,7 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       if (options.p || options.d) {
-        return await processAudit(ctx, pendingFilePath, caveFilePath, resourceDir, session, options, content);
+        return await processAudit(pendingFilePath, caveFilePath, resourceDir, session, options, content);
       }
       if (options.g) {
         return await processView(caveFilePath, resourceDir, session, options, content);
@@ -629,9 +592,7 @@ export async function apply(ctx: Context, config: Config) {
 // 日志记录器
 const logger = new Logger('cave');
 
-// 接口定义
-export interface User { userId: string; username: string; nickname?: string; }
-export interface getStrangerInfo { user_id: string; nickname: string; }
+// 核心类型定义
 export interface Config {
   manager: string[];
   number: number;
@@ -647,22 +608,34 @@ export interface Config {
 }
 
 // 定义数据类型接口
-interface BaseElement { type: 'text' | 'img' | 'video'; index: number }
-interface TextElement extends BaseElement { type: 'text'; content: string }
-interface MediaElement extends BaseElement { type: 'img' | 'video'; file?: string; fileName?: string; fileSize?: string; filePath?: string }
+interface BaseElement {
+  type: 'text' | 'img' | 'video';
+  index: number;  // 元素排序索引
+}
+
+interface TextElement extends BaseElement {
+  type: 'text';
+  content: string; // 文本内容
+}
+
+interface MediaElement extends BaseElement {
+  type: 'img' | 'video';
+  file?: string;     // 保存的文件名
+  fileName?: string; // 原始文件名
+  fileSize?: string; // 文件大小
+  filePath?: string; // 文件路径
+}
 type Element = TextElement | MediaElement;
 
 interface CaveObject { cave_id: number; elements: Element[]; contributor_number: string; contributor_name: string }
 interface PendingCave extends CaveObject {}
 
-/**
- * 发送消息
- * @param session 会话上下文
- * @param key 消息key
- * @param params 消息参数
- * @param isTemp 是否为临时消息
- * @param timeout 临时消息超时时间
- */
+// 工具函数定义
+// session: 会话上下文
+// key: 消息key
+// params: 消息参数
+// isTemp: 是否为临时消息
+// timeout: 临时消息超时时间
 async function sendMessage(
   session: any,
   key: string,
@@ -687,9 +660,7 @@ async function sendMessage(
   return '';
 }
 
-/**
- * 审核相关功能
- */
+// 审核相关功能
 // 发送审核消息给管理员
 async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string, session: any) {
   const auditMessage = `${session.text('commands.cave.audit.title')}\n${content}
@@ -707,9 +678,7 @@ ${session.text('commands.cave.audit.from')}${cave.contributor_number}`;
   }
 }
 
-/**
- * 消息构建工具
- */
+// 消息构建工具
 // 清理元素数据用于保存
 function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
   if (!elements?.length) return [];
@@ -795,23 +764,13 @@ async function buildMessage(cave: CaveObject, resourceDir: string, session?: any
   return lines.join('\n');
 }
 
-/**
- * 媒体处理相关函数
- */
-
-/**
- * 提取媒体内容
- * @description 从原始内容中提取文本、图片和视频元素
- * @param originalContent 原始内容字符串
- * @param config 插件配置
- * @returns 分类后的媒体元素
- * - imageUrls: 图片URL列表
- * - imageElements: 图片元素对象列表
- * - videoUrls: 视频URL列表
- * - videoElements: 视频元素对象列表
- * - textParts: 文本元素列表
- */
-async function extractMediaContent(originalContent: string, config: Config, session: any, ctx: Context, resourceDir: string): Promise<{
+// 媒体处理相关函数
+// 从原始内容中提取文本、图片和视频元素
+async function extractMediaContent(
+  originalContent: string,
+  config: Config,
+  session: any
+): Promise<{
   imageUrls: string[],
   imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>,
   videoUrls: string[],
@@ -868,18 +827,7 @@ async function extractMediaContent(originalContent: string, config: Config, sess
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
 
-/**
- * 保存媒体文件
- * @description 下载并保存媒体文件到本地
- * @param urls 媒体文件URL列表
- * @param fileNames 文件名列表
- * @param resourceDir 资源目录
- * @param caveId 回声洞ID
- * @param mediaType 媒体类型(img/video)
- * @param ctx Koishi上下文
- * @param session 会话上下文
- * @returns 保存后的文件名列表
- */
+// 下载并保存媒体文件到本地
 async function saveMedia(
   urls: string[],
   fileNames: (string | undefined)[],
@@ -956,6 +904,5 @@ async function saveMedia(
       throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
     }
   });
-
   return Promise.all(downloadTasks);
 }

@@ -4,18 +4,14 @@ import { Logger } from 'koishi';
 
 const logger = new Logger('fileHandler');
 
-/**
- * 文件处理工具类
- */
+// 文件处理工具类
 export class FileHandler {
   private static locks = new Map<string, Promise<any>>();
   private static readonly RETRY_COUNT = 3;
   private static readonly RETRY_DELAY = 1000;
   private static readonly CONCURRENCY_LIMIT = 5;
 
-  /**
-   * 并发控制
-   */
+  // 并发控制
   private static async withConcurrencyLimit<T>(
     operation: () => Promise<T>,
     limit = this.CONCURRENCY_LIMIT
@@ -26,9 +22,7 @@ export class FileHandler {
     return operation();
   }
 
-  /**
-   * 统一的文件操作包装器
-   */
+  // 文件操作包装器
   private static async withFileOp<T>(
     filePath: string,
     operation: () => Promise<T>
@@ -59,9 +53,7 @@ export class FileHandler {
     }
   }
 
-  /**
-   * 事务处理
-   */
+  // 事务处理
   static async withTransaction<T>(
     operations: Array<{
       filePath: string;
@@ -96,9 +88,7 @@ export class FileHandler {
     }
   }
 
-  /**
-   * JSON文件读写
-   */
+  // JSON读写
   static async readJsonData<T>(filePath: string): Promise<T[]> {
     return this.withFileOp(filePath, async () => {
       try {
@@ -118,9 +108,7 @@ export class FileHandler {
     });
   }
 
-  /**
-   * 文件系统操作
-   */
+  // 目录和文件操作
   static async ensureDirectory(dir: string): Promise<void> {
     await this.withConcurrencyLimit(async () => {
       if (!fs.existsSync(dir)) {
@@ -137,9 +125,7 @@ export class FileHandler {
     });
   }
 
-  /**
-   * 媒体文件操作
-   */
+  // 媒体文件操作
   static async saveMediaFile(
     filePath: string,
     data: Buffer | string

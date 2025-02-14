@@ -5,7 +5,6 @@ import { FileHandler } from './fileHandler';
 
 const logger = new Logger('idManager');
 
-// 定义接口
 interface CaveObject {
   cave_id: number;
   contributor_number: string;
@@ -13,10 +12,6 @@ interface CaveObject {
 
 interface PendingCave extends CaveObject {}
 
-/**
- * ID管理器
- * @description 负责cave ID的分配、回收和持久化
- */
 export class IdManager {
   private deletedIds: Set<number> = new Set();
   private maxId: number = 0;
@@ -34,7 +29,7 @@ export class IdManager {
     if (this.initialized) return;
 
     try {
-      // 读取状态文件
+      // 读取状态
       const status = fs.existsSync(this.statusFilePath) ?
         JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
           deletedIds: [],
@@ -43,7 +38,7 @@ export class IdManager {
           lastUpdated: new Date().toISOString()
         };
 
-      // 读取数据文件
+      // 读取数据
       const [caveData, pendingData] = await Promise.all([
         FileHandler.readJsonData<CaveObject>(caveFilePath),
         FileHandler.readJsonData<PendingCave>(pendingFilePath)

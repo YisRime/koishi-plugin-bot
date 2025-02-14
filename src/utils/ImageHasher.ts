@@ -2,11 +2,11 @@ import sharp from 'sharp';
 import { Buffer } from 'buffer';
 
 /**
- * 图片哈希计算类
+ * 图片哈希计算
  */
 export class ImageHasher {
   /**
-   * 计算图片的小波哈希值
+   * 计算图片哈希值
    */
   static async calculateHash(imageBuffer: Buffer): Promise<string> {
       // 转换为32x32灰度图以获得更好的特征
@@ -30,9 +30,6 @@ export class ImageHasher {
       return this.binaryToHex(binaryHash);
   }
 
-  /**
-   * 将二进制字符串转换为16进制
-   */
   private static binaryToHex(binary: string): string {
     const hex = [];
     // 每4位二进制转换为1位16进制
@@ -43,9 +40,6 @@ export class ImageHasher {
     return hex.join('');
   }
 
-  /**
-   * 将16进制字符串转换为二进制
-   */
   private static hexToBinary(hex: string): string {
     let binary = '';
     for (const char of hex) {
@@ -56,9 +50,6 @@ export class ImageHasher {
     return binary;
   }
 
-  /**
-   * Haar小波变换
-   */
   private static haarWaveletTransform(data: Uint8Array, size: number): number[][] {
     const matrix: number[][] = Array(size).fill(0).map(() => Array(size).fill(0));
 
@@ -86,9 +77,6 @@ export class ImageHasher {
     return matrix;
   }
 
-  /**
-   * 1D Haar变换
-   */
   private static haarTransform1D(arr: number[]): void {
     const len = arr.length;
     const temp = new Array(len).fill(0);
@@ -107,9 +95,6 @@ export class ImageHasher {
     }
   }
 
-  /**
-   * 提取特征区域
-   */
   private static extractFeatures(matrix: number[][], size: number): number[] {
     const features: number[] = [];
     const featureSize = 8; // 提取8x8特征
@@ -125,9 +110,6 @@ export class ImageHasher {
 
   /**
    * 计算两个hash值的汉明距离
-   * @param hash1 第一个hash值
-   * @param hash2 第二个hash值
-   * @returns 汉明距离(不同位的数量)
    */
   static calculateDistance(hash1: string, hash2: string): number {
     if (hash1.length !== hash2.length) {
@@ -146,10 +128,7 @@ export class ImageHasher {
   }
 
   /**
-   * 计算两个图片的相似度
-   * @param hash1 第一个图片hash
-   * @param hash2 第二个图片hash
-   * @returns 相似度(0-1之间)
+   * 计算图片相似度(0-1)
    */
   static calculateSimilarity(hash1: string, hash2: string): number {
     const distance = this.calculateDistance(hash1, hash2);
@@ -159,10 +138,7 @@ export class ImageHasher {
   }
 
   /**
-   * 批量比较一个新图片与多个已有hash的相似度
-   * @param newHash 新图片hash
-   * @param existingHashes 已有图片hash数组
-   * @returns 相似度数组
+   * 批量比较图片相似度
    */
   static batchCompareSimilarity(
     newHash: string,
