@@ -60,7 +60,7 @@ commands:
       noCave: "No entries available"
       invalidId: "Please enter a valid entry ID"
       notFound: "Entry not found"
-      duplicateImage: "Detected similar image with similarity of {1}"
+      duplicateFound: "Found duplicate image with similarity of {0}%"
       failed: "Addition failed"
     message:
       blacklisted: "You have been blacklisted"

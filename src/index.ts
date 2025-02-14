@@ -848,50 +848,6 @@ async function extractMediaContent(originalContent: string, config: Config, sess
   const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video', config.videoMaxSize);
   const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
 
-  // 移除条件检查,始终执行查重
-  if (imageUrls.length > 0) {
-    const imgBuffers = await Promise.all(
-      imageUrls.map(url =>
-        ctx.http.get(decodeURIComponent(url).replace(/&amp;/g, '&'), {
-          responseType: 'arraybuffer'
-        })
-      )
-    );
-
-    const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
-    await hashStorage.initialize();
-
-    const duplicateResults = await hashStorage.findDuplicates(
-      imgBuffers.map(resp => Buffer.from(resp)),
-      config.duplicateThreshold
-    );
-
-    // 修改这部分逻辑：分别处理超过阈值和接近阈值的情况
-    const duplicates = duplicateResults.filter(result => result !== null);
-    if (duplicates.length > 0) {
-      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-
-      for (const duplicate of duplicates) {
-        const originalCave = data.find(item => item.cave_id === duplicate.caveId);
-        if (originalCave) {
-          if (duplicate.similarity >= config.duplicateThreshold) {
-            // 达到阈值，阻止添加
-            await session.send(session.text('commands.cave.error.duplicateImage', [
-              duplicate.similarity.toFixed(2)
-            ]) + await buildMessage(originalCave, resourceDir, session));
-            throw { code: 'duplicate_images_found' };
-          } else if (duplicate.similarity >= config.duplicateThreshold * 0.8) {
-            // 接近阈值但未达到，只发出警告
-            await session.send(session.text('commands.cave.error.duplicateImage', [
-              duplicate.similarity.toFixed(2)
-            ]) + await buildMessage(originalCave, resourceDir, session));
-          }
-        }
-      }
-    }
-  }
-
   return { imageUrls, imageElements, videoUrls, videoElements, textParts };
 }
 
@@ -944,21 +900,28 @@ async function saveMedia(
 
       if (mediaType === 'img') {
         const buffer = Buffer.from(response.data);
-        const result = await hashStorage.checkAndSaveImage(
-          buffer,
-          caveId,
-          filePath,
-          config.duplicateThreshold
-        );
+        // 使用统一的相似度检查
+        const result = await hashStorage.findDuplicates([buffer], config.duplicateThreshold);
 
-        if (result.isDuplicate) {
-          // 如果发现重复,抛出错误并包含相似度信息
-          throw {
-            code: 'duplicate_images_found',
-            similarity: result.similarity,
-            duplicateCaveId: result.duplicateCaveId
-          };
+        if (result.length > 0 && result[0] !== null) {
+          const duplicate = result[0];
+          const similarity = duplicate.similarity * 10; // 转换为百分比
+
+          if (similarity >= config.duplicateThreshold * 10) {
+            const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+            const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+            const originalCave = data.find(item => item.cave_id === duplicate.caveId);
+
+            if (originalCave) {
+              const message = session.text('commands.cave.error.duplicateFound', [similarity.toFixed(1)]);
+              await session.send(message + '\n' + await buildMessage(originalCave, resourceDir, session));
+              throw new Error('duplicate_found');
+            }
+          }
         }
+
+        // 保存图片
+        await FileHandler.saveMediaFile(filePath, buffer);
       } else {
         // 视频直接保存
         await FileHandler.saveMediaFile(filePath, Buffer.from(response.data));
@@ -966,37 +929,13 @@ async function saveMedia(
 
       return finalFileName;
     } catch (error) {
-      if (error.code === 'duplicate_images_found') {
-        throw error; // 重新抛出重复图片错误
+      if (error.message === 'duplicate_found') {
+        throw error;
       }
       logger.error(`下载媒体失败: ${error.message}`);
       throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
     }
   });
 
-  // 修改错误处理逻辑,处理重复图片的情况
-  try {
-    const results = await Promise.all(downloadTasks);
-    return results;
-  } catch (error) {
-    if (error.code === 'duplicate_images_found') {
-      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-      const originalCave = data.find(item => item.cave_id === error.duplicateCaveId);
-
-      if (originalCave) {
-        if (error.similarity >= config.duplicateThreshold) {
-          await session.send(session.text('commands.cave.error.duplicateImage', [
-            error.similarity.toFixed(2)
-          ]) + await buildMessage(originalCave, resourceDir, session));
-          throw { code: 'duplicate_images_found' };
-        } else if (error.similarity >= config.duplicateThreshold * 0.8) {
-          await session.send(session.text('commands.cave.warning.similarImage', [
-            error.similarity.toFixed(2)
-          ]));
-        }
-      }
-    }
-    throw error;
-  }
+  return Promise.all(downloadTasks);
 }

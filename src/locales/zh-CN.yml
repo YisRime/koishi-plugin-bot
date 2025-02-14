@@ -60,8 +60,8 @@ commands:
       noCave: "没有回声洞"
       invalidId: "请输入有效的回声洞ID"
       notFound: "未找到该回声洞"
-      duplicateImage: "检测到相似度为 {1} 的"
       failed: "添加失败"
+      duplicateFound: "发现相似度为 {0}% 的"
     message:
       blacklisted: "你已被列入黑名单"
       managerOnly: "此操作仅限管理员可用"

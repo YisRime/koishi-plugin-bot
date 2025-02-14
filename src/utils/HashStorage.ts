@@ -29,51 +29,111 @@ export class HashStorage {
     if (this.initialized) return;
 
     try {
-      const data = await FileHandler.readJsonData<HashData>(this.filePath)
+      const hashData = await FileHandler.readJsonData<HashData>(this.filePath)
         .then(data => data[0])
         .catch(() => null);
 
-      if (data?.hashes) {
-        this.hashes = new Map(
-          Object.entries(data.hashes).map(([k, v]) => [Number(k), v as string])
-        );
-      } else {
-        // 如果没有哈希数据，进行初始构建
+      // 检查hash文件是否存在并有效
+      const needsRebuild = !hashData?.hashes || Object.keys(hashData.hashes).length === 0;
+
+      if (needsRebuild) {
+        // 如果没有hash数据或者为空，进行完整重建
         await this.buildInitialHashes();
+      } else {
+        // 有现有数据，加载并验证
+        this.hashes = new Map(
+          Object.entries(hashData.hashes).map(([k, v]) => [Number(k), v as string])
+        );
+
+        // 检查是否需要更新（例如有新图片但没有对应的hash）
+        await this.updateMissingHashes();
       }
 
       this.initialized = true;
+      logger.success(`Hash存储初始化完成，共加载 ${this.hashes.size} 个hash值`);
     } catch (error) {
       logger.error(`初始化失败: ${error.message}`);
       this.initialized = true; // 即使失败也标记为已初始化，避免重复尝试
     }
   }
 
-  private async buildInitialHashes(): Promise<void> {
+  private async updateMissingHashes(): Promise<void> {
+    const caveData = await this.loadCaveData();
+    let updatedCount = 0;
+
+    for (const cave of caveData) {
+      // 如果cave_id已经有hash，跳过
+      if (this.hashes.has(cave.cave_id)) continue;
+
+      const imgElement = cave.elements.find(el => el.type === 'img' && el.file);
+      if (!imgElement?.file) continue;
+
+      try {
+        const filePath = path.join(this.resourceDir, imgElement.file);
+        if (!fs.existsSync(filePath)) continue;
+
+        const imgBuffer = await fs.promises.readFile(filePath);
+        const hash = await ImageHasher.calculateHash(imgBuffer);
+        this.hashes.set(cave.cave_id, hash);
+        updatedCount++;
+      } catch (error) {
+        logger.error(`处理回声洞 ${cave.cave_id} 失败: ${error.message}`);
+      }
+    }
+
+    if (updatedCount > 0) {
+      await this.saveHashes();
+      logger.success(`已更新 ${updatedCount} 个新的hash值`);
+    }
+  }
+
+  private async loadCaveData(): Promise<Array<{
+    cave_id: number;
+    elements: Array<{ type: string; file?: string }>;
+  }>> {
     const caveFilePath = path.join(this.caveDir, 'cave.json');
-    const caveData = (await FileHandler.readJsonData<Array<{
+    return (await FileHandler.readJsonData<Array<{
       cave_id: number;
       elements: Array<{ type: string; file?: string }>;
     }>>(caveFilePath))[0];
+  }
+
+  private async buildInitialHashes(): Promise<void> {
+    logger.info('开始构建图片hash数据...');
+    this.hashes.clear();
+
+    const caveData = await this.loadCaveData();
+    let processedCount = 0;
+    const totalImages = caveData.filter(cave =>
+      cave.elements.some(el => el.type === 'img' && el.file)
+    ).length;
 
     for (const cave of caveData) {
       const imgElement = cave.elements.find(el => el.type === 'img' && el.file);
       if (!imgElement?.file) continue;
 
-      const filePath = path.join(this.resourceDir, imgElement.file);
-      if (!fs.existsSync(filePath)) continue;
-
       try {
+        const filePath = path.join(this.resourceDir, imgElement.file);
+        if (!fs.existsSync(filePath)) {
+          logger.warn(`图片文件不存在: ${filePath}`);
+          continue;
+        }
+
         const imgBuffer = await fs.promises.readFile(filePath);
         const hash = await ImageHasher.calculateHash(imgBuffer);
         this.hashes.set(cave.cave_id, hash);
+        processedCount++;
+
+        if (processedCount % 10 === 0) {
+          logger.info(`处理进度: ${processedCount}/${totalImages}`);
+        }
       } catch (error) {
         logger.error(`处理回声洞 ${cave.cave_id} 失败: ${error.message}`);
       }
     }
 
     await this.saveHashes();
-    logger.success(`初始哈希构建完成，共处理 ${this.hashes.size} 个图片`);
+    logger.success(`初始哈希构建完成，共处理 ${this.hashes.size}/${totalImages} 个图片`);
   }
 
   async updateCaveHash(caveId: number, imgBuffer?: Buffer): Promise<void> {
