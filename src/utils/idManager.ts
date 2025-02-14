@@ -82,10 +82,11 @@ export class IdManager {
         await this.handleConflicts(conflicts, caveFilePath, pendingFilePath, caveData, pendingData);
       }
 
-      // 更新maxId和deletedIds
+      // 更新maxId，确保它不小于deletedIds中的最大值
       this.maxId = Math.max(
         status.maxId || 0,
         ...[...this.usedIds],
+        ...status.deletedIds || [],
         0
       );
 
@@ -172,10 +173,10 @@ export class IdManager {
     this.deletedIds.add(id);
     this.usedIds.delete(id);
 
-    if (id === this.maxId) {
-      const maxUsedId = Math.max(...Array.from(this.usedIds));
-      this.maxId = maxUsedId;
-    }
+    // 更新maxId时同时考虑usedIds和deletedIds中的最大值
+    const maxUsedId = Math.max(...Array.from(this.usedIds), 0);
+    const maxDeletedId = Math.max(...Array.from(this.deletedIds), 0);
+    this.maxId = Math.max(maxUsedId, maxDeletedId);
 
     await this.saveStatus();
   }
