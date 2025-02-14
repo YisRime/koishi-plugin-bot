@@ -149,13 +149,13 @@ export class ImageHasher {
    * 计算两个图片的相似度
    * @param hash1 第一个图片hash
    * @param hash2 第二个图片hash
-   * @returns 相似度百分比(0-10)
+   * @returns 相似度(0-1之间)
    */
   static calculateSimilarity(hash1: string, hash2: string): number {
     const distance = this.calculateDistance(hash1, hash2);
-    // 将汉明距离转换为0-10的相似度值
-    // 64位hash的最大汉明距离是64,所以用(64-distance)/64*10来计算相似度
-    return (64 - distance) / 64 * 10;
+    // 将汉明距离转换为0-1的相似度值
+    // 64位hash的最大汉明距离是64
+    return (64 - distance) / 64;
   }
 
   /**

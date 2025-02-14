@@ -88,7 +88,7 @@ export class HashStorage {
     try {
       if (imgBuffers?.length) {
         const hashes = await Promise.all(
-          imgBuffers.map(buffer => ImageHasher.calculateHash(buffer))
+          imgBuffers.map(buffer => ImageHasher.calculateHash(buffer)) // 直接使用16进制哈希值
         );
         this.hashes.set(caveId, hashes);
       } else {
@@ -164,7 +164,6 @@ export class HashStorage {
       imgBuffers.map(buffer => ImageHasher.calculateHash(buffer))
     );
 
-    // 将现有哈希转换为数组以提高查找效率
     const existingHashes = Array.from(this.hashes.entries());
 
     return Promise.all(
@@ -176,17 +175,21 @@ export class HashStorage {
           for (const [caveId, hashes] of existingHashes) {
             for (const existingHash of hashes) {
               const similarity = ImageHasher.calculateSimilarity(hash, existingHash);
+              // 确保相似度在0-1范围内进行比较
               if (similarity >= threshold && similarity > maxSimilarity) {
                 maxSimilarity = similarity;
                 matchedCaveId = caveId;
-                // 如果找到完全匹配，立即返回
-                if (similarity === 1) break;
+                if (Math.abs(similarity - 1) < Number.EPSILON) break; // 使用更精确的相等性比较
               }
             }
-            if (maxSimilarity === 1) break;
+            if (Math.abs(maxSimilarity - 1) < Number.EPSILON) break;
           }
 
-          return matchedCaveId ? { index, caveId: matchedCaveId, similarity: maxSimilarity } : null;
+          return matchedCaveId ? {
+            index,
+            caveId: matchedCaveId,
+            similarity: maxSimilarity
+          } : null;
         } catch (error) {
           logger.warn(`处理图片 ${index} 失败: ${error.message}`);
           return null;
@@ -235,7 +238,8 @@ export class HashStorage {
               return null;
             }
             const imgBuffer = await fs.promises.readFile(filePath);
-            return ImageHasher.calculateHash(imgBuffer);
+            const hash = await ImageHasher.calculateHash(imgBuffer);
+            return hash; // 直接返回16进制哈希值
           })
         );
 
