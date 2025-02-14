@@ -9,6 +9,9 @@ import { Context, Schema, h, Logger } from 'koishi'
 import * as fs from 'fs';
 import * as path from 'path';
 import {} from 'koishi-plugin-adapter-onebot'
+import { FileHandler } from './utils/fileHandler'
+import { IdManager } from './utils/idManager'
+import { HashStorage } from './utils/HashStorage'
 
 // 基础定义
 export const name = 'best-cave';
@@ -18,31 +21,29 @@ export const inject = ['database'];
  * 插件配置模式定义
  * @description 定义插件的所有配置项及其验证规则
  * manager: 管理员用户ID列表
- * blacklist: 黑名单用户ID列表
- * whitelist: 白名单用户ID列表(可跳过审核)
  * number: 命令冷却时间(秒)
  * enableAudit: 是否启用投稿审核
+ * imageMaxSize: 图片文件大小限制(MB)
+ * duplicateThreshold: 图片查重相似度阈值(0-10,越小越严格)
  * allowVideo: 是否允许视频投稿
  * videoMaxSize: 视频文件大小限制(MB)
- * imageMaxSize: 图片文件大小限制(MB)
  * enablePagination: 是否启用分页显示
  * itemsPerPage: 每页显示条目数
- * enableDuplicateCheck: 是否启用图片查重
- * duplicateThreshold: 图片查重相似度阈值(0-10,越小越严格)
+ * blacklist: 黑名单用户ID列表
+ * whitelist: 白名单用户ID列表(可跳过审核)
  */
 export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required(),
-  blacklist: Schema.array(Schema.string()).default([]),
-  whitelist: Schema.array(Schema.string()).default([]),
   number: Schema.number().default(60),
   enableAudit: Schema.boolean().default(false),
+  imageMaxSize: Schema.number().default(4),
+  duplicateThreshold: Schema.number().default(8),
   allowVideo: Schema.boolean().default(true),
   videoMaxSize: Schema.number().default(16),
-  imageMaxSize: Schema.number().default(4),
   enablePagination: Schema.boolean().default(false),
   itemsPerPage: Schema.number().default(10),
-  enableDuplicateCheck: Schema.boolean().default(true),
-  duplicateThreshold: Schema.number().default(5),
+  blacklist: Schema.array(Schema.string()).default([]),
+  whitelist: Schema.array(Schema.string()).default([]),
 }).i18n({
   'zh-CN': require('./locales/zh-CN')._config,
   'en-US': require('./locales/en-US')._config,
@@ -55,51 +56,31 @@ export const Config: Schema<Config> = Schema.object({
  * @description 初始化插件环境,注册命令与处理函数
  */
 export async function apply(ctx: Context, config: Config) {
+  // 初始化国际化
   ctx.i18n.define('zh-CN', require('./locales/zh-CN'));
   ctx.i18n.define('en-US', require('./locales/en-US'));
 
-  // 初始化路径和冷却管理
+  // 初始化路径
   const dataDir = path.join(ctx.baseDir, 'data');
   const caveDir = path.join(dataDir, 'cave');
-  const caveFilePath = path.join(caveDir, 'cave.json');
-  const resourceDir = path.join(caveDir, 'resources');
-  const pendingFilePath = path.join(caveDir, 'pending.json');
-  const hashFilePath = path.join(caveDir, 'hash.json');
 
+  // 初始化存储系统
   await FileHandler.ensureDirectory(dataDir);
   await FileHandler.ensureDirectory(caveDir);
-  await FileHandler.ensureDirectory(resourceDir);
-  await FileHandler.ensureJsonFile(caveFilePath);
-  await FileHandler.ensureJsonFile(pendingFilePath);
-  await FileHandler.ensureJsonFile(hashFilePath);
+  await FileHandler.ensureDirectory(path.join(caveDir, 'resources'));
+  await FileHandler.ensureJsonFile(path.join(caveDir, 'cave.json'));
+  await FileHandler.ensureJsonFile(path.join(caveDir, 'pending.json'));
+  await FileHandler.ensureJsonFile(path.join(caveDir, 'hash.json'));
 
+  // 初始化核心组件
   const idManager = new IdManager(ctx.baseDir);
-  await idManager.initialize(caveFilePath, pendingFilePath);
-
   const hashStorage = new HashStorage(caveDir);
-  await hashStorage.initialize();
 
-  // 初始化时计算已有图片的哈希值
-  if (config.enableDuplicateCheck) {
-    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-    for (const cave of data) {
-      for (const element of cave.elements) {
-        if (element.type === 'img' && element.file) {
-          const filePath = path.join(resourceDir, element.file);
-          try {
-            if (fs.existsSync(filePath)) {
-              const imgBuffer = await fs.promises.readFile(filePath);
-              const imageHash = await ImageHasher.calculateHash(imgBuffer);
-              hashStorage.addHash(element.file, imageHash, cave.cave_id);
-            }
-          } catch (error) {
-            logger.error(`Failed to calculate hash for ${element.file}: ${error.message}`);
-          }
-        }
-      }
-    }
-    await hashStorage.save();
-  }
+  // 等待所有组件初始化完成
+  await Promise.all([
+    idManager.initialize(path.join(caveDir, 'cave.json'), path.join(caveDir, 'pending.json')),
+    hashStorage.initialize()
+  ]);
 
   const lastUsed = new Map<string, number>();
 
@@ -258,10 +239,12 @@ export async function apply(ctx: Context, config: Config) {
 
     // 删除相关的媒体文件
     if (targetCave.elements) {
-      // 更新哈希存储
       const hashStorage = new HashStorage(caveDir);
       await hashStorage.initialize();
-      await hashStorage.updateCaveHashes(caveId);
+
+      // 直接删除对应的哈希，不需要更新
+      await hashStorage.updateCaveHash(caveId);
+
       for (const element of targetCave.elements) {
         if ((element.type === 'img' || element.type === 'video') && element.file) {
           const fullPath = path.join(resourceDir, element.file);
@@ -643,7 +626,6 @@ export interface Config {
   whitelist: string[];
   enablePagination: boolean;
   itemsPerPage: number;
-  enableDuplicateCheck: boolean;
   duplicateThreshold: number;
 }
 
@@ -655,373 +637,6 @@ type Element = TextElement | MediaElement;
 
 interface CaveObject { cave_id: number; elements: Element[]; contributor_number: string; contributor_name: string }
 interface PendingCave extends CaveObject {}
-
-/**
- * 文件处理工具类
- */
-class FileHandler {
-  private static locks = new Map<string, Promise<any>>();
-  private static readonly RETRY_COUNT = 3;
-  private static readonly RETRY_DELAY = 1000;
-  private static readonly CONCURRENCY_LIMIT = 5;
-
-  /**
-   * 并发控制
-   */
-  private static async withConcurrencyLimit<T>(
-    operation: () => Promise<T>,
-    limit = this.CONCURRENCY_LIMIT
-  ): Promise<T> {
-    while (this.locks.size >= limit) {
-      await Promise.race(this.locks.values());
-    }
-    return operation();
-  }
-
-  /**
-   * 统一的文件操作包装器
-   */
-  private static async withFileOp<T>(
-    filePath: string,
-    operation: () => Promise<T>
-  ): Promise<T> {
-    const key = filePath;
-
-    while (this.locks.has(key)) {
-      await this.locks.get(key);
-    }
-
-    const operationPromise = (async () => {
-      for (let i = 0; i < this.RETRY_COUNT; i++) {
-        try {
-          return await operation();
-        } catch (error) {
-          if (i === this.RETRY_COUNT - 1) throw error;
-          await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY));
-        }
-      }
-      throw new Error('Operation failed after retries');
-    })();
-
-    this.locks.set(key, operationPromise);
-    try {
-      return await operationPromise;
-    } finally {
-      this.locks.delete(key);
-    }
-  }
-
-  /**
-   * 事务处理
-   */
-  static async withTransaction<T>(
-    operations: Array<{
-      filePath: string;
-      operation: () => Promise<T>;
-      rollback?: () => Promise<void>;
-    }>
-  ): Promise<T[]> {
-    const results: T[] = [];
-    const completed = new Set<string>();
-
-    try {
-      for (const {filePath, operation} of operations) {
-        const result = await this.withFileOp(filePath, operation);
-        results.push(result);
-        completed.add(filePath);
-      }
-      return results;
-    } catch (error) {
-      // 并行执行所有回滚操作
-      await Promise.all(
-        operations
-          .filter(({filePath}) => completed.has(filePath))
-          .map(async ({filePath, rollback}) => {
-            if (rollback) {
-              await this.withFileOp(filePath, rollback).catch(e =>
-                logger.error(`Rollback failed for ${filePath}: ${e.message}`)
-              );
-            }
-          })
-      );
-      throw error;
-    }
-  }
-
-  /**
-   * JSON文件读写
-   */
-  static async readJsonData<T>(filePath: string): Promise<T[]> {
-    return this.withFileOp(filePath, async () => {
-      try {
-        const data = await fs.promises.readFile(filePath, 'utf8');
-        return JSON.parse(data || '[]');
-      } catch (error) {
-        return [];
-      }
-    });
-  }
-
-  static async writeJsonData<T>(filePath: string, data: T[]): Promise<void> {
-    const tmpPath = `${filePath}.tmp`;
-    await this.withFileOp(filePath, async () => {
-      await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2));
-      await fs.promises.rename(tmpPath, filePath);
-    });
-  }
-
-  /**
-   * 文件系统操作
-   */
-  static async ensureDirectory(dir: string): Promise<void> {
-    await this.withConcurrencyLimit(async () => {
-      if (!fs.existsSync(dir)) {
-        await fs.promises.mkdir(dir, { recursive: true });
-      }
-    });
-  }
-
-  static async ensureJsonFile(filePath: string): Promise<void> {
-    await this.withFileOp(filePath, async () => {
-      if (!fs.existsSync(filePath)) {
-        await fs.promises.writeFile(filePath, '[]', 'utf8');
-      }
-    });
-  }
-
-  /**
-   * 媒体文件操作
-   */
-  static async saveMediaFile(
-    filePath: string,
-    data: Buffer | string
-  ): Promise<void> {
-    await this.withConcurrencyLimit(async () => {
-      const dir = path.dirname(filePath);
-      await this.ensureDirectory(dir);
-      await this.withFileOp(filePath, () =>
-        fs.promises.writeFile(filePath, data)
-      );
-    });
-  }
-
-  static async deleteMediaFile(filePath: string): Promise<void> {
-    await this.withFileOp(filePath, async () => {
-      if (fs.existsSync(filePath)) {
-        await fs.promises.unlink(filePath);
-      }
-    });
-  }
-}
-
-/**
- * ID管理器
- * @description 负责cave ID的分配、回收和持久化
- */
-class IdManager {
-  private deletedIds: Set<number> = new Set();
-  private maxId: number = 0;
-  private initialized: boolean = false;
-  private readonly statusFilePath: string;
-  private stats: Record<string, number[]> = {};
-  private usedIds: Set<number> = new Set(); // 新增：跟踪所有使用中的ID
-
-  constructor(baseDir: string) {
-    const caveDir = path.join(baseDir, 'data', 'cave');
-    this.statusFilePath = path.join(caveDir, 'status.json');
-  }
-
-  async initialize(caveFilePath: string, pendingFilePath: string) {
-    if (this.initialized) return;
-
-    try {
-      // 设置初始化标志为 true，这样后续的 saveStatus 调用就不会抛出错误
-      this.initialized = true;
-
-      // 读取现有状态数据
-      const status = fs.existsSync(this.statusFilePath) ?
-        JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
-          deletedIds: [],
-          maxId: 0,
-          stats: {},
-          lastUpdated: new Date().toISOString()
-        };
-
-      // 加载数据
-      const [caveData, pendingData] = await Promise.all([
-        FileHandler.readJsonData<CaveObject>(caveFilePath),
-        FileHandler.readJsonData<PendingCave>(pendingFilePath)
-      ]);
-
-      // 收集所有使用中的ID
-      this.usedIds.clear();
-      const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
-
-      const collectIds = (items: Array<CaveObject | PendingCave>) => {
-        items.forEach(item => {
-          if (this.usedIds.has(item.cave_id)) {
-            // 发现重复ID，记录冲突
-            if (!conflicts.has(item.cave_id)) {
-              conflicts.set(item.cave_id, []);
-            }
-            conflicts.get(item.cave_id)?.push(item);
-          } else {
-            this.usedIds.add(item.cave_id);
-          }
-        });
-      };
-
-      collectIds(caveData);
-      collectIds(pendingData);
-
-      // 处理ID冲突
-      if (conflicts.size > 0) {
-        logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
-        for (const items of conflicts.values()) {
-          // 保留原始ID的第一个条目，为其他条目分配新ID
-          items.slice(1).forEach(item => {
-            // 找到一个未使用的ID
-            let newId = this.maxId + 1;
-            while (this.usedIds.has(newId)) {
-              newId++;
-            }
-            logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
-            item.cave_id = newId;
-            this.usedIds.add(newId);
-            this.maxId = Math.max(this.maxId, newId);
-          });
-        }
-
-        // 保存修改后的数据
-        await Promise.all([
-          FileHandler.writeJsonData(caveFilePath, caveData),
-          FileHandler.writeJsonData(pendingFilePath, pendingData)
-        ]);
-      }
-
-      // 更新maxId
-      this.maxId = Math.max(
-        this.maxId,
-        status.maxId || 0,
-        ...[...this.usedIds]
-      );
-
-      // 重建已删除ID列表
-      this.deletedIds = new Set(
-        status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
-      );
-
-      // 恢复统计数据
-      this.stats = {};
-      for (const cave of caveData) {
-        if (cave.contributor_number === '10000') continue;
-        if (!this.stats[cave.contributor_number]) {
-          this.stats[cave.contributor_number] = [];
-        }
-        this.stats[cave.contributor_number].push(cave.cave_id);
-      }
-
-      await this.saveStatus();
-      this.initialized = true;
-
-    } catch (error) {
-      // 如果初始化失败，重置 initialized 标志
-      this.initialized = false;
-      logger.error(`IdManager initialization failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  getNextId(): number {
-    if (!this.initialized) {
-      throw new Error('IdManager not initialized');
-    }
-
-    let nextId: number;
-    if (this.deletedIds.size === 0) {
-      nextId = ++this.maxId;
-    } else {
-      nextId = Math.min(...Array.from(this.deletedIds));
-      this.deletedIds.delete(nextId);
-    }
-
-    // 确保ID不重复
-    while (this.usedIds.has(nextId)) {
-      nextId = ++this.maxId;
-    }
-
-    this.usedIds.add(nextId);
-
-    // 异步保存状态
-    this.saveStatus().catch(err =>
-      logger.error(`Failed to save status after getNextId: ${err.message}`)
-    );
-
-    return nextId;
-  }
-
-  async markDeleted(id: number) {
-    if (!this.initialized) {
-      throw new Error('IdManager not initialized');
-    }
-
-    this.deletedIds.add(id);
-    this.usedIds.delete(id);
-
-    // 如果删除的是最大ID，尝试收缩最大ID范围
-    if (id === this.maxId) {
-      const maxUsedId = Math.max(...Array.from(this.usedIds));
-      this.maxId = maxUsedId;
-    }
-
-    await this.saveStatus();
-  }
-
-  // 添加新的统计记录
-  async addStat(contributorNumber: string, caveId: number) {
-    if (contributorNumber === '10000') return;
-    if (!this.stats[contributorNumber]) {
-      this.stats[contributorNumber] = [];
-    }
-    this.stats[contributorNumber].push(caveId);
-    await this.saveStatus();
-  }
-
-  // 删除统计记录
-  async removeStat(contributorNumber: string, caveId: number) {
-    if (this.stats[contributorNumber]) {
-      this.stats[contributorNumber] = this.stats[contributorNumber].filter(id => id !== caveId);
-      if (this.stats[contributorNumber].length === 0) {
-        delete this.stats[contributorNumber];
-      }
-      await this.saveStatus();
-    }
-  }
-
-  // 获取统计信息
-  getStats(): Record<string, number[]> {
-    return this.stats;
-  }
-
-  private async saveStatus(): Promise<void> {
-    // 移除初始化检查，因为我们已经在 initialize 方法中控制了这个标志
-    try {
-      const status = {
-        deletedIds: Array.from(this.deletedIds).sort((a, b) => a - b),
-        maxId: this.maxId,
-        stats: this.stats,
-        lastUpdated: new Date().toISOString()
-      };
-
-      const tmpPath = `${this.statusFilePath}.tmp`;
-      await fs.promises.writeFile(tmpPath, JSON.stringify(status, null, 2), 'utf8');
-      await fs.promises.rename(tmpPath, this.statusFilePath);
-    } catch (error) {
-      logger.error(`Failed to save status: ${error.message}`);
-      throw error;
-    }
-  }
-}
 
 /**
  * 发送消息
@@ -1233,8 +848,8 @@ async function extractMediaContent(originalContent: string, config: Config, sess
   const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video', config.videoMaxSize);
   const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
 
-  // 如果启用了查重,先进行预检测
-  if (config.enableDuplicateCheck && imageUrls.length > 0) {
+  // 移除条件检查,始终执行查重
+  if (imageUrls.length > 0) {
     const imgBuffers = await Promise.all(
       imageUrls.map(url =>
         ctx.http.get(decodeURIComponent(url).replace(/&amp;/g, '&'), {
@@ -1246,28 +861,34 @@ async function extractMediaContent(originalContent: string, config: Config, sess
     const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
     await hashStorage.initialize();
 
-    const duplicateResults = await hashStorage.batchCheckDuplicates(
+    const duplicateResults = await hashStorage.findDuplicates(
       imgBuffers.map(resp => Buffer.from(resp)),
       config.duplicateThreshold
     );
 
+    // 修改这部分逻辑：分别处理超过阈值和接近阈值的情况
     const duplicates = duplicateResults.filter(result => result !== null);
     if (duplicates.length > 0) {
-      // 获取重复图片的原始内容
       const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
       const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
 
       for (const duplicate of duplicates) {
         const originalCave = data.find(item => item.cave_id === duplicate.caveId);
         if (originalCave) {
-          await session.send(session.text('commands.cave.error.duplicateImage', [
-            duplicate.caveId,
-            duplicate.similarity.toFixed(2)
-          ]));
-          await session.send(await buildMessage(originalCave, resourceDir, session));
+          if (duplicate.similarity >= config.duplicateThreshold) {
+            // 达到阈值，阻止添加
+            await session.send(session.text('commands.cave.error.duplicateImage', [
+              duplicate.similarity.toFixed(2)
+            ]) + await buildMessage(originalCave, resourceDir, session));
+            throw { code: 'duplicate_images_found' };
+          } else if (duplicate.similarity >= config.duplicateThreshold * 0.8) {
+            // 接近阈值但未达到，只发出警告
+            await session.send(session.text('commands.cave.error.duplicateImage', [
+              duplicate.similarity.toFixed(2)
+            ]) + await buildMessage(originalCave, resourceDir, session));
+          }
         }
       }
-      throw { code: 'duplicate_images_found' };
     }
   }
 
@@ -1297,6 +918,8 @@ async function saveMedia(
   session: any
 ): Promise<string[]> {
   const accept = mediaType === 'img' ? 'image/*' : 'video/*';
+  const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
+  await hashStorage.initialize();
 
   const downloadTasks = urls.map(async (url, i) => {
     const fileName = fileNames[i];
@@ -1319,291 +942,61 @@ async function saveMedia(
 
       if (!response.data) throw new Error('empty_response');
 
-      if (mediaType === 'img' && config.enableDuplicateCheck) {
-        const dataDir = path.join(ctx.baseDir, 'data');
-        const hashStorage = new HashStorage(dataDir);
-        await hashStorage.initialize();
-        const imageHash = await ImageHasher.calculateHash(Buffer.from(response.data));
-        hashStorage.addHash(finalFileName, imageHash, caveId);
-        await hashStorage.save();
+      if (mediaType === 'img') {
+        const buffer = Buffer.from(response.data);
+        const result = await hashStorage.checkAndSaveImage(
+          buffer,
+          caveId,
+          filePath,
+          config.duplicateThreshold
+        );
+
+        if (result.isDuplicate) {
+          // 如果发现重复,抛出错误并包含相似度信息
+          throw {
+            code: 'duplicate_images_found',
+            similarity: result.similarity,
+            duplicateCaveId: result.duplicateCaveId
+          };
+        }
+      } else {
+        // 视频直接保存
+        await FileHandler.saveMediaFile(filePath, Buffer.from(response.data));
       }
 
-      await FileHandler.saveMediaFile(filePath, Buffer.from(response.data));
       return finalFileName;
     } catch (error) {
-      logger.error(`Failed to download media: ${error.message}`);
-      throw error;
+      if (error.code === 'duplicate_images_found') {
+        throw error; // 重新抛出重复图片错误
+      }
+      logger.error(`下载媒体失败: ${error.message}`);
+      throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
     }
   });
 
-  const results = await Promise.allSettled(downloadTasks);
-  const successfulResults = results
-    .filter((result): result is PromiseFulfilledResult<string> => result.status === 'fulfilled')
-    .map(result => result.value);
-
-  if (!successfulResults.length) {
-    throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
-  }
-
-  return successfulResults;
-}
-
-/**
- * 图片哈希计算类
- */
-class ImageHasher {
-  // 增加哈希尺寸以提高精度
-  private static readonly HASH_SIZE = 32; // 从16增加到32
-  private static readonly BLUR_SIZE = 1.5; // 从2减小到1.5以保留更多细节
-  private static readonly EDGE_THRESHOLD = 10; // 边缘检测阈值
-
-  static async calculateHash(imgBuffer: Buffer): Promise<string> {
-    const sharp = require('sharp');
-    try {
-      // 增加预处理步骤,提取更多图像特征
-      const image = sharp(imgBuffer);
-
-      // 并行处理两个特征分支
-      const [normalHash, edgeHash] = await Promise.all([
-        // 常规处理分支
-        image
-          .clone()
-          .grayscale()
-          .blur(this.BLUR_SIZE)
-          .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
-          .raw()
-          .toBuffer(),
-
-        // 边缘检测分支
-        image
-          .clone()
-          .grayscale()
-          .convolve({
-            width: 3,
-            height: 3,
-            kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1]
-          })
-          .resize(this.HASH_SIZE, this.HASH_SIZE, { fit: 'fill' })
-          .raw()
-          .toBuffer()
-      ]);
-
-      // 合并两个特征的结果
-      const normalPixels: number[] = Array.from(normalHash);
-      const edgePixels: number[] = Array.from(edgeHash);
-
-      // 使用中值而不是平均值来提高鲁棒性
-      normalPixels.sort((a, b) => Number(a) - Number(b));
-      const normalMedian = normalPixels[Math.floor(normalPixels.length / 2)];
-
-      // 对边缘特征使用动态阈值
-      const edgeMedian = edgePixels.reduce((sum, p) => sum + p, 0) / edgePixels.length;
-      const edgeThreshold = edgeMedian + this.EDGE_THRESHOLD;
-
-      // 生成混合哈希
-      let hashHex = '';
-      for (let i = 0; i < normalPixels.length; i += 4) {
-        let value = 0;
-        // 每4个像素点合并为1个16进制数字
-        for (let j = 0; j < 4 && (i + j) < normalPixels.length; j++) {
-          const pixel = normalPixels[i + j];
-          const hasStrongEdge = edgePixels[i + j] > edgeThreshold;
-          // 使用边缘信息和像素值综合判断
-          if (hasStrongEdge || pixel > normalMedian) {
-            value |= (1 << (3 - j));
-          }
-        }
-        // 转换为16进制并补零
-        hashHex += value.toString(16).padStart(1, '0');
-      }
-
-      return hashHex;
-
-    } catch (error) {
-      logger.error(`Failed to calculate image hash: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * 改进的汉明距离计算
-   */
-  static getHammingDistance(hash1: string, hash2: string): number {
-    if (hash1.length !== hash2.length) {
-      throw new Error('Hash lengths must be equal');
-    }
-
-    let distance = 0;
-    const len = hash1.length;
-
-    // 使用分块比较来减少误差影响
-    const blockSize = 8;
-    const blocks = Math.floor(len / blockSize);
-
-    for (let i = 0; i < blocks; i++) {
-      let blockDiff = 0;
-      const start = i * blockSize;
-      const end = start + blockSize;
-
-      // 计算每个块内的差异
-      for (let j = start; j < end; j++) {
-        const n1 = parseInt(hash1[j], 16);
-        const n2 = parseInt(hash2[j], 16);
-        blockDiff += this.popCount(n1 ^ n2);
-      }
-
-      // 如果块内差异过大,说明这个区域差异显著
-      if (blockDiff > blockSize / 2) {
-        distance += blockSize;
-      } else {
-        distance += blockDiff;
-      }
-    }
-
-    // 处理剩余的位
-    const remainStart = blocks * blockSize;
-    for (let i = remainStart; i < len; i++) {
-      const n1 = parseInt(hash1[i], 16);
-      const n2 = parseInt(hash2[i], 16);
-      distance += this.popCount(n1 ^ n2);
-    }
-
-    return distance;
-  }
-
-  // 计算二进制中1的个数
-  private static popCount(x: number): number {
-    x = x - ((x >> 1) & 0x55555555);
-    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
-    x = (x + (x >> 4)) & 0x0f0f0f0f;
-    x = x + (x >> 8);
-    x = x + (x >> 16);
-    return x & 0x3f;
-  }
-
-  /**
-   * 改进的相似度计算
-   */
-  static isSimilar(hash1: string, hash2: string, threshold: number): boolean {
-    const distance = this.getHammingDistance(hash1, hash2);
-    // 使用更精确的相似度计算公式
-    const maxDistance = hash1.length * 4; // 每个16进制字符代表4位
-    const similarity = 10 * Math.pow(1 - distance / maxDistance, 2);
-    return similarity >= threshold;
-  }
-}
-
-// 修改 HashStorage 类中的 findDuplicate 方法
-class HashStorage {
-  private static readonly HASH_FILE = 'hash.json';
-  private hashes: Map<string, { hash: string; caveId: number }> = new Map();
-  private filePath: string;
-  private hashCache: Map<string, {hash: string, timestamp: number}> = new Map();
-  private static readonly CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
-
-  constructor(caveDir: string) {
-    this.filePath = path.join(caveDir, HashStorage.HASH_FILE);
-  }
-
-  async initialize() {
-    try {
-      if (fs.existsSync(this.filePath)) {
-        const data = JSON.parse(await fs.promises.readFile(this.filePath, 'utf8'));
-        this.hashes = new Map(Object.entries(data));
-      }
-    } catch (error) {
-      logger.error(`Failed to initialize hash storage: ${error.message}`);
-    }
-  }
-
-  async save() {
-    try {
-      const data = Object.fromEntries(this.hashes.entries());
-      await fs.promises.writeFile(this.filePath, JSON.stringify(data, null, 2));
-    } catch (error) {
-      logger.error(`Failed to save hash storage: ${error.message}`);
-    }
-  }
-
-  addHash(fileName: string, hash: string, caveId: number) {
-    this.hashes.set(fileName, { hash, caveId });
-  }
-
-  findDuplicate(hash: string, threshold: number): { fileName: string; caveId: number; similarity: number } | null {
-    let maxSimilarity = 0;
-    let mostSimilarFile = null;
-
-    for (const [fileName, { hash: existingHash, caveId }] of this.hashes.entries()) {
-      try {
-        const distance = ImageHasher.getHammingDistance(hash, existingHash);
-        // 使用改进的相似度计算公式
-        const similarity = 10 * Math.pow(1 - distance / hash.length, 2);
-
-        if (similarity >= threshold && similarity > maxSimilarity) {
-          maxSimilarity = similarity;
-          mostSimilarFile = { fileName, caveId };
-        }
-      } catch (error) {
-        logger.error(`Failed to compare hashes: ${error.message}`);
-        continue;
-      }
-    }
-
-    return mostSimilarFile ? { ...mostSimilarFile, similarity: maxSimilarity } : null;
-  }
-
-  // 添加一个方法用于更新或删除特定回声洞的哈希
-  async updateCaveHashes(caveId: number, elements?: Element[], resourceDir?: string) {
-    // 删除旧的哈希
-    for (const [fileName, value] of this.hashes.entries()) {
-      if (value.caveId === caveId) {
-        this.hashes.delete(fileName);
-      }
-    }
-
-    // 如果提供了新元素,则添加新的哈希
-    if (elements && resourceDir) {
-      for (const element of elements) {
-        if (element.type === 'img' && element.file) {
-          const filePath = path.join(resourceDir, element.file);
-          try {
-            if (fs.existsSync(filePath)) {
-              const imgBuffer = await fs.promises.readFile(filePath);
-              const imageHash = await ImageHasher.calculateHash(imgBuffer);
-              this.addHash(element.file, imageHash, caveId);
-            }
-          } catch (error) {
-            logger.error(`Failed to update hash for ${element.file}: ${error.message}`);
-          }
-        }
-      }
-    }
-
-    await this.save();
-  }
-
-  /**
-   * 预检测图片是否重复
-   */
-  async preCheckDuplicate(imgBuffer: Buffer, threshold: number): Promise<{ caveId: number; similarity: number } | null> {
-    const hash = await ImageHasher.calculateHash(imgBuffer);
-    const duplicate = this.findDuplicate(hash, threshold);
-    return duplicate ? { caveId: duplicate.caveId, similarity: duplicate.similarity } : null;
-  }
-
-  /**
-   * 批量检查图片
-   */
-  async batchCheckDuplicates(
-    imgBuffers: Buffer[],
-    threshold: number
-  ): Promise<Array<{ index: number; caveId: number; similarity: number } | null>> {
-    const results = await Promise.all(
-      imgBuffers.map(async (buffer, index) => {
-        const result = await this.preCheckDuplicate(buffer, threshold);
-        return result ? { index, ...result } : null;
-      })
-    );
+  // 修改错误处理逻辑,处理重复图片的情况
+  try {
+    const results = await Promise.all(downloadTasks);
     return results;
+  } catch (error) {
+    if (error.code === 'duplicate_images_found') {
+      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+      const originalCave = data.find(item => item.cave_id === error.duplicateCaveId);
+
+      if (originalCave) {
+        if (error.similarity >= config.duplicateThreshold) {
+          await session.send(session.text('commands.cave.error.duplicateImage', [
+            error.similarity.toFixed(2)
+          ]) + await buildMessage(originalCave, resourceDir, session));
+          throw { code: 'duplicate_images_found' };
+        } else if (error.similarity >= config.duplicateThreshold * 0.8) {
+          await session.send(session.text('commands.cave.warning.similarImage', [
+            error.similarity.toFixed(2)
+          ]));
+        }
+      }
+    }
+    throw error;
   }
 }
