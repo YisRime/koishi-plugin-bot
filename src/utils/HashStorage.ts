@@ -118,23 +118,32 @@ export class HashStorage {
       const totalImages = cavesWithImages.length;
 
       const processCave = async (cave: typeof cavesWithImages[0]) => {
-        const imgElement = cave.elements?.find(el => el.type === 'img' && el.file);
-        if (!imgElement?.file) return;
+        // 获取所有图片元素
+        const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
+        if (imgElements.length === 0) return;
 
         try {
-          const filePath = path.join(this.resourceDir, imgElement.file);
-          if (!fs.existsSync(filePath)) {
-            logger.warn(`Image file not found: ${filePath}`);
-            return;
-          }
+          const hashes = await Promise.all(
+            imgElements.map(async (imgElement) => {
+              const filePath = path.join(this.resourceDir, imgElement.file);
+              if (!fs.existsSync(filePath)) {
+                logger.warn(`Image file not found: ${filePath}`);
+                return null;
+              }
 
-          const imgBuffer = await readFileAsync(filePath);
-          const hash = await ImageHasher.calculateHash(imgBuffer);
-          this.hashes.set(cave.cave_id, [hash]);
-          processedCount++;
+              const imgBuffer = await readFileAsync(filePath);
+              return await ImageHasher.calculateHash(imgBuffer);
+            })
+          );
 
-          if (processedCount % 100 === 0) {
-            logger.info(`Progress: ${processedCount}/${totalImages}`);
+          const validHashes = hashes.filter(hash => hash !== null);
+          if (validHashes.length > 0) {
+            this.hashes.set(cave.cave_id, validHashes);
+            processedCount++;
+
+            if (processedCount % 100 === 0) {
+              logger.info(`Progress: ${processedCount}/${totalImages}`);
+            }
           }
         } catch (error) {
           logger.error(`Failed to process cave ${cave.cave_id}: ${error.message}`);
@@ -151,7 +160,7 @@ export class HashStorage {
     }
   }
 
-  // 重复检查方法
+  // 重复检查方法优化,支持多图片比较
   async findDuplicates(imgBuffers: Buffer[], threshold: number): Promise<Array<{
     index: number;
     caveId: number;
@@ -172,7 +181,9 @@ export class HashStorage {
           let maxSimilarity = 0;
           let matchedCaveId = null;
 
+          // 遍历所有回声洞的所有图片哈希值
           for (const [caveId, hashes] of existingHashes) {
+            // 对每个回声洞的所有图片进行相似度检查
             for (const existingHash of hashes) {
               const similarity = ImageHasher.calculateSimilarity(hash, existingHash);
               // 确保相似度在0-1范围内进行比较

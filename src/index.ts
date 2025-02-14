@@ -37,7 +37,7 @@ export const Config: Schema<Config> = Schema.object({
   number: Schema.number().default(60),
   enableAudit: Schema.boolean().default(false),
   imageMaxSize: Schema.number().default(4),
-  duplicateThreshold: Schema.number().default(8),
+  duplicateThreshold: Schema.number().default(0.8),
   allowVideo: Schema.boolean().default(true),
   videoMaxSize: Schema.number().default(16),
   enablePagination: Schema.boolean().default(false),
@@ -922,15 +922,18 @@ async function saveMedia(
 
         if (result.length > 0 && result[0] !== null) {
           const duplicate = result[0];
-          const similarity = duplicate.similarity * 10;
+          // 直接使用0-1范围的相似度
+          const similarity = duplicate.similarity;
 
-          if (similarity >= config.duplicateThreshold * 10) {
+          if (similarity >= config.duplicateThreshold) {
             const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
             const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
             const originalCave = data.find(item => item.cave_id === duplicate.caveId);
 
             if (originalCave) {
-              const message = session.text('commands.cave.error.duplicateFound', [similarity.toFixed(1)]);
+              // 显示百分比
+              const message = session.text('commands.cave.error.duplicateFound',
+                [(similarity * 100).toFixed(1)]);
               await session.send(message + await buildMessage(originalCave, resourceDir, session));
               throw new Error('duplicate_found');
             }

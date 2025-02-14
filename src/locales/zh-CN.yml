@@ -3,7 +3,7 @@ _config:
   number: "冷却时间（秒）"
   enableAudit: "启用审核"
   imageMaxSize: "图片最大大小（MB）"
-  duplicateThreshold: "图片相似度阈值（0-10，低于此值才能添加）"
+  duplicateThreshold: "图片相似度阈值（0-1）"
   allowVideo: "允许视频上传"
   videoMaxSize: "视频最大大小（MB）"
   enablePagination: "启用统计分页"

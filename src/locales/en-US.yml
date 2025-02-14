@@ -3,7 +3,7 @@ _config:
   number: "Cooldown time (seconds)"
   enableAudit: "Enable moderation"
   imageMaxSize: "Maximum image size (MB)"
-  duplicateThreshold: "Image similarity threshold (0-10, can only add below this value)"
+  duplicateThreshold: "Image similarity threshold (0-1)"
   allowVideo: "Allow video uploads"
   videoMaxSize: "Maximum video size (MB)"
   enablePagination: "Enable statistics pagination"
