@@ -356,6 +356,16 @@ export async function apply(ctx: Context, config: Config) {
         });
       }
 
+      // 检查是否有hash记录
+      const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
+      await hashStorage.initialize();
+      const hashStatus = await hashStorage.getStatus();
+
+      // 如果没有hash记录,先进行一次检测
+      if (!hashStatus.lastUpdated || hashStatus.entries.length === 0) {
+        await hashStorage.updateAllCaves(caveFilePath, resourceDir);
+      }
+
       // 处理审核逻辑
       if (config.enableAudit && !bypassAudit) {
         const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
@@ -374,7 +384,13 @@ export async function apply(ctx: Context, config: Config) {
         ...newCave,
         elements: cleanElementsForSave(newCave.elements, false)
       });
-      await FileHandler.writeJsonData(caveFilePath, data);
+
+      // 保存数据并更新hash
+      await Promise.all([
+        FileHandler.writeJsonData(caveFilePath, data),
+        hashStorage.updateCaveHash(caveId)
+      ]);
+
       await idManager.addStat(session.userId, caveId);
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 

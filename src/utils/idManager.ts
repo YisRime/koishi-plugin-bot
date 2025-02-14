@@ -35,83 +35,90 @@ export class IdManager {
     if (this.initialized) return;
 
     try {
-      this.initialized = true;
+      // 避免重复初始化
+      if (!this.initialized) {
+        // 读取状态文件
+        const status = fs.existsSync(this.statusFilePath) ?
+          JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
+            deletedIds: [],
+            maxId: 0,
+            stats: {},
+            lastUpdated: new Date().toISOString()
+          };
 
-      const status = fs.existsSync(this.statusFilePath) ?
-        JSON.parse(await fs.promises.readFile(this.statusFilePath, 'utf8')) : {
-          deletedIds: [],
-          maxId: 0,
-          stats: {},
-          lastUpdated: new Date().toISOString()
+        const [caveData, pendingData] = await Promise.all([
+          FileHandler.readJsonData<CaveObject>(caveFilePath),
+          FileHandler.readJsonData<PendingCave>(pendingFilePath)
+        ]);
+
+        this.usedIds.clear();
+        const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
+
+        // 收集和处理ID
+        const processItems = (items: Array<CaveObject | PendingCave>) => {
+          items.forEach(item => {
+            if (this.usedIds.has(item.cave_id)) {
+              if (!conflicts.has(item.cave_id)) {
+                conflicts.set(item.cave_id, []);
+              }
+              conflicts.get(item.cave_id)?.push(item);
+            } else {
+              this.usedIds.add(item.cave_id);
+            }
+          });
         };
 
-      const [caveData, pendingData] = await Promise.all([
-        FileHandler.readJsonData<CaveObject>(caveFilePath),
-        FileHandler.readJsonData<PendingCave>(pendingFilePath)
-      ]);
+        processItems(caveData);
+        processItems(pendingData);
 
-      this.usedIds.clear();
-      const conflicts = new Map<number, Array<CaveObject | PendingCave>>();
-
-      const collectIds = (items: Array<CaveObject | PendingCave>) => {
-        items.forEach(item => {
-          if (this.usedIds.has(item.cave_id)) {
-            if (!conflicts.has(item.cave_id)) {
-              conflicts.set(item.cave_id, []);
-            }
-            conflicts.get(item.cave_id)?.push(item);
-          } else {
-            this.usedIds.add(item.cave_id);
+        // 处理冲突
+        if (conflicts.size > 0) {
+          logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
+          for (const items of conflicts.values()) {
+            items.slice(1).forEach(item => {
+              let newId = this.maxId + 1;
+              while (this.usedIds.has(newId)) {
+                newId++;
+              }
+              logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
+              item.cave_id = newId;
+              this.usedIds.add(newId);
+              this.maxId = Math.max(this.maxId, newId);
+            });
           }
-        });
-      };
 
-      collectIds(caveData);
-      collectIds(pendingData);
-
-      if (conflicts.size > 0) {
-        logger.warn(`Found ${conflicts.size} ID conflicts, auto-fixing...`);
-        for (const items of conflicts.values()) {
-          items.slice(1).forEach(item => {
-            let newId = this.maxId + 1;
-            while (this.usedIds.has(newId)) {
-              newId++;
-            }
-            logger.info(`Reassigning ID ${item.cave_id} -> ${newId} for item`);
-            item.cave_id = newId;
-            this.usedIds.add(newId);
-            this.maxId = Math.max(this.maxId, newId);
-          });
+          await Promise.all([
+            FileHandler.writeJsonData(caveFilePath, caveData),
+            FileHandler.writeJsonData(pendingFilePath, pendingData)
+          ]);
         }
 
-        await Promise.all([
-          FileHandler.writeJsonData(caveFilePath, caveData),
-          FileHandler.writeJsonData(pendingFilePath, pendingData)
-        ]);
-      }
+        // 更新maxId
+        this.maxId = Math.max(
+          status.maxId || 0,
+          ...[...this.usedIds],
+          0 // 确保至少为0
+        );
 
-      this.maxId = Math.max(
-        this.maxId,
-        status.maxId || 0,
-        ...[...this.usedIds]
-      );
+        // 更新deletedIds
+        this.deletedIds = new Set(
+          status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
+        );
 
-      this.deletedIds = new Set(
-        status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
-      );
-
-      this.stats = {};
-      for (const cave of caveData) {
-        if (cave.contributor_number === '10000') continue;
-        if (!this.stats[cave.contributor_number]) {
-          this.stats[cave.contributor_number] = [];
+        // 重新构建stats
+        this.stats = {};
+        for (const cave of caveData) {
+          if (cave.contributor_number === '10000') continue;
+          if (!this.stats[cave.contributor_number]) {
+            this.stats[cave.contributor_number] = [];
+          }
+          this.stats[cave.contributor_number].push(cave.cave_id);
         }
-        this.stats[cave.contributor_number].push(cave.cave_id);
+
+        // 确保统计数据更新
+        await this.saveStatus();
+        this.initialized = true;
       }
-
-      await this.saveStatus();
-      this.initialized = true;
-
     } catch (error) {
       this.initialized = false;
       logger.error(`IdManager initialization failed: ${error.message}`);
