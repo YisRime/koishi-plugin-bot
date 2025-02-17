@@ -64,8 +64,6 @@ commands:
       notFound: "Echo not found"
       exactDuplicateFound: "Found exactly identical"
       similarDuplicateFound: "Found {0}% similar"
-      uploadImageFailed: "Failed to upload image"
-      uploadVideoFailed: "Failed to upload video"
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is limited to administrators only"

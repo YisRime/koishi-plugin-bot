@@ -921,24 +921,29 @@ async function saveMedia(
         if (config.enableDuplicate) {
           const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
           await hashStorage.initialize();
-          const result = await hashStorage.findDuplicates('image', [buffer.toString('base64')], config.duplicateThreshold);
 
-          if (result.length > 0 && result[0] !== null) {
-            const duplicate = result[0];
-            const similarity = duplicate.similarity;
+          try {
+            const result = await hashStorage.findDuplicatesFromContent('image', [buffer], config.duplicateThreshold);
 
-            if (similarity >= config.duplicateThreshold) {
-              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-              const originalCave = data.find(item => item.cave_id === duplicate.caveId);
+            if (result.length > 0 && result[0] !== null) {
+              const duplicate = result[0];
+              const similarity = duplicate.similarity;
 
-              if (originalCave) {
-                const message = session.text('commands.cave.error.similarDuplicateFound',
-                  [(similarity * 100).toFixed(1)]);
-                await session.send(message + await buildMessage(originalCave, resourceDir, session));
-                throw new Error('duplicate_found');
+              if (similarity >= config.duplicateThreshold) {
+                const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+                const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+                const originalCave = data.find(item => item.cave_id === duplicate.caveId);
+
+                if (originalCave) {
+                  const message = session.text('commands.cave.error.similarDuplicateFound',
+                    [(similarity * 100).toFixed(1)]);
+                  await session.send(message + await buildMessage(originalCave, resourceDir, session));
+                  throw new Error('duplicate_found');
+                }
               }
             }
+          } catch (error) {
+            logger.debug(`Skipping duplicate check due to error: ${error.message}`);
           }
         }
 
@@ -978,7 +983,7 @@ async function saveMedia(
         throw error;
       }
       logger.error(`Failed to download media: ${error.message}`);
-      throw new Error(session.text(`commands.cave.error.upload${mediaType === 'img' ? 'Image' : 'Video'}Failed`));
+      throw new Error(session.text('commands.cave.error.uploadFailed'));
     }
   });
   return Promise.all(downloadTasks);

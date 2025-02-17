@@ -118,15 +118,26 @@ export class HashStorage {
 
     const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
     const calculateSimilarity = type === 'image'
-      ? ImageHasher.calculateSimilarity
+      ? (a: string, b: string) => {
+          try {
+            return ImageHasher.calculateSimilarity(a, b);
+          } catch (error) {
+            logger.debug(`Failed to calculate similarity: ${error.message}`);
+            return 0;
+          }
+        }
       : (a: string, b: string) => a === b ? 1 : 0;
 
     return hashes.map((hash, index) => {
+      if (!hash) return null;
+
       let maxSimilarity = 0;
       let matchedCaveId = null;
 
       for (const [caveId, existingHashes] of hashMap.entries()) {
         for (const existingHash of existingHashes) {
+          if (!existingHash) continue;
+
           const similarity = calculateSimilarity(hash, existingHash);
           if (similarity >= threshold && similarity > maxSimilarity) {
             maxSimilarity = similarity;
@@ -139,6 +150,35 @@ export class HashStorage {
 
       return matchedCaveId ? { index, caveId: matchedCaveId, similarity: maxSimilarity } : null;
     });
+  }
+
+  /**
+   * 通过Buffer或者字符串计算哈希并查找重复
+   * @param type - 查找类型（图像或文本）
+   * @param content - 要查找的内容，可以是Buffer数组或字符串数组
+   * @param threshold - 相似度阈值，默认为1
+   */
+  async findDuplicatesFromContent(
+    type: 'image' | 'text',
+    content: Array<Buffer | string>,
+    threshold: number = 1
+  ): Promise<Array<{
+    index: number;
+    caveId: number;
+    similarity: number;
+  } | null>> {
+    const hashes = await Promise.all(
+      content.map(async item => {
+        if (type === 'image' && item instanceof Buffer) {
+          return await ImageHasher.calculateHash(item);
+        } else if (type === 'text' && typeof item === 'string') {
+          return HashStorage.hashText(item);
+        }
+        return null;
+      })
+    );
+
+    return this.findDuplicates(type, hashes.filter(Boolean), threshold);
   }
 
   /**
@@ -187,17 +227,24 @@ export class HashStorage {
     const total = missingImageCaves.length + missingTextCaves.length;
 
     if (total > 0) {
+      let updated = false;
+
       for (const cave of missingImageCaves) {
         await this.processCaveHashes(cave);
+        updated = true;
       }
 
       for (const cave of missingTextCaves) {
         await this.processCaveTextHashes(cave);
+        updated = true;
       }
 
-      await this.saveHashes();
-      const stats = this.getStorageStats();
-      logger.info(`Hash storage updated: ${stats.text} text hashes, ${stats.image} image hashes`);
+      // 只在实际更新了数据时保存和输出日志
+      if (updated) {
+        await this.saveHashes();
+        const stats = this.getStorageStats();
+        logger.info(`Hash storage updated: ${stats.text} text hashes, ${stats.image} image hashes`);
+      }
     }
   }
 
