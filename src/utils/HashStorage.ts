@@ -49,19 +49,23 @@ export class HashStorage {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
+    logger.info('Initializing hash storage...');
     try {
       const hashData = await FileHandler.readJsonData<HashData>(this.filePath)
         .then(data => data[0])
         .catch(() => null);
 
       if (!hashData?.imageHashes) {
+        logger.info('No existing hash data found, building initial hashes...');
         await this.buildInitialHashes();
       } else {
+        logger.info('Loading existing hash data...');
         this.loadHashData(hashData);
         await this.updateMissingHashes();
       }
 
       this.initialized = true;
+      logger.success('Hash storage initialized successfully');
     } catch (error) {
       logger.error(`Initialization failed: ${error.message}`);
       throw error;
@@ -158,26 +162,15 @@ export class HashStorage {
    */
   private async buildInitialHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
+    logger.info(`Processing ${caveData.length} caves for initial hash calculation...`);
 
     for (const cave of caveData) {
-      const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
-      if (imgElements.length === 0) continue;
-
-      try {
-        const hashes = await Promise.all(imgElements.map(async el => {
-          const filePath = path.join(this.resourceDir, el.file);
-          if (!fs.existsSync(filePath)) return null;
-          return ImageHasher.calculateHash(await fs.promises.readFile(filePath));
-        }));
-
-        const validHashes = hashes.filter(Boolean);
-        if (validHashes.length) this.imageHashes.set(cave.cave_id, validHashes);
-      } catch (error) {
-        logger.error(`Failed to process cave ${cave.cave_id}: ${error.message}`);
-      }
+      await this.processCaveHashes(cave);
+      await this.processCaveTextHashes(cave);
     }
 
     await this.saveHashes();
+    logger.success('Initial hashes built successfully');
   }
 
   /**
@@ -186,9 +179,20 @@ export class HashStorage {
    */
   private async updateMissingHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
-    await Promise.all(caveData
-      .filter(cave => !this.imageHashes.has(cave.cave_id))
-      .map(cave => this.processCaveHashes(cave)));
+    const missingImageCaves = caveData.filter(cave => !this.imageHashes.has(cave.cave_id));
+    const missingTextCaves = caveData.filter(cave => !this.textHashes.has(cave.cave_id));
+
+    if (missingImageCaves.length || missingTextCaves.length) {
+      logger.info(`Updating missing hashes for ${missingImageCaves.length} images and ${missingTextCaves.length} texts...`);
+
+      await Promise.all([
+        ...missingImageCaves.map(cave => this.processCaveHashes(cave)),
+        ...missingTextCaves.map(cave => this.processCaveTextHashes(cave))
+      ]);
+
+      await this.saveHashes();
+      logger.success('Missing hashes updated successfully');
+    }
   }
 
   /**
@@ -218,17 +222,33 @@ export class HashStorage {
     }
   }
 
+  private async processCaveTextHashes(cave: any): Promise<void> {
+    const textElements = cave.elements?.filter(el => el.type === 'text' && el.content) || [];
+    if (textElements.length === 0) return;
+
+    try {
+      const hashes = textElements.map(el => HashStorage.hashText(el.content));
+      if (hashes.length) {
+        this.textHashes.set(cave.cave_id, hashes);
+      }
+    } catch (error) {
+      logger.error(`Failed to process text hashes for cave ${cave.cave_id}: ${error.message}`);
+    }
+  }
+
   /**
    * 保存哈希数据到文件
    * @private
    */
   private async saveHashes(): Promise<void> {
+    logger.info('Saving hash data to file...');
     const data: HashData = {
       imageHashes: Object.fromEntries(this.imageHashes),
       textHashes: Object.fromEntries(this.textHashes),
       lastUpdated: new Date().toISOString()
     };
     await FileHandler.writeJsonData(this.filePath, [data]);
+    logger.success('Hash data saved successfully');
   }
 
   /**
