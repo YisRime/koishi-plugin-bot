@@ -8,6 +8,7 @@ import {} from 'koishi-plugin-adapter-onebot'
 import { FileHandler } from './utils/fileHandler'
 import { IdManager } from './utils/idManager'
 import { HashStorage } from './utils/HashStorage'
+import { hashText } from './utils/ImageHasher'
 
 // 基础定义
 export const name = 'best-cave';
@@ -253,7 +254,7 @@ export async function apply(ctx: Context, config: Config) {
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
         await sendMessage(session, 'commands.cave.add.noContent', [], true);
         const reply = await session.prompt({ timeout: 60000 });
-        if (!reply) throw new Error(session.text('commands.cave.add.operationTimeout'));
+        if (!reply) session.text('commands.cave.add.operationTimeout');
         return reply;
       })();
 
@@ -269,6 +270,19 @@ export async function apply(ctx: Context, config: Config) {
 
       const { imageUrls, imageElements, videoUrls, videoElements, textParts } =
         await extractMediaContent(inputContent, config, session);
+
+      // 新增纯文本查重逻辑（仅在启用 MD5 查重时进行）
+      const pureText = textParts
+        .filter(tp => tp.type === 'text')
+        .map((tp: any) => tp.content.trim())
+        .join('\n').trim();
+      if (config.enableMD5 && pureText) {
+        const textHash = hashText(pureText);
+        const duplicate = await hashStorage.findTextDuplicate(textHash);
+        if (duplicate !== null) {
+          return sendMessage(session, 'commands.cave.add.duplicateText', [duplicate], true);
+        }
+      }
 
       if (videoUrls.length > 0 && !config.allowVideo) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
@@ -322,7 +336,6 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       // 检查是否有hash记录
-      const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
       await hashStorage.initialize();
       const hashStatus = await hashStorage.getStatus();
 
@@ -364,6 +377,13 @@ export async function apply(ctx: Context, config: Config) {
       ]);
 
       await idManager.addStat(session.userId, caveId);
+
+      // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
+      if (config.enableMD5 && pureText) {
+        const textHash = hashText(pureText);
+        await hashStorage.updateTextHash(caveId, textHash);
+      }
+
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
@@ -922,8 +942,25 @@ async function saveMedia(
         await FileHandler.saveMediaFile(filePath, buffer);
         return finalFileName;
       } else {
-        // 视频文件处理保持不变
+        // 新增视频文件MD5查重逻辑（与图片一致）
         const baseName = path.basename(fileName || 'video', ext).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+        if (config.enableMD5) {
+          const files = await fs.promises.readdir(resourceDir);
+          const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
+          if (duplicateFile) {
+            const duplicateCaveId = parseInt(duplicateFile.split('_')[1]);
+            if (!isNaN(duplicateCaveId)) {
+              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+              const originalCave = data.find(item => item.cave_id === duplicateCaveId);
+              if (originalCave) {
+                const message = session.text('commands.cave.error.exactDuplicateFound');
+                await session.send(message + await buildMessage(originalCave, resourceDir, session));
+                throw new Error('duplicate_found');
+              }
+            }
+          }
+        }
         const finalFileName = `${caveId}_${baseName}${ext}`;
         const filePath = path.join(resourceDir, finalFileName);
         await FileHandler.saveMediaFile(filePath, buffer);

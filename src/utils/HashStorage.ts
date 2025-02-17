@@ -43,12 +43,17 @@ export class HashStorage {
   private hashes = new Map<number, string[]>();
   // 初始化状态标志
   private initialized = false;
+  private imageEntries: Array<{ caveId: number, hash: string }> = [];
+  private textEntries: Array<{ caveId: number, hash: string }> = [];
+  private hashFilePath: string;
 
   /**
    * 初始化HashStorage实例
    * @param caveDir 回声洞数据目录路径
    */
-  constructor(private readonly caveDir: string) {}
+  constructor(private readonly caveDir: string) {
+    this.hashFilePath = path.join(caveDir, 'hash.json');
+  }
 
   private get filePath() {
     return path.join(this.caveDir, HashStorage.HASH_FILE);
@@ -85,12 +90,32 @@ export class HashStorage {
         await this.updateMissingHashes();
       }
 
+      if (fs.existsSync(this.hashFilePath)) {
+        const data = JSON.parse(await fs.promises.readFile(this.hashFilePath, 'utf8'));
+        this.imageEntries = data.imageEntries || [];
+        this.textEntries = data.textEntries || [];
+      } else {
+        this.imageEntries = [];
+        this.textEntries = [];
+        await this.save();
+      }
+
       this.initialized = true;
     } catch (error) {
       logger.error(`Initialization failed: ${error.message}`);
       this.initialized = false;
       throw error;
     }
+  }
+
+  private async save(): Promise<void> {
+    const data = {
+      imageEntries: this.imageEntries,
+      textEntries: this.textEntries
+    };
+    const tmpPath = `${this.hashFilePath}.tmp`;
+    await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+    await fs.promises.rename(tmpPath, this.hashFilePath);
   }
 
   /**
@@ -247,6 +272,16 @@ export class HashStorage {
         }
       })
     );
+  }
+
+  async findTextDuplicate(textHash: string): Promise<number | null> {
+    const duplicate = this.textEntries.find(entry => entry.hash === textHash);
+    return duplicate ? duplicate.caveId : null;
+  }
+
+  async updateTextHash(caveId: number, textHash: string): Promise<void> {
+    this.textEntries.push({ caveId, hash: textHash });
+    await this.save();
   }
 
   /**
