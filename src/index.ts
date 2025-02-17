@@ -356,7 +356,6 @@ export async function apply(ctx: Context, config: Config) {
       // 处理审核逻辑
       if (config.enableAudit && !bypassAudit) {
         const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
-        // 保存到 pending.json 时保留 index
         pendingData.push(newCave);
         await Promise.all([
           FileHandler.writeJsonData(pendingFilePath, pendingData),
@@ -377,18 +376,19 @@ export async function apply(ctx: Context, config: Config) {
 
       // 更新哈希值，确保只更新一次
       if (config.enableMD5) {
-        const updatePromises = [];
-        if (pureText) {
-          const textHash = HashStorage.hashText(pureText);
-          updatePromises.push(hashStorage.updateHash(caveId, 'text', textHash));
+        const updates = {
+          caveId,
+          texts: pureText ? [pureText] : [],
+          images: savedImages?.length
+            ? await Promise.all(savedImages.map(imagePath =>
+                fs.promises.readFile(path.join(resourceDir, imagePath))
+              ))
+            : []
+        };
+
+        if (updates.texts.length || updates.images.length) {
+          await hashStorage.batchUpdateHashes(updates);
         }
-        if (savedImages?.length) {
-          for (const imagePath of savedImages) {
-            const imageBuffer = await fs.promises.readFile(path.join(resourceDir, imagePath));
-            updatePromises.push(hashStorage.updateHash(caveId, 'image', imageBuffer));
-          }
-        }
-        await Promise.all(updatePromises);
       }
 
       await idManager.addStat(session.userId, caveId);
@@ -882,7 +882,8 @@ async function saveMedia(
   const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
   await hashStorage.initialize();
 
-  const downloadTasks = urls.map(async (url, i) => {
+  // 批量下载和处理文件
+  const downloadPromises = urls.map(async (url, i) => {
     const fileName = fileNames[i];
     const ext = path.extname(fileName || url) || (mediaType === 'img' ? '.png' : '.mp4');
 
@@ -972,5 +973,5 @@ async function saveMedia(
       logger.error(`Failed to download media: ${error.message}`);
     }
   });
-  return Promise.all(downloadTasks);
+  return Promise.all(downloadPromises);
 }

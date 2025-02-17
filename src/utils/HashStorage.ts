@@ -58,12 +58,10 @@ export class HashStorage {
         await this.buildInitialHashes();
       } else {
         this.loadHashData(hashData);
-        // 只在首次加载时显示日志
-        if (!this.initialized) {
-          const stats = this.getStorageStats();
-          logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
-        }
-        await this.updateMissingHashes();
+        // 只在插件初始加载时显示一次日志
+        const stats = this.getStorageStats();
+        logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
+        await this.updateMissingHashes(true);  // 添加silent参数
       }
 
       this.initialized = true;
@@ -104,13 +102,53 @@ export class HashStorage {
       if (!existingHashes.includes(hash)) {
         hashMap.set(caveId, [...existingHashes, hash]);
         await this.saveHashes();
-        // 移除初次加载的日志
-        this.initialized = false;
-        await this.initialize();
       }
     } catch (error) {
       logger.error(`Failed to update ${type} hash for cave ${caveId}: ${error.message}`);
-      throw error; // 抛出错误以便上层处理
+      throw error;
+    }
+  }
+
+  /**
+   * 批量更新哈希值
+   * @param updates - 要更新的内容
+   * @param options - 更新选项
+   */
+  async batchUpdateHashes(
+    updates: {
+      caveId: number;
+      texts?: string[];
+      images?: Buffer[];
+    },
+    options: { silent?: boolean } = {}
+  ): Promise<void> {
+    if (!this.initialized) await this.initialize();
+
+    const oldStats = this.getStorageStats();
+    const updatePromises: Promise<void>[] = [];
+
+    if (updates.texts?.length) {
+      updates.texts.forEach(text => {
+        updatePromises.push(this.updateHash(updates.caveId, 'text', text));
+      });
+    }
+
+    if (updates.images?.length) {
+      updates.images.forEach(image => {
+        updatePromises.push(this.updateHash(updates.caveId, 'image', image));
+      });
+    }
+
+    if (updatePromises.length > 0) {
+      await Promise.all(updatePromises);
+      await this.saveHashes();
+
+      if (!options.silent) {
+        const newStats = this.getStorageStats();
+        if (newStats.text !== oldStats.text || newStats.image !== oldStats.image) {
+          logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
+        }
+      }
     }
   }
 
@@ -234,7 +272,7 @@ export class HashStorage {
    * 更新缺失的哈希值
    * @private
    */
-  private async updateMissingHashes(): Promise<void> {
+  private async updateMissingHashes(silent: boolean = false): Promise<void> {
     const caveData = await this.loadCaveData();
     const existingCaveIds = new Set(caveData.map(cave => cave.cave_id));
 
@@ -250,31 +288,51 @@ export class HashStorage {
       }
     }
 
-    const missingImageCaves = caveData.filter(cave => !this.imageHashes.has(cave.cave_id));
-    const missingTextCaves = caveData.filter(cave => !this.textHashes.has(cave.cave_id));
-    const total = missingImageCaves.length + missingTextCaves.length;
+    const oldStats = this.getStorageStats();
+    let updated = false;
 
-    if (total > 0 || !existingCaveIds.size) {
-      const oldStats = this.getStorageStats();
-      let updated = false;
+    // 处理所有缺失的哈希
+    for (const cave of caveData) {
+      const needsUpdate = !this.imageHashes.has(cave.cave_id) || !this.textHashes.has(cave.cave_id);
+      if (!needsUpdate) continue;
 
-      for (const cave of missingImageCaves) {
-        await this.processCaveHashes(cave);
-        updated = true;
-      }
+      const updates = {
+        caveId: cave.cave_id,
+        texts: [] as string[],
+        images: [] as Buffer[]
+      };
 
-      for (const cave of missingTextCaves) {
-        await this.processCaveTextHashes(cave);
-        updated = true;
-      }
-
-      if (updated || !existingCaveIds.size) {
-        await this.saveHashes();
-        // 只在实际发生更新时显示日志
-        if (updated) {
-          const newStats = this.getStorageStats();
-          logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
+      // 收集需要更新的内容
+      if (!this.imageHashes.has(cave.cave_id)) {
+        const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
+        for (const el of imgElements) {
+          const filePath = path.join(this.resourceDir, el.file);
+          if (fs.existsSync(filePath)) {
+            try {
+              updates.images.push(await fs.promises.readFile(filePath));
+            } catch (error) {
+              logger.error(`Failed to read image file for cave ${cave.cave_id}: ${error.message}`);
+            }
+          }
         }
+      }
+
+      if (!this.textHashes.has(cave.cave_id)) {
+        const textElements = cave.elements?.filter(el => el.type === 'text' && el.content) || [];
+        updates.texts = textElements.map(el => el.content);
+      }
+
+      if (updates.texts.length || updates.images.length) {
+        await this.batchUpdateHashes(updates, { silent: true });
+        updated = true;
+      }
+    }
+
+    // 最后只显示一次更新日志
+    if (updated && !silent) {
+      const newStats = this.getStorageStats();
+      if (newStats.text !== oldStats.text || newStats.image !== oldStats.image) {
+        logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
       }
     }
   }
