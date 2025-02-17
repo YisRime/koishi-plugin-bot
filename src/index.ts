@@ -372,16 +372,24 @@ export async function apply(ctx: Context, config: Config) {
         elements: cleanElementsForSave(newCave.elements, false)
       });
 
-      // 保存数据并更新hash
-      await Promise.all([
-        FileHandler.writeJsonData(caveFilePath, data),
-        pureText && config.enableMD5
-          ? hashStorage.updateHash(caveId, 'text', pureText)
-          : Promise.resolve(),
-        savedImages?.length
-          ? Promise.all(savedImages.map(buffer => hashStorage.updateHash(caveId, 'image', buffer)))
-          : Promise.resolve()
-      ]);
+      // 先保存数据，再更新哈希，避免重复更新
+      await FileHandler.writeJsonData(caveFilePath, data);
+
+      // 更新哈希值，确保只更新一次
+      if (config.enableMD5) {
+        const updatePromises = [];
+        if (pureText) {
+          const textHash = HashStorage.hashText(pureText);
+          updatePromises.push(hashStorage.updateHash(caveId, 'text', textHash));
+        }
+        if (savedImages?.length) {
+          for (const imagePath of savedImages) {
+            const imageBuffer = await fs.promises.readFile(path.join(resourceDir, imagePath));
+            updatePromises.push(hashStorage.updateHash(caveId, 'image', imageBuffer));
+          }
+        }
+        await Promise.all(updatePromises);
+      }
 
       await idManager.addStat(session.userId, caveId);
 
@@ -892,92 +900,70 @@ async function saveMedia(
       if (!response.data) throw new Error('empty_response');
       const buffer = Buffer.from(response.data);
 
-      if (mediaType === 'img') {
-        // 获取原始文件名(MD5)
-        const baseName = path.basename(fileName || 'md5', ext).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+      // 统一处理图片和视频的文件名和MD5查重
+      const baseName = path.basename(fileName || (mediaType === 'img' ? 'image' : 'video'), ext)
+        .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
 
-        // 如果启用了MD5查重，检查是否存在相同MD5的文件
-        if (config.enableMD5) {
-          const files = await fs.promises.readdir(resourceDir);
-          const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
-
-          if (duplicateFile) {
-            const duplicateCaveId = parseInt(duplicateFile.split('_')[1]);
-            if (!isNaN(duplicateCaveId)) {
-              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-              const originalCave = data.find(item => item.cave_id === duplicateCaveId);
-
-              if (originalCave) {
-                const message = session.text('commands.cave.error.exactDuplicateFound');
-                await session.send(message + await buildMessage(originalCave, resourceDir, session));
-                throw new Error('duplicate_found');
-              }
+      if (config.enableMD5) {
+        const files = await fs.promises.readdir(resourceDir);
+        const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
+        if (duplicateFile) {
+          const duplicateCaveId = parseInt(duplicateFile.split('_')[1]);
+          if (!isNaN(duplicateCaveId)) {
+            const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+            const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+            const originalCave = data.find(item => item.cave_id === duplicateCaveId);
+            if (originalCave) {
+              const message = session.text('commands.cave.error.exactDuplicateFound');
+              await session.send(message + await buildMessage(originalCave, resourceDir, session));
+              throw new Error('duplicate_found');
             }
           }
         }
-
-        // 如果启用了相似度查重，进行perceptual hash比较
-        if (config.enableDuplicate) {
-          const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
-          await hashStorage.initialize();
-
-          try {
-            const result = await hashStorage.findDuplicatesFromContent('image', [buffer], config.duplicateThreshold);
-
-            if (result.length > 0 && result[0] !== null) {
-              const duplicate = result[0];
-              const similarity = duplicate.similarity;
-
-              if (similarity >= config.duplicateThreshold) {
-                const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-                const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-                const originalCave = data.find(item => item.cave_id === duplicate.caveId);
-
-                if (originalCave) {
-                  const message = session.text('commands.cave.error.similarDuplicateFound',
-                    [(similarity * 100).toFixed(1)]);
-                  await session.send(message + await buildMessage(originalCave, resourceDir, session));
-                  throw new Error('duplicate_found');
-                }
-              }
-            }
-          } catch (error) {
-            logger.debug(`Skipping duplicate check due to error: ${error.message}`);
-          }
-        }
-
-        // 使用原始文件名(MD5)作为文件名的一部分
-        const finalFileName = `${caveId}_${baseName}${ext}`;
-        const filePath = path.join(resourceDir, finalFileName);
-
-        await FileHandler.saveMediaFile(filePath, buffer);
-        return finalFileName;
-      } else {
-        // 新增视频文件MD5查重逻辑（与图片一致）
-        const baseName = path.basename(fileName || 'video', ext).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-        if (config.enableMD5) {
-          const files = await fs.promises.readdir(resourceDir);
-          const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
-          if (duplicateFile) {
-            const duplicateCaveId = parseInt(duplicateFile.split('_')[1]);
-            if (!isNaN(duplicateCaveId)) {
-              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-              const originalCave = data.find(item => item.cave_id === duplicateCaveId);
-              if (originalCave) {
-                const message = session.text('commands.cave.error.exactDuplicateFound');
-                await session.send(message + await buildMessage(originalCave, resourceDir, session));
-                throw new Error('duplicate_found');
-              }
-            }
-          }
-        }
-        const finalFileName = `${caveId}_${baseName}${ext}`;
-        const filePath = path.join(resourceDir, finalFileName);
-        await FileHandler.saveMediaFile(filePath, buffer);
-        return finalFileName;
       }
+
+      // 如果是图片，还需要进行相似度检查
+      if (mediaType === 'img' && config.enableDuplicate) {
+        try {
+          const result = await hashStorage.findDuplicatesFromContent('image', [buffer], config.duplicateThreshold);
+          if (result.length > 0 && result[0] !== null) {
+            const duplicate = result[0];
+            const similarity = duplicate.similarity;
+
+            if (similarity >= config.duplicateThreshold) {
+              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+              const originalCave = data.find(item => item.cave_id === duplicate.caveId);
+
+              if (originalCave) {
+                const message = session.text('commands.cave.error.similarDuplicateFound',
+                  [(similarity * 100).toFixed(1)]);
+                await session.send(message + await buildMessage(originalCave, resourceDir, session));
+                throw new Error('duplicate_found');
+              }
+            }
+          }
+        } catch (error) {
+          logger.debug(`Skipping duplicate check due to error: ${error.message}`);
+        }
+      }
+
+      // 保存文件
+      const finalFileName = `${caveId}_${baseName}${ext}`;
+      const filePath = path.join(resourceDir, finalFileName);
+      await FileHandler.saveMediaFile(filePath, buffer);
+
+      // 如果是图片且启用了相似度检查，更新hash存储
+      if (mediaType === 'img' && config.enableDuplicate) {
+        try {
+          await hashStorage.updateHash(caveId, 'image', buffer);
+        } catch (error) {
+          logger.debug(`Failed to update image hash: ${error.message}`);
+        }
+      }
+
+      return finalFileName;
+
     } catch (error) {
       if (error.message === 'duplicate_found') {
         throw error;

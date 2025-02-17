@@ -93,12 +93,16 @@ export class HashStorage {
         : HashStorage.hashText(content as string);
 
       const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
-      const existingHashes = hashMap.get(caveId) || [];
-      hashMap.set(caveId, [...existingHashes, hash]);
 
-      await this.saveHashes();
+      // 确保不重复添加相同的哈希值
+      const existingHashes = hashMap.get(caveId) || [];
+      if (!existingHashes.includes(hash)) {
+        hashMap.set(caveId, [...existingHashes, hash]);
+        await this.saveHashes();
+      }
     } catch (error) {
       logger.error(`Failed to update ${type} hash for cave ${caveId}: ${error.message}`);
+      throw error; // 抛出错误以便上层处理
     }
   }
 
@@ -187,9 +191,11 @@ export class HashStorage {
    */
   async clearHashes(caveId: number): Promise<void> {
     if (!this.initialized) await this.initialize();
-    this.imageHashes.delete(caveId);
-    this.textHashes.delete(caveId);
-    await this.saveHashes();
+
+    const wasDeleted = this.imageHashes.delete(caveId) || this.textHashes.delete(caveId);
+    if (wasDeleted) {
+      await this.saveHashes();
+    }
   }
 
   /**
