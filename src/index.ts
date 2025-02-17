@@ -403,6 +403,7 @@ export async function apply(ctx: Context, config: Config) {
 
     } catch (error) {
       logger.error(`Failed to process add command: ${error.message}`);
+      return sendMessage(session, error.message, [], true);
     }
   }
 
@@ -969,7 +970,6 @@ async function saveMedia(
         throw error;
       }
       logger.error(`Failed to download media: ${error.message}`);
-      throw new Error(session.text('commands.cave.error.uploadFailed'));
     }
   });
   return Promise.all(downloadTasks);

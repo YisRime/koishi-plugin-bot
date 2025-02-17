@@ -58,8 +58,11 @@ export class HashStorage {
         await this.buildInitialHashes();
       } else {
         this.loadHashData(hashData);
-        const stats = this.getStorageStats();
-        logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
+        // 只在首次加载时显示日志
+        if (!this.initialized) {
+          const stats = this.getStorageStats();
+          logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
+        }
         await this.updateMissingHashes();
       }
 
@@ -101,6 +104,9 @@ export class HashStorage {
       if (!existingHashes.includes(hash)) {
         hashMap.set(caveId, [...existingHashes, hash]);
         await this.saveHashes();
+        // 移除初次加载的日志
+        this.initialized = false;
+        await this.initialize();
       }
     } catch (error) {
       logger.error(`Failed to update ${type} hash for cave ${caveId}: ${error.message}`);
@@ -264,8 +270,11 @@ export class HashStorage {
 
       if (updated || !existingCaveIds.size) {
         await this.saveHashes();
-        const newStats = this.getStorageStats();
-        logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
+        // 只在实际发生更新时显示日志
+        if (updated) {
+          const newStats = this.getStorageStats();
+          logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
+        }
       }
     }
   }
