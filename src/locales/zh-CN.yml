@@ -64,6 +64,8 @@ commands:
       notFound: "未找到该回声洞"
       exactDuplicateFound: "发现完全相同的"
       similarDuplicateFound: "发现相似度为 {0}% 的"
+      uploadImageFailed: "图片上传失败"
+      uploadVideoFailed: "视频上传失败"
     message:
       blacklisted: "你已被列入黑名单"
       managerOnly: "此操作仅限管理员可用"

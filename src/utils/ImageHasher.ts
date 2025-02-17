@@ -13,25 +13,21 @@ export class ImageHasher {
    * @throws 当图片处理失败时可能抛出错误
    */
   static async calculateHash(imageBuffer: Buffer): Promise<string> {
-      // 转换为32x32灰度图以获得更好的特征
+    try {
       const { data } = await sharp(imageBuffer)
         .grayscale()
         .resize(32, 32, { fit: 'fill' })
         .raw()
         .toBuffer({ resolveWithObject: true });
 
-      // 计算图像的DCT变换
-      const dctMatrix = this.computeDCT(data, 32);
-
-      // 取左上角8x8区域作为低频特征
-      const features = this.extractFeatures(dctMatrix, 32);
-
-      // 计算特征区域的中位数作为阈值
-      const median = this.calculateMedian(features);
-
-      // 生成hash并转换为16进制
+      const dctMatrix = ImageHasher.computeDCT(data, 32);
+      const features = ImageHasher.extractFeatures(dctMatrix, 32);
+      const median = ImageHasher.calculateMedian(features);
       const binaryHash = features.map(val => val > median ? '1' : '0').join('');
-      return this.binaryToHex(binaryHash);
+      return ImageHasher.binaryToHex(binaryHash);
+    } catch (error) {
+      throw new Error(`Failed to calculate image hash: ${error.message}`);
+    }
   }
 
   /**
@@ -153,13 +149,13 @@ export class ImageHasher {
    * @throws 当两个哈希值长度不等时抛出错误
    */
   static calculateDistance(hash1: string, hash2: string): number {
+
     if (hash1.length !== hash2.length) {
       throw new Error('Hash lengths must be equal');
     }
 
-    // 转换为二进制后计算距离
-    const bin1 = this.hexToBinary(hash1);
-    const bin2 = this.hexToBinary(hash2);
+    const bin1 = ImageHasher.hexToBinary(hash1);
+    const bin2 = ImageHasher.hexToBinary(hash2);
 
     let distance = 0;
     for (let i = 0; i < bin1.length; i++) {
@@ -175,9 +171,7 @@ export class ImageHasher {
    * @returns 返回0-1之间的相似度值，1表示完全相同，0表示完全不同
    */
   static calculateSimilarity(hash1: string, hash2: string): number {
-    const distance = this.calculateDistance(hash1, hash2);
-    // 将汉明距离转换为0-1的相似度值
-    // 64位hash的最大汉明距离是64
+    const distance = ImageHasher.calculateDistance(hash1, hash2);
     return (64 - distance) / 64;
   }
 
@@ -191,6 +185,6 @@ export class ImageHasher {
     newHash: string,
     existingHashes: string[]
   ): number[] {
-    return existingHashes.map(hash => this.calculateSimilarity(newHash, hash));
+    return existingHashes.map(hash => ImageHasher.calculateSimilarity(newHash, hash));
   }
 }
