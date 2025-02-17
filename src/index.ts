@@ -251,9 +251,8 @@ export async function apply(ctx: Context, config: Config) {
   ): Promise<string> {
     try {
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
-        await sendMessage(session, 'commands.cave.add.noContent', [], true);
-        const reply = await session.prompt({ timeout: 60000 });
-        if (!reply) session.text('commands.cave.add.operationTimeout');
+        const reply = await session.prompt(session.text('commands.cave.add.noContent'));
+        if (!reply) throw new Error(session.text('commands.cave.add.operationTimeout'));
         return reply;
       })();
 
@@ -275,6 +274,7 @@ export async function apply(ctx: Context, config: Config) {
         .filter(tp => tp.type === 'text')
         .map((tp: any) => tp.content.trim())
         .join('\n').trim();
+
       if (config.enableMD5 && pureText) {
         const textHash = HashStorage.hashText(pureText);
         const textDuplicates = await hashStorage.findDuplicates('text', [textHash]);
@@ -286,7 +286,8 @@ export async function apply(ctx: Context, config: Config) {
           if (duplicateCave) {
             const message = session.text('commands.cave.error.exactDuplicateFound');
             await session.send(message + await buildMessage(duplicateCave, resourceDir, session));
-            throw new Error('duplicate_found');
+            await idManager.markDeleted(caveId);  // 标记废弃的ID
+            return '';  // 提前返回，不继续处理
           }
         }
       }
@@ -317,6 +318,12 @@ export async function apply(ctx: Context, config: Config) {
           session
         ) : []
       ]);
+
+      // 如果在保存媒体过程中检测到重复，提前返回
+      if (!savedImages || !savedVideos) {
+        await idManager.markDeleted(caveId);
+        return '';
+      }
 
       const newCave: CaveObject = {
         cave_id: caveId,
@@ -387,7 +394,8 @@ export async function apply(ctx: Context, config: Config) {
         };
 
         if (updates.texts.length || updates.images.length) {
-          await hashStorage.batchUpdateHashes(updates);
+          // 在添加回声洞时设置 silent 为 true，避免重复日志
+          await hashStorage.batchUpdateHashes(updates, { silent: true });
         }
       }
 

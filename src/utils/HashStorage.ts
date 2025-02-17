@@ -61,7 +61,7 @@ export class HashStorage {
         // 只在插件初始加载时显示一次日志
         const stats = this.getStorageStats();
         logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
-        await this.updateMissingHashes(true);  // 添加silent参数
+        await this.updateMissingHashes(true);  // 默认静默更新
       }
 
       this.initialized = true;
@@ -120,7 +120,7 @@ export class HashStorage {
       texts?: string[];
       images?: Buffer[];
     },
-    options: { silent?: boolean } = {}
+    options: { silent?: boolean } = { silent: true }  // 默认静默更新
   ): Promise<void> {
     if (!this.initialized) await this.initialize();
 
