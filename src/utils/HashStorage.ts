@@ -61,7 +61,7 @@ export class HashStorage {
         // 只在插件初始加载时显示一次日志
         const stats = this.getStorageStats();
         logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
-        await this.updateMissingHashes(true);  // 默认静默更新
+        await this.updateMissingHashes();
       }
 
       this.initialized = true;
@@ -112,15 +112,13 @@ export class HashStorage {
   /**
    * 批量更新哈希值
    * @param updates - 要更新的内容
-   * @param options - 更新选项
    */
   async batchUpdateHashes(
     updates: {
       caveId: number;
       texts?: string[];
       images?: Buffer[];
-    },
-    options: { silent?: boolean } = { silent: true }  // 默认静默更新
+    }
   ): Promise<void> {
     if (!this.initialized) await this.initialize();
 
@@ -143,11 +141,9 @@ export class HashStorage {
       await Promise.all(updatePromises);
       await this.saveHashes();
 
-      if (!options.silent) {
-        const newStats = this.getStorageStats();
-        if (newStats.text !== oldStats.text || newStats.image !== oldStats.image) {
-          logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
-        }
+      const newStats = this.getStorageStats();
+      if (newStats.text !== oldStats.text || newStats.image !== oldStats.image) {
+        logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
       }
     }
   }
@@ -272,7 +268,7 @@ export class HashStorage {
    * 更新缺失的哈希值
    * @private
    */
-  private async updateMissingHashes(silent: boolean = false): Promise<void> {
+  private async updateMissingHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
     const existingCaveIds = new Set(caveData.map(cave => cave.cave_id));
 
@@ -302,7 +298,6 @@ export class HashStorage {
         images: [] as Buffer[]
       };
 
-      // 收集需要更新的内容
       if (!this.imageHashes.has(cave.cave_id)) {
         const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
         for (const el of imgElements) {
@@ -323,16 +318,8 @@ export class HashStorage {
       }
 
       if (updates.texts.length || updates.images.length) {
-        await this.batchUpdateHashes(updates, { silent: true });
+        await this.batchUpdateHashes(updates);
         updated = true;
-      }
-    }
-
-    // 最后只显示一次更新日志
-    if (updated && !silent) {
-      const newStats = this.getStorageStats();
-      if (newStats.text !== oldStats.text || newStats.image !== oldStats.image) {
-        logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
       }
     }
   }

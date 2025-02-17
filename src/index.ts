@@ -284,10 +284,10 @@ export async function apply(ctx: Context, config: Config) {
           const duplicateCave = data.find(item => item.cave_id === textDuplicates[0].caveId);
 
           if (duplicateCave) {
-            const message = session.text('commands.cave.error.exactDuplicateFound');
-            await session.send(message + await buildMessage(duplicateCave, resourceDir, session));
-            await idManager.markDeleted(caveId);  // 标记废弃的ID
-            return '';  // 提前返回，不继续处理
+            await session.send(session.text('commands.cave.error.exactDuplicateFound') +
+              await buildMessage(duplicateCave, resourceDir, session));
+            await idManager.markDeleted(caveId);
+            return ''; // 检测到重复时直接返回
           }
         }
       }
@@ -296,118 +296,128 @@ export async function apply(ctx: Context, config: Config) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
       }
 
-      const [savedImages, savedVideos] = await Promise.all([
-        imageUrls.length > 0 ? saveMedia(
-          imageUrls,
-          imageElements.map(el => el.fileName),
-          resourceDir,
-          caveId,
-          'img',
-          config,
-          ctx,
-          session
-        ) : [],
-        videoUrls.length > 0 ? saveMedia(
-          videoUrls,
-          videoElements.map(el => el.fileName),
-          resourceDir,
-          caveId,
-          'video',
-          config,
-          ctx,
-          session
-        ) : []
-      ]);
-
-      // 如果在保存媒体过程中检测到重复，提前返回
-      if (!savedImages || !savedVideos) {
-        await idManager.markDeleted(caveId);
-        return '';
-      }
-
-      const newCave: CaveObject = {
-        cave_id: caveId,
-        elements: [
-          ...textParts,
-          ...imageElements.map((el, idx) => ({
-            ...el,
-            file: savedImages[idx],
-            // 保持原始文本和图片的相对位置
-            index: el.index
-          }))
-        ].sort((a) => a.index - a.index),
-        contributor_number: session.userId,
-        contributor_name: session.username
-      };
-
-      // 如果有视频，直接添加到elements末尾，不需要计算index
-      if (videoUrls.length > 0 && savedVideos.length > 0) {
-        newCave.elements.push({
-          type: 'video',
-          file: savedVideos[0],
-          index: Number.MAX_SAFE_INTEGER
-        });
-      }
-
-      // 如果启用了hash记录,先检查是否有需要检测的图片
-      const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-      const hasImages = existingData.some(cave =>
-        cave.elements?.some(element => element.type === 'img' && element.file)
-      );
-
-      // 初始化 hashStorage，它会自动处理所有现有图片的哈希
-      if (hasImages) {
-        await hashStorage.initialize();
-      }
-
-      // 处理审核逻辑
-      if (config.enableAudit && !bypassAudit) {
-        const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
-        pendingData.push(newCave);
-        await Promise.all([
-          FileHandler.writeJsonData(pendingFilePath, pendingData),
-          sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session)
+      // 保存媒体文件
+      try {
+        const [savedImages, savedVideos] = await Promise.all([
+          imageUrls.length > 0 ? saveMedia(
+            imageUrls,
+            imageElements.map(el => el.fileName),
+            resourceDir,
+            caveId,
+            'img',
+            config,
+            ctx,
+            session
+          ) : [],
+          videoUrls.length > 0 ? saveMedia(
+            videoUrls,
+            videoElements.map(el => el.fileName),
+            resourceDir,
+            caveId,
+            'video',
+            config,
+            ctx,
+            session
+          ) : []
         ]);
-        return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
-      }
 
-      // 直接保存到 cave.json 时移除 index
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-      data.push({
-        ...newCave,
-        elements: cleanElementsForSave(newCave.elements, false)
-      });
+        // 如果返回的是 null，说明检测到重复
+        if (savedImages === null || savedVideos === null) {
+          await idManager.markDeleted(caveId);
+          return '';
+        }
 
-      // 先保存数据，再更新哈希，避免重复更新
-      await FileHandler.writeJsonData(caveFilePath, data);
-
-      // 更新哈希值，确保只更新一次
-      if (config.enableMD5) {
-        const updates = {
-          caveId,
-          texts: pureText ? [pureText] : [],
-          images: savedImages?.length
-            ? await Promise.all(savedImages.map(imagePath =>
-                fs.promises.readFile(path.join(resourceDir, imagePath))
-              ))
-            : []
+        const newCave: CaveObject = {
+          cave_id: caveId,
+          elements: [
+            ...textParts,
+            ...imageElements.map((el, idx) => ({
+              ...el,
+              file: savedImages[idx],
+              // 保持原始文本和图片的相对位置
+              index: el.index
+            }))
+          ].sort((a) => a.index - a.index),
+          contributor_number: session.userId,
+          contributor_name: session.username
         };
 
-        if (updates.texts.length || updates.images.length) {
-          // 在添加回声洞时设置 silent 为 true，避免重复日志
-          await hashStorage.batchUpdateHashes(updates, { silent: true });
+        // 如果有视频，直接添加到elements末尾，不需要计算index
+        if (videoUrls.length > 0 && savedVideos.length > 0) {
+          newCave.elements.push({
+            type: 'video',
+            file: savedVideos[0],
+            index: Number.MAX_SAFE_INTEGER
+          });
         }
+
+        // 如果启用了hash记录,先检查是否有需要检测的图片
+        const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+        const hasImages = existingData.some(cave =>
+          cave.elements?.some(element => element.type === 'img' && element.file)
+        );
+
+        // 初始化 hashStorage，它会自动处理所有现有图片的哈希
+        if (hasImages) {
+          await hashStorage.initialize();
+        }
+
+        // 处理审核逻辑
+        if (config.enableAudit && !bypassAudit) {
+          const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
+          pendingData.push(newCave);
+          await Promise.all([
+            FileHandler.writeJsonData(pendingFilePath, pendingData),
+            sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session)
+          ]);
+          return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
+        }
+
+        // 直接保存到 cave.json 时移除 index
+        const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+        data.push({
+          ...newCave,
+          elements: cleanElementsForSave(newCave.elements, false)
+        });
+
+        // 先保存数据，再更新哈希，避免重复更新
+        await FileHandler.writeJsonData(caveFilePath, data);
+
+        // 更新哈希值，确保只更新一次
+        if (config.enableMD5) {
+          const updates = {
+            caveId,
+            texts: pureText ? [pureText] : [],
+            images: savedImages?.length
+              ? await Promise.all(savedImages.map(imagePath =>
+                  fs.promises.readFile(path.join(resourceDir, imagePath))
+                ))
+              : []
+          };
+
+          if (updates.texts.length || updates.images.length) {
+            // 在添加回声洞时设置 silent 为 true，避免重复日志
+            await hashStorage.batchUpdateHashes(updates);
+          }
+        }
+
+        await idManager.addStat(session.userId, caveId);
+
+        // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
+        if (config.enableMD5 && pureText) {
+          const textHash = HashStorage.hashText(pureText);
+          await hashStorage.updateHash(caveId, 'text', textHash);
+        }
+
+        return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
+
+      } catch (error) {
+        if (error.message === 'duplicate_found') {
+          await idManager.markDeleted(caveId);
+          return '';
+        }
+        throw error;
       }
-
-      await idManager.addStat(session.userId, caveId);
-
-      // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
-      if (config.enableMD5 && pureText) {
-        const textHash = HashStorage.hashText(pureText);
-        await hashStorage.updateHash(caveId, 'text', textHash);
-      }
-
-      return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
       logger.error(`Failed to process add command: ${error.message}`);
@@ -885,7 +895,7 @@ async function saveMedia(
   config: Config,
   ctx: Context,
   session: any
-): Promise<string[]> {
+): Promise<string[] | null> {  // 修改返回类型
   const accept = mediaType === 'img' ? 'image/*' : 'video/*';
   const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
   await hashStorage.initialize();
@@ -914,6 +924,7 @@ async function saveMedia(
       const baseName = path.basename(fileName || (mediaType === 'img' ? 'image' : 'video'), ext)
         .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
 
+      // 先进行 MD5 查重，如果有重复直接抛出错误
       if (config.enableMD5) {
         const files = await fs.promises.readdir(resourceDir);
         const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
@@ -981,5 +992,20 @@ async function saveMedia(
       logger.error(`Failed to download media: ${error.message}`);
     }
   });
-  return Promise.all(downloadPromises);
+
+  try {
+    const results = await Promise.all(downloadPromises);
+
+    // 如果任何一个 Promise 返回 undefined（表示检测到重复），则返回 null
+    if (results.some(result => result === undefined)) {
+      return null;
+    }
+
+    return results.filter(Boolean) as string[];
+  } catch (error) {
+    if (error.message === 'duplicate_found') {
+      return null;
+    }
+    throw error;
+  }
 }
