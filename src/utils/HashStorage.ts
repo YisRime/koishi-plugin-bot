@@ -49,25 +49,21 @@ export class HashStorage {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    logger.info('Initializing hash storage...');
     try {
       const hashData = await FileHandler.readJsonData<HashData>(this.filePath)
         .then(data => data[0])
         .catch(() => null);
 
       if (!hashData?.imageHashes) {
-        logger.info('No existing hash data found, building initial hashes...');
         await this.buildInitialHashes();
       } else {
-        logger.info('Loading existing hash data...');
         this.loadHashData(hashData);
         await this.updateMissingHashes();
       }
 
       this.initialized = true;
-      logger.success('Hash storage initialized successfully');
     } catch (error) {
-      logger.error(`Initialization failed: ${error.message}`);
+      logger.error(`Hash storage initialization failed: ${error.message}`);
       throw error;
     }
   }
@@ -162,15 +158,21 @@ export class HashStorage {
    */
   private async buildInitialHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
-    logger.info(`Processing ${caveData.length} caves for initial hash calculation...`);
+    let processedCount = 0;
+    const total = caveData.length;
 
     for (const cave of caveData) {
       await this.processCaveHashes(cave);
       await this.processCaveTextHashes(cave);
+      processedCount++;
+
+      if (processedCount % 100 === 0 || processedCount === total) {
+        logger.info(`Processing caves: ${processedCount}/${total} (${Math.floor(processedCount / total * 100)}%)`);
+      }
     }
 
     await this.saveHashes();
-    logger.success('Initial hashes built successfully');
+    logger.info(`Processed ${processedCount} caves with ${this.imageHashes.size} images and ${this.textHashes.size} texts`);
   }
 
   /**
@@ -181,17 +183,29 @@ export class HashStorage {
     const caveData = await this.loadCaveData();
     const missingImageCaves = caveData.filter(cave => !this.imageHashes.has(cave.cave_id));
     const missingTextCaves = caveData.filter(cave => !this.textHashes.has(cave.cave_id));
+    const total = missingImageCaves.length + missingTextCaves.length;
 
-    if (missingImageCaves.length || missingTextCaves.length) {
-      logger.info(`Updating missing hashes for ${missingImageCaves.length} images and ${missingTextCaves.length} texts...`);
+    if (total > 0) {
+      let processedCount = 0;
 
-      await Promise.all([
-        ...missingImageCaves.map(cave => this.processCaveHashes(cave)),
-        ...missingTextCaves.map(cave => this.processCaveTextHashes(cave))
-      ]);
+      for (const cave of missingImageCaves) {
+        await this.processCaveHashes(cave);
+        processedCount++;
+        if (processedCount % 100 === 0 || processedCount === total) {
+          logger.info(`Updating missing hashes: ${processedCount}/${total} (${Math.floor(processedCount / total * 100)}%)`);
+        }
+      }
+
+      for (const cave of missingTextCaves) {
+        await this.processCaveTextHashes(cave);
+        processedCount++;
+        if (processedCount % 100 === 0 || processedCount === total) {
+          logger.info(`Updating missing hashes: ${processedCount}/${total} (${Math.floor(processedCount / total * 100)}%)`);
+        }
+      }
 
       await this.saveHashes();
-      logger.success('Missing hashes updated successfully');
+      logger.info(`Updated ${missingImageCaves.length} missing images and ${missingTextCaves.length} missing texts`);
     }
   }
 
@@ -241,14 +255,17 @@ export class HashStorage {
    * @private
    */
   private async saveHashes(): Promise<void> {
-    logger.info('Saving hash data to file...');
-    const data: HashData = {
-      imageHashes: Object.fromEntries(this.imageHashes),
-      textHashes: Object.fromEntries(this.textHashes),
-      lastUpdated: new Date().toISOString()
-    };
-    await FileHandler.writeJsonData(this.filePath, [data]);
-    logger.success('Hash data saved successfully');
+    try {
+      const data: HashData = {
+        imageHashes: Object.fromEntries(this.imageHashes),
+        textHashes: Object.fromEntries(this.textHashes),
+        lastUpdated: new Date().toISOString()
+      };
+      await FileHandler.writeJsonData(this.filePath, [data]);
+    } catch (error) {
+      logger.error(`Failed to save hash data: ${error.message}`);
+      throw error;
+    }
   }
 
   /**
