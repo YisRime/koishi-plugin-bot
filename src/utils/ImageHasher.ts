@@ -1,6 +1,5 @@
 import sharp from 'sharp';
 import { Buffer } from 'buffer';
-import crypto from 'crypto';
 
 /**
  * 图片哈希计算工具类
@@ -194,8 +193,4 @@ export class ImageHasher {
   ): number[] {
     return existingHashes.map(hash => this.calculateSimilarity(newHash, hash));
   }
-}
-
-export function hashText(text: string): string {
-  return crypto.createHash('md5').update(text).digest('hex');
 }

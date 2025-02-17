@@ -8,7 +8,6 @@ import {} from 'koishi-plugin-adapter-onebot'
 import { FileHandler } from './utils/fileHandler'
 import { IdManager } from './utils/idManager'
 import { HashStorage } from './utils/HashStorage'
-import { hashText } from './utils/ImageHasher'
 
 // 基础定义
 export const name = 'best-cave';
@@ -203,13 +202,13 @@ export async function apply(ctx: Context, config: Config) {
     // 先生成回声洞预览消息
     const caveContent = await buildMessage(targetCave, resourceDir, session);
 
-    // 删除相关的媒体文件
+    // 删除相关的媒体文件和哈希记录
     if (targetCave.elements) {
       const hashStorage = new HashStorage(caveDir);
       await hashStorage.initialize();
 
-      // 直接删除对应的哈希
-      await hashStorage.updateCaveHash(caveId);
+      // 使用新的清除方法
+      await hashStorage.clearHashes(caveId);
 
       for (const element of targetCave.elements) {
         if ((element.type === 'img' || element.type === 'video') && element.file) {
@@ -277,10 +276,18 @@ export async function apply(ctx: Context, config: Config) {
         .map((tp: any) => tp.content.trim())
         .join('\n').trim();
       if (config.enableMD5 && pureText) {
-        const textHash = hashText(pureText);
-        const duplicate = await hashStorage.findTextDuplicate(textHash);
-        if (duplicate !== null) {
-          return sendMessage(session, 'commands.cave.add.duplicateText', [duplicate], true);
+        const textHash = HashStorage.hashText(pureText);
+        const textDuplicates = await hashStorage.findDuplicates('text', [textHash]);
+
+        if (textDuplicates[0]) {
+          const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+          const duplicateCave = data.find(item => item.cave_id === textDuplicates[0].caveId);
+
+          if (duplicateCave) {
+            const message = session.text('commands.cave.error.exactDuplicateFound');
+            await session.send(message + await buildMessage(duplicateCave, resourceDir, session));
+            throw new Error('duplicate_found');
+          }
         }
       }
 
@@ -321,7 +328,7 @@ export async function apply(ctx: Context, config: Config) {
             // 保持原始文本和图片的相对位置
             index: el.index
           }))
-        ].sort((a, b) => a.index - a.index),
+        ].sort((a) => a.index - a.index),
         contributor_number: session.userId,
         contributor_name: session.username
       };
@@ -335,20 +342,15 @@ export async function apply(ctx: Context, config: Config) {
         });
       }
 
-      // 检查是否有hash记录
-      await hashStorage.initialize();
-      const hashStatus = await hashStorage.getStatus();
+      // 如果启用了hash记录,先检查是否有需要检测的图片
+      const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+      const hasImages = existingData.some(cave =>
+        cave.elements?.some(element => element.type === 'img' && element.file)
+      );
 
-      // 如果没有hash记录,先检查是否有需要检测的图片
-      if (!hashStatus.lastUpdated || hashStatus.entries.length === 0) {
-        const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-        const hasImages = existingData.some(cave =>
-          cave.elements?.some(element => element.type === 'img' && element.file)
-        );
-
-        if (hasImages) {
-          await hashStorage.updateAllCaves(true);
-        }
+      // 初始化 hashStorage，它会自动处理所有现有图片的哈希
+      if (hasImages) {
+        await hashStorage.initialize();
       }
 
       // 处理审核逻辑
@@ -373,15 +375,20 @@ export async function apply(ctx: Context, config: Config) {
       // 保存数据并更新hash
       await Promise.all([
         FileHandler.writeJsonData(caveFilePath, data),
-        hashStorage.updateCaveHash(caveId)
+        pureText && config.enableMD5
+          ? hashStorage.updateHash(caveId, 'text', pureText)
+          : Promise.resolve(),
+        savedImages?.length
+          ? Promise.all(savedImages.map(buffer => hashStorage.updateHash(caveId, 'image', buffer)))
+          : Promise.resolve()
       ]);
 
       await idManager.addStat(session.userId, caveId);
 
       // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
       if (config.enableMD5 && pureText) {
-        const textHash = hashText(pureText);
-        await hashStorage.updateTextHash(caveId, textHash);
+        const textHash = HashStorage.hashText(pureText);
+        await hashStorage.updateHash(caveId, 'text', textHash);
       }
 
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
@@ -914,7 +921,7 @@ async function saveMedia(
         if (config.enableDuplicate) {
           const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
           await hashStorage.initialize();
-          const result = await hashStorage.findDuplicates([buffer], config.duplicateThreshold);
+          const result = await hashStorage.findDuplicates('image', [buffer.toString('base64')], config.duplicateThreshold);
 
           if (result.length > 0 && result[0] !== null) {
             const duplicate = result[0];
