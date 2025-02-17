@@ -58,6 +58,8 @@ export class HashStorage {
         await this.buildInitialHashes();
       } else {
         this.loadHashData(hashData);
+        const stats = this.getStorageStats();
+        logger.info(`Loaded ${stats.text} text hashes and ${stats.image} image hashes from storage`);
         await this.updateMissingHashes();
       }
 
@@ -213,13 +215,13 @@ export class HashStorage {
       processedCount++;
 
       if (processedCount % 100 === 0 || processedCount === total) {
-        logger.info(`Progress: ${processedCount}/${total} caves (${Math.floor(processedCount / total * 100)}%)`);
+        logger.info(`Initializing: ${processedCount}/${total} caves (${Math.floor(processedCount / total * 100)}%)`);
       }
     }
 
     await this.saveHashes();
     const stats = this.getStorageStats();
-    logger.info(`Cave Hashes Initialized: ${stats.text} text hashes, ${stats.image} image hashes`);
+    logger.info(`Initialization complete: ${stats.text} text hashes and ${stats.image} image hashes generated`);
   }
 
   /**
@@ -228,11 +230,26 @@ export class HashStorage {
    */
   private async updateMissingHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
+    const existingCaveIds = new Set(caveData.map(cave => cave.cave_id));
+
+    // 清理已不存在的回声洞的哈希
+    for (const caveId of this.imageHashes.keys()) {
+      if (!existingCaveIds.has(caveId)) {
+        this.imageHashes.delete(caveId);
+      }
+    }
+    for (const caveId of this.textHashes.keys()) {
+      if (!existingCaveIds.has(caveId)) {
+        this.textHashes.delete(caveId);
+      }
+    }
+
     const missingImageCaves = caveData.filter(cave => !this.imageHashes.has(cave.cave_id));
     const missingTextCaves = caveData.filter(cave => !this.textHashes.has(cave.cave_id));
     const total = missingImageCaves.length + missingTextCaves.length;
 
-    if (total > 0) {
+    if (total > 0 || !existingCaveIds.size) {
+      const oldStats = this.getStorageStats();
       let updated = false;
 
       for (const cave of missingImageCaves) {
@@ -245,11 +262,10 @@ export class HashStorage {
         updated = true;
       }
 
-      // 只在实际更新了数据时保存和输出日志
-      if (updated) {
+      if (updated || !existingCaveIds.size) {
         await this.saveHashes();
-        const stats = this.getStorageStats();
-        logger.info(`Hash storage updated: ${stats.text} text hashes, ${stats.image} image hashes`);
+        const newStats = this.getStorageStats();
+        logger.info(`Update complete: text hashes ${oldStats.text} → ${newStats.text}, image hashes ${oldStats.image} → ${newStats.image}`);
       }
     }
   }
