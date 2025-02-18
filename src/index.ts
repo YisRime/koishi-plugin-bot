@@ -250,6 +250,7 @@ export async function apply(ctx: Context, config: Config) {
     session: any,
     content: string[]
   ): Promise<string> {
+    let caveId: number;
     try {
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
         const reply = await session.prompt(session.text('commands.cave.add.noContent'));
@@ -257,7 +258,7 @@ export async function apply(ctx: Context, config: Config) {
         return reply;
       })();
 
-      const caveId = await idManager.getNextId();
+      caveId = await idManager.getNextId();
 
       if (inputContent.includes('/app/.config/QQ/')) {
         return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
@@ -298,111 +299,113 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       // 保存媒体文件
-      try {
-        const [savedImages, savedVideos] = await Promise.all([
-          imageUrls.length > 0 ? saveMedia(
-            imageUrls,
-            imageElements.map(el => el.fileName),
-            resourceDir,
-            caveId,
-            'img',
-            config,
-            ctx,
-            session
-          ) : [],
-          videoUrls.length > 0 ? saveMedia(
-            videoUrls,
-            videoElements.map(el => el.fileName),
-            resourceDir,
-            caveId,
-            'video',
-            config,
-            ctx,
-            session
-          ) : []
-        ]);
+      const [savedImages, savedVideos] = await Promise.all([
+        imageUrls.length > 0 ? saveMedia(
+          imageUrls,
+          imageElements.map(el => el.fileName),
+          resourceDir,
+          caveId,
+          'img',
+          config,
+          ctx,
+          session
+        ) : [],
+        videoUrls.length > 0 ? saveMedia(
+          videoUrls,
+          videoElements.map(el => el.fileName),
+          resourceDir,
+          caveId,
+          'video',
+          config,
+          ctx,
+          session
+        ) : []
+      ]);
 
-        const newCave: CaveObject = {
-          cave_id: caveId,
-          elements: [
-            ...textParts,
-            ...imageElements.map((el, idx) => ({
-              ...el,
-              file: savedImages[idx],
-              // 保持原始文本和图片的相对位置
-              index: el.index
-            }))
-          ].sort((a, b) => a.index - b.index),
-          contributor_number: session.userId,
-          contributor_name: session.username
-        };
+      const newCave: CaveObject = {
+        cave_id: caveId,
+        elements: [
+          ...textParts,
+          ...imageElements.map((el, idx) => ({
+            ...el,
+            file: savedImages[idx],
+            // 保持原始文本和图片的相对位置
+            index: el.index
+          }))
+        ].sort((a, b) => a.index - b.index),
+        contributor_number: session.userId,
+        contributor_name: session.username
+      };
 
-        // 如果有视频，直接添加到elements末尾，不需要计算index
-        if (videoUrls.length > 0 && savedVideos.length > 0) {
-          newCave.elements.push({
-            type: 'video',
-            file: savedVideos[0],
-            index: Number.MAX_SAFE_INTEGER
-          });
-        }
-
-        // 处理审核逻辑
-        if (config.enableAudit && !bypassAudit) {
-          const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
-          pendingData.push(newCave);
-          await Promise.all([
-            FileHandler.writeJsonData(pendingFilePath, pendingData),
-            sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session)
-          ]);
-          return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
-        }
-
-        // 直接保存到 cave.json 时移除 index
-        const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-        data.push({
-          ...newCave,
-          elements: cleanElementsForSave(newCave.elements, false)
+      // 如果有视频，直接添加到elements末尾，不需要计算index
+      if (videoUrls.length > 0 && savedVideos.length > 0) {
+        newCave.elements.push({
+          type: 'video',
+          file: savedVideos[0],
+          index: Number.MAX_SAFE_INTEGER
         });
-
-        // 先保存数据，再更新哈希，避免重复更新
-        await FileHandler.writeJsonData(caveFilePath, data);
-
-        // 更新哈希值，确保只更新一次
-        if (config.enableMD5) {
-          const updates = {
-            caveId,
-            texts: pureText ? [pureText] : [],
-            images: savedImages?.length
-              ? await Promise.all(savedImages.map(imagePath =>
-                  fs.promises.readFile(path.join(resourceDir, imagePath))
-                ))
-              : []
-          };
-
-          if (updates.texts.length || updates.images.length) {
-            await hashStorage.batchUpdateHashes(updates);
-          }
-        }
-
-        await idManager.addStat(session.userId, caveId);
-
-        // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
-        if (config.enableMD5 && pureText) {
-          const textHash = HashStorage.hashText(pureText);
-          await hashStorage.updateHash(caveId, 'text', textHash);
-        }
-
-        return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
-
-      } catch (error) {
-        // 对于重复内容的错误，需要先清理cave ID再抛出错误
-        if (error.message === 'duplicate_found') {
-          await idManager.markDeleted(caveId);
-        }
-        throw error('${error.message}');
       }
 
+      // 处理审核逻辑
+      if (config.enableAudit && !bypassAudit) {
+        const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
+        pendingData.push(newCave);
+        await Promise.all([
+          FileHandler.writeJsonData(pendingFilePath, pendingData),
+          sendAuditMessage(ctx, config, newCave, await buildMessage(newCave, resourceDir, session), session)
+        ]);
+        return sendMessage(session, 'commands.cave.add.submitPending', [caveId], false);
+      }
+
+      // 直接保存到 cave.json 时移除 index
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+      data.push({
+        ...newCave,
+        elements: cleanElementsForSave(newCave.elements, false)
+      });
+
+      // 先保存数据，再更新哈希，避免重复更新
+      await FileHandler.writeJsonData(caveFilePath, data);
+
+      // 更新哈希值，确保只更新一次
+      if (config.enableMD5) {
+        const updates = {
+          caveId,
+          texts: pureText ? [pureText] : [],
+          images: savedImages?.length
+            ? await Promise.all(savedImages.map(imagePath =>
+                fs.promises.readFile(path.join(resourceDir, imagePath))
+              ))
+            : []
+        };
+
+        if (updates.texts.length || updates.images.length) {
+          await hashStorage.batchUpdateHashes(updates);
+        }
+      }
+
+      await idManager.addStat(session.userId, caveId);
+
+      // 在通过审核并成功保存后，更新纯文字 hash 记录（启用MD5时）
+      if (config.enableMD5 && pureText) {
+        const textHash = HashStorage.hashText(pureText);
+        await hashStorage.updateHash(caveId, 'text', textHash);
+      }
+
+      return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
+
     } catch (error) {
+      // 如果已经分配了ID且发生错误，确保清理ID
+      if (caveId) {
+        await idManager.markDeleted(caveId);
+      }
+
+      // 对于重复检测，直接返回空串（因为提示已发送）
+      if (error.message === 'duplicate_found') {
+        return '';
+      }
+
+      // 其他错误记录并显示
       logger.error(`Failed to process add command: ${error.message}`);
       return sendMessage(session, error.message, [], true);
     }

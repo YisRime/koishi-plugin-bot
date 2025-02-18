@@ -156,7 +156,7 @@ export async function saveMedia(
       return finalFileName;
 
     } catch (error) {
-      throw error(`Failed to download media: ${error.message}`);
+      throw new Error(`Failed to download media: ${error.message}`);
     }
   });
 
@@ -171,40 +171,27 @@ async function checkMD5Duplicates(
 ) {
   try {
     const files = await fs.promises.readdir(resourceDir);
-
-    // 改进文件名匹配逻辑
     const duplicateFiles = files.filter(file => {
-      const parts = file.split('_');
-      if (parts.length >= 2) {
-        const fileBaseName = parts[1].split('.')[0]; // 转换为小写进行比较
-        return fileBaseName === baseName;
-      }
-      return false;
+      const [caveId, nameWithExt] = file.split('_');
+      return nameWithExt?.split('.')[0] === baseName;
     });
 
-    if (duplicateFiles.length > 0) {
-      for (const duplicateFile of duplicateFiles) {
-        const duplicateCaveId = parseInt(duplicateFile.split('_')[0]);
-        if (!isNaN(duplicateCaveId)) {
-          const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-          const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-          const originalCave = data.find(item => item.cave_id === duplicateCaveId);
+    for (const file of duplicateFiles) {
+      const duplicateCaveId = parseInt(file.split('_')[0]);
+      if (isNaN(duplicateCaveId)) continue;
 
-          if (originalCave) {
-            logger.info(`Found duplicate file: ${duplicateFile} for cave_id: ${duplicateCaveId}`);
-            const message = session.text('commands.cave.error.exactDuplicateFound');
-            await session.send(message + await buildMessage(originalCave, resourceDir, session));
-            throw new Error('duplicate_found');
-          }
-        }
+      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+      const originalCave = data.find(item => item.cave_id === duplicateCaveId);
+
+      if (originalCave) {
+        await session.send(session.text('commands.cave.error.exactDuplicateFound') +
+          await buildMessage(originalCave, resourceDir, session));
+        throw new Error('duplicate_found');
       }
     }
   } catch (error) {
-    if (error.message === 'duplicate_found') {
-      throw error;
-    }
-    logger.error(`MD5 duplicate check error: ${error.message}`);
-    throw new Error(`MD5 check failed: ${error.message}`);
+    throw error;
   }
 }
 
@@ -216,33 +203,24 @@ async function checkImageDuplicates(
   session: any
 ) {
   const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
-  try {
-    const result = await hashStorage.findDuplicatesFromContent('image', [buffer], threshold);
+  const result = await hashStorage.findDuplicates('image', [buffer], threshold);
 
-    if (result.length > 0 && result[0] !== null) {
-      const duplicate = result[0];
-      const similarity = duplicate.similarity;
+  if (result.length > 0 && result[0] !== null) {
+    const duplicate = result[0];
+    const similarity = duplicate.similarity;
 
-      logger.info(`Found similar image with similarity: ${similarity}, threshold: ${threshold}`);
+    if (similarity >= threshold) {
+      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+      const originalCave = data.find(item => item.cave_id === duplicate.caveId);
 
-      if (similarity >= threshold) {
-        const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-        const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-        const originalCave = data.find(item => item.cave_id === duplicate.caveId);
-
-        if (originalCave) {
-          const message = session.text('commands.cave.error.similarDuplicateFound',
-            [(similarity * 100).toFixed(1)]);
-          await session.send(message + await buildMessage(originalCave, resourceDir, session));
-          throw new Error(`duplicate_found:${similarity}`);
-        }
+      if (originalCave) {
+        await session.send(session.text('commands.cave.error.similarDuplicateFound',
+          [(similarity * 100).toFixed(1)]) +
+          await buildMessage(originalCave, resourceDir, session));
+        throw new Error('duplicate_found');
       }
     }
-  } catch (error) {
-    if (error.message.startsWith('duplicate_found')) {
-      throw error;
-    }
-    logger.error(`Image duplicate check error: ${error.message}`);
   }
 }
 

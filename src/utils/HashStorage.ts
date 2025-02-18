@@ -50,9 +50,7 @@ export class HashStorage {
     if (this.initialized) return;
 
     try {
-      const hashData = await FileHandler.readJsonData<HashData>(this.filePath)
-        .then(data => data[0])
-        .catch(() => null);
+      const hashData = await FileHandler.readJsonData<HashData>(this.filePath).catch(() => null);
 
       if (!hashData?.imageHashes) {
         await this.buildInitialHashes();
@@ -149,31 +147,48 @@ export class HashStorage {
   /**
    * 查找重复项
    * @param type - 查找类型（图像或文本）
-   * @param hashes - 要查找的哈希值数组
+   * @param content - 要查找的内容，可以是图像Buffer或文本字符串数组
    * @param threshold - 相似度阈值，默认为1
    * @returns 匹配结果数组
    */
-  async findDuplicates(type: 'image' | 'text', hashes: string[], threshold: number = 1): Promise<Array<{
+  async findDuplicates(
+    type: 'image' | 'text',
+    content: Array<Buffer | string>,
+    threshold: number = 1
+  ): Promise<Array<{
     index: number;
     caveId: number;
     similarity: number;
   } | null>> {
-
     const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
-    const calculateSimilarity = type === 'image'
-      ? (a: string, b: string) => {
-          try {
-            return ImageHasher.calculateSimilarity(a, b);
-          } catch (error) {
-            logger.debug(`Failed to calculate similarity: ${error.message}`);
-            return 0;
+
+    // 计算输入内容的哈希值
+    const hashes = await Promise.all(
+      content.map(async (item, index) => {
+        try {
+          if (type === 'image' && item instanceof Buffer) {
+            return {
+              hash: await ImageHasher.calculateHash(item),
+              index
+            };
+          } else if (type === 'text' && typeof item === 'string') {
+            return {
+              hash: HashStorage.hashText(item),
+              index
+            };
           }
+        } catch (error) {
+          logger.debug(`Failed to calculate hash for ${type}: ${error.message}`);
         }
-      : (a: string, b: string) => a === b ? 1 : 0;
+        return null;
+      })
+    );
 
-    return hashes.map((hash, index) => {
-      if (!hash) return null;
+    const validHashes = hashes.filter(Boolean);
+    if (validHashes.length === 0) return [];
 
+    // 对每个哈希值进行比对
+    return validHashes.map(item => {
       let maxSimilarity = 0;
       let matchedCaveId = null;
 
@@ -181,7 +196,10 @@ export class HashStorage {
         for (const existingHash of existingHashes) {
           if (!existingHash) continue;
 
-          const similarity = calculateSimilarity(hash, existingHash);
+          const similarity = type === 'image'
+            ? ImageHasher.calculateSimilarity(item.hash, existingHash)
+            : item.hash === existingHash ? 1 : 0;
+
           if (similarity >= threshold && similarity > maxSimilarity) {
             maxSimilarity = similarity;
             matchedCaveId = caveId;
@@ -191,37 +209,12 @@ export class HashStorage {
         if (maxSimilarity === 1) break;
       }
 
-      return matchedCaveId ? { index, caveId: matchedCaveId, similarity: maxSimilarity } : null;
+      return matchedCaveId ? {
+        index: item.index,
+        caveId: matchedCaveId,
+        similarity: maxSimilarity
+      } : null;
     });
-  }
-
-  /**
-   * 通过Buffer或者字符串计算哈希并查找重复
-   * @param type - 查找类型（图像或文本）
-   * @param content - 要查找的内容，可以是Buffer数组或字符串数组
-   * @param threshold - 相似度阈值，默认为1
-   */
-  async findDuplicatesFromContent(
-    type: 'image' | 'text',
-    content: Array<Buffer | string>,
-    threshold: number = 1
-  ): Promise<Array<{
-    index: number;
-    caveId: number;
-    similarity: number;
-  } | null>> {
-    const hashes = await Promise.all(
-      content.map(async item => {
-        if (type === 'image' && item instanceof Buffer) {
-          return await ImageHasher.calculateHash(item);
-        } else if (type === 'text' && typeof item === 'string') {
-          return HashStorage.hashText(item);
-        }
-        return null;
-      })
-    );
-
-    return this.findDuplicates(type, hashes.filter(Boolean), threshold);
   }
 
   /**
