@@ -160,61 +160,69 @@ export class HashStorage {
     caveId: number;
     similarity: number;
   } | null>> {
-    const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
+    try {
+      const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
 
-    // 计算输入内容的哈希值
-    const hashes = await Promise.all(
-      content.map(async (item, index) => {
-        try {
-          if (type === 'image' && item instanceof Buffer) {
-            return {
-              hash: await ImageHasher.calculateHash(item),
-              index
-            };
-          } else if (type === 'text' && typeof item === 'string') {
-            return {
-              hash: HashStorage.hashText(item),
-              index
-            };
-          }
-        } catch (error) {
-          logger.debug(`Failed to calculate hash for ${type}: ${error.message}`);
-        }
-        return null;
-      })
-    );
-
-    const validHashes = hashes.filter(Boolean);
-    if (validHashes.length === 0) return [];
-
-    // 对每个哈希值进行比对
-    return validHashes.map(item => {
-      let maxSimilarity = 0;
-      let matchedCaveId = null;
-
-      for (const [caveId, existingHashes] of hashMap.entries()) {
-        for (const existingHash of existingHashes) {
-          if (!existingHash) continue;
-
-          const similarity = type === 'image'
-            ? ImageHasher.calculateSimilarity(item.hash, existingHash)
-            : item.hash === existingHash ? 1 : 0;
-
-          if (similarity >= threshold && similarity > maxSimilarity) {
-            maxSimilarity = similarity;
-            matchedCaveId = caveId;
-            if (similarity === 1) break;
-          }
-        }
-        if (maxSimilarity === 1) break;
+      // 对空内容进行特殊处理
+      if (!content?.length) {
+        return [];
       }
 
-      return matchedCaveId ? {
-        index: item.index,
-        caveId: matchedCaveId,
-        similarity: maxSimilarity
-      } : null;
-    });
+      // 计算输入内容的哈希值
+      const hashes = await Promise.all(
+        content.map(async (item, index) => {
+          try {
+            const hash = type === 'image'
+              ? (item instanceof Buffer ? await ImageHasher.calculateHash(item) : null)
+              : (typeof item === 'string' ? HashStorage.hashText(item) : null);
+
+            return hash ? { hash, index } : null;
+          } catch (error) {
+            logger.debug(`Failed to calculate hash for ${type}: ${error.message}`);
+            return null;
+          }
+        })
+      );
+
+      const validHashes = hashes.filter(Boolean);
+
+      // 所有哈希计算都失败的情况
+      if (validHashes.length === 0) {
+        return [];
+      }
+
+      // 对每个哈希值进行比对
+      return validHashes.map(item => {
+        let maxSimilarity = 0;
+        let matchedCaveId = null;
+
+        for (const [caveId, existingHashes] of hashMap.entries()) {
+          for (const existingHash of existingHashes) {
+            if (!existingHash) continue;
+
+            const similarity = type === 'image'
+              ? ImageHasher.calculateSimilarity(item.hash, existingHash)
+              : item.hash === existingHash ? 1 : 0;
+
+            if (similarity >= threshold && similarity > maxSimilarity) {
+              maxSimilarity = similarity;
+              matchedCaveId = caveId;
+              if (similarity === 1) break;
+            }
+          }
+          if (maxSimilarity === 1) break;
+        }
+
+        return matchedCaveId ? {
+          index: item.index,
+          caveId: matchedCaveId,
+          similarity: maxSimilarity
+        } : null;
+      });
+    } catch (error) {
+      logger.error(`Find duplicates failed for ${type}: ${error.message}`);
+      return [];
+    }
   }
 
   /**

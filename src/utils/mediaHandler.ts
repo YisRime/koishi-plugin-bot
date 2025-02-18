@@ -4,6 +4,7 @@ import { Context, Logger, h } from 'koishi';
 import { Config, CaveObject } from '../index';
 import { FileHandler } from './fileHandler';
 import { HashStorage } from './HashStorage';
+import { IdManager } from './idManager';
 
 const logger = new Logger('mediaHandler');
 
@@ -106,7 +107,8 @@ export async function saveMedia(
   mediaType: 'img' | 'video',
   config: Config,
   ctx: Context,
-  session: any
+  session: any,
+  idManager: IdManager  // 新增参数
 ): Promise<string[]> {
   const accept = mediaType === 'img' ? 'image/*' : 'video/*';
   const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
@@ -134,11 +136,11 @@ export async function saveMedia(
         .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
 
       if (config.enableMD5) {
-        await checkMD5Duplicates(ctx, resourceDir, baseName, session);
+        await checkMD5Duplicates(ctx, resourceDir, baseName, session, caveId, idManager);
       }
 
       if (mediaType === 'img' && config.enableDuplicate) {
-        await checkImageDuplicates(ctx, buffer, config.duplicateThreshold, resourceDir, session);
+        await checkImageDuplicates(ctx, buffer, config.duplicateThreshold, resourceDir, session, caveId, idManager);
       }
 
       const finalFileName = `${caveId}_${baseName}${ext}`;
@@ -167,31 +169,30 @@ async function checkMD5Duplicates(
   ctx: Context,
   resourceDir: string,
   baseName: string,
-  session: any
+  session: any,
+  caveId: number,       // 新增参数
+  idManager: IdManager  // 新增参数
 ) {
-  try {
-    const files = await fs.promises.readdir(resourceDir);
-    const duplicateFiles = files.filter(file => {
-      const [caveId, nameWithExt] = file.split('_');
-      return nameWithExt?.split('.')[0] === baseName;
-    });
+  const files = await fs.promises.readdir(resourceDir);
+  const duplicateFiles = files.filter(file => {
+    const [caveId, nameWithExt] = file.split('_');
+    return nameWithExt?.split('.')[0] === baseName;
+  });
 
-    for (const file of duplicateFiles) {
-      const duplicateCaveId = parseInt(file.split('_')[0]);
-      if (isNaN(duplicateCaveId)) continue;
+  for (const file of duplicateFiles) {
+    const duplicateCaveId = parseInt(file.split('_')[0]);
+    if (isNaN(duplicateCaveId)) continue;
 
-      const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-      const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-      const originalCave = data.find(item => item.cave_id === duplicateCaveId);
+    const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
+    const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
+    const originalCave = data.find(item => item.cave_id === duplicateCaveId);
 
-      if (originalCave) {
-        await session.send(session.text('commands.cave.error.exactDuplicateFound') +
-          await buildMessage(originalCave, resourceDir, session));
-        throw new Error('duplicate_found');
-      }
+    if (originalCave) {
+      await session.send(session.text('commands.cave.error.exactDuplicateFound') +
+        await buildMessage(originalCave, resourceDir, session));
+      await idManager.markDeleted(caveId); // 删除已分配的ID
+      throw new Error('duplicate_found');
     }
-  } catch (error) {
-    throw error;
   }
 }
 
@@ -200,7 +201,9 @@ async function checkImageDuplicates(
   buffer: Buffer,
   threshold: number,
   resourceDir: string,
-  session: any
+  session: any,
+  caveId: number,       // 新增参数
+  idManager: IdManager  // 新增参数
 ) {
   const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
   const result = await hashStorage.findDuplicates('image', [buffer], threshold);
@@ -218,6 +221,7 @@ async function checkImageDuplicates(
         await session.send(session.text('commands.cave.error.similarDuplicateFound',
           [(similarity * 100).toFixed(1)]) +
           await buildMessage(originalCave, resourceDir, session));
+        await idManager.markDeleted(caveId); // 删除已分配的ID
         throw new Error('duplicate_found');
       }
     }

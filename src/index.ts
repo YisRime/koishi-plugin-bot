@@ -251,6 +251,9 @@ export async function apply(ctx: Context, config: Config) {
     content: string[]
   ): Promise<string> {
     let caveId: number;
+    let mediaFiles: string[] = [];  // 跟踪已保存的媒体文件
+    let cleanupRequired = false;
+
     try {
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
         const reply = await session.prompt(session.text('commands.cave.add.noContent'));
@@ -298,6 +301,13 @@ export async function apply(ctx: Context, config: Config) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
       }
 
+      // 增加额外的错误检查
+      if (!pureText && !imageUrls.length && !videoUrls.length) {
+        throw new Error(session.text('commands.cave.add.emptyContent'));
+      }
+
+      cleanupRequired = true;  // 标记需要清理资源
+
       // 保存媒体文件
       const [savedImages, savedVideos] = await Promise.all([
         imageUrls.length > 0 ? saveMedia(
@@ -308,7 +318,8 @@ export async function apply(ctx: Context, config: Config) {
           'img',
           config,
           ctx,
-          session
+          session,
+          idManager  // 添加 idManager 参数
         ) : [],
         videoUrls.length > 0 ? saveMedia(
           videoUrls,
@@ -318,9 +329,12 @@ export async function apply(ctx: Context, config: Config) {
           'video',
           config,
           ctx,
-          session
+          session,
+          idManager  // 添加 idManager 参数
         ) : []
       ]);
+
+      mediaFiles = [...savedImages, ...savedVideos];  // 记录已保存的文件
 
       const newCave: CaveObject = {
         cave_id: caveId,
@@ -395,9 +409,40 @@ export async function apply(ctx: Context, config: Config) {
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
-      // 如果已经分配了ID且发生错误，确保清理ID
+      // 仅在需要时进行清理
+      if (cleanupRequired) {
+        if (caveId) {
+          await idManager.markDeleted(caveId);
+        }
+
+        // 清理已保存的媒体文件
+        await Promise.all(mediaFiles.map(async file => {
+          try {
+            const filePath = path.join(resourceDir, file);
+            if (fs.existsSync(filePath)) {
+              await fs.promises.unlink(filePath);
+            }
+          } catch (cleanupError) {
+            logger.error(`Failed to cleanup media file ${file}: ${cleanupError.message}`);
+          }
+        }));
+      }
+
+      // 如果已经分配了ID且发生错误，确保清理ID和媒体文件
       if (caveId) {
         await idManager.markDeleted(caveId);
+
+        // 清理已保存的媒体文件
+        for (const file of mediaFiles) {
+          try {
+            const filePath = path.join(resourceDir, file);
+            if (fs.existsSync(filePath)) {
+              await fs.promises.unlink(filePath);
+            }
+          } catch (cleanupError) {
+            logger.error(`Failed to cleanup media file: ${cleanupError.message}`);
+          }
+        }
       }
 
       // 对于重复检测，直接返回空串（因为提示已发送）
