@@ -99,7 +99,7 @@ export class IdManager {
         await this.handleConflicts(conflicts, caveFilePath, pendingFilePath, caveData, pendingData);
       }
 
-      // 更新maxId，确保它不小于deletedIds中的最大值
+      // 更新maxId，确保它不小于deletedIds中的最大值和已使用ID中的最大值
       this.maxId = Math.max(
         status.maxId || 0,
         ...[...this.usedIds],
@@ -107,14 +107,18 @@ export class IdManager {
         0
       );
 
-      this.deletedIds = new Set(
-        status.deletedIds?.filter(id => !this.usedIds.has(id)) || []
-      );
+      // 检测ID空缺并添加到deletedIds
+      this.deletedIds = new Set(status.deletedIds || []);
+      for (let i = 1; i <= this.maxId; i++) {
+        if (!this.usedIds.has(i)) {
+          this.deletedIds.add(i);
+        }
+      }
 
       // 保存更新后的状态
       await this.saveStatus();
       this.initialized = true;
-      logger.success('ID Manager initialized');
+      logger.success(`Cave ID Manager initialized with ${this.deletedIds.size} gaps detected`);
 
     } catch (error) {
       this.initialized = false;

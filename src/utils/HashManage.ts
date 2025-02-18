@@ -1,7 +1,7 @@
 import { Logger } from 'koishi';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ImageHasher } from './ImageHash';
+import { ContentHasher } from './ContentHash';
 import { FileHandler } from './FileHandle';
 import { promisify } from 'util';
 
@@ -35,7 +35,7 @@ interface HashStorageStatus {
  */
 export class ContentHashManager {
   // 哈希数据文件名
-  private static readonly HASH_FILE = 'content_hashes.json';
+  private static readonly HASH_FILE = 'hash.json';
   // 回声洞数据文件名
   private static readonly CAVE_FILE = 'cave.json';
   // 批处理大小
@@ -92,7 +92,9 @@ export class ContentHashManager {
         await this.updateMissingHashes();
       }
 
+      const totalCaves = this.imageHashes.size;
       this.initialized = true;
+      logger.success(`Cave Hash Manager initialized with ${totalCaves} caves`);
     } catch (error) {
       logger.error(`Initialization failed: ${error.message}`);
       this.initialized = false;
@@ -131,13 +133,13 @@ export class ContentHashManager {
     try {
       if (content.images?.length) {
         const imageHashes = await Promise.all(
-          content.images.map(buffer => ImageHasher.calculateHash(buffer))
+          content.images.map(buffer => ContentHasher.calculateHash(buffer))
         );
         this.imageHashes.set(caveId, imageHashes);
       }
 
       if (content.texts?.length) {
-        const textHashes = content.texts.map(text => this.calculateTextHash(text));
+        const textHashes = content.texts.map(text => ContentHasher.calculateTextHash(text));
         this.textHashes.set(caveId, textHashes);
       }
 
@@ -187,7 +189,7 @@ export class ContentHashManager {
               }
 
               const imgBuffer = await readFileAsync(filePath);
-              return await ImageHasher.calculateHash(imgBuffer);
+              return await ContentHasher.calculateHash(imgBuffer);
             })
           );
 
@@ -260,24 +262,12 @@ export class ContentHashManager {
     return results;
   }
 
-  private calculateTextHash(text: string): string {
-    // 使用简单的文本规范化和hash算法
-    const normalizedText = text.toLowerCase().trim().replace(/\s+/g, ' ');
-    let hash = 0;
-    for (let i = 0; i < normalizedText.length; i++) {
-      const char = normalizedText.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return hash.toString(36);
-  }
-
   private async findTextDuplicates(texts: string[], threshold: number): Promise<Array<{
     index: number;
     caveId: number;
     similarity: number;
   } | null>> {
-    const inputHashes = texts.map(text => this.calculateTextHash(text));
+    const inputHashes = texts.map(text => ContentHasher.calculateTextHash(text));
     const existingHashes = Array.from(this.textHashes.entries());
 
     return inputHashes.map((hash, index) => {
@@ -327,7 +317,7 @@ export class ContentHashManager {
 
     // 计算输入图片的哈希值
     const inputHashes = await Promise.all(
-      images.map(buffer => ImageHasher.calculateHash(buffer))
+      images.map(buffer => ContentHasher.calculateHash(buffer))
     );
 
     // 获取现有的所有哈希值
@@ -341,7 +331,7 @@ export class ContentHashManager {
 
           for (const [caveId, hashes] of existingHashes) {
             for (const existingHash of hashes) {
-              const similarity = ImageHasher.calculateSimilarity(hash, existingHash);
+              const similarity = ContentHasher.calculateSimilarity(hash, existingHash);
               if (similarity >= threshold && similarity > maxSimilarity) {
                 maxSimilarity = similarity;
                 matchedCaveId = caveId;
@@ -417,7 +407,7 @@ export class ContentHashManager {
                 return null;
               }
               const imgBuffer = await fs.promises.readFile(filePath);
-              return await ImageHasher.calculateHash(imgBuffer);
+              return await ContentHasher.calculateHash(imgBuffer);
             })
           );
 
@@ -430,7 +420,7 @@ export class ContentHashManager {
         // 处理文本哈希
         const textElements = cave.elements?.filter(el => el.type === 'text' && (el as any).content) || [];
         if (textElements.length > 0) {
-          const textHashes = textElements.map(el => this.calculateTextHash((el as any).content));
+          const textHashes = textElements.map(el => ContentHasher.calculateTextHash((el as any).content));
           this.textHashes.set(cave.cave_id, textHashes);
         }
 
@@ -469,7 +459,7 @@ export class ContentHashManager {
               return null;
             }
             const imgBuffer = await fs.promises.readFile(filePath);
-            return ImageHasher.calculateHash(imgBuffer);
+            return ContentHasher.calculateHash(imgBuffer);
           })
         );
 

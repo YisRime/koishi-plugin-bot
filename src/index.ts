@@ -388,9 +388,7 @@ export async function apply(ctx: Context, config: Config) {
 
             const duplicateMessage = session.text('commands.cave.error.similarDuplicateFound',
               [(result.similarity * 100).toFixed(1)]);
-
-            await session.send(duplicateMessage);
-            await buildMessage(originalCave, resourceDir, session);
+            await session.send(duplicateMessage + await buildMessage(originalCave, resourceDir, session));
             throw new Error('duplicate_found');
           }
         } catch (error) {
