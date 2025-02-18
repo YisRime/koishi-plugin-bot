@@ -63,6 +63,9 @@ commands:
       notFound: "Echo not found"
       exactDuplicateFound: "Found exactly identical"
       similarDuplicateFound: "Found {0}% similar"
+      textDuplicateFound: "Found similar text! Similarity: {0}%"
+      duplicateRejected: "Content duplicate, submission rejected."
+      addFailed: "Add failed, please try again later."
     message:
       blacklisted: "You have been blacklisted"
       managerOnly: "This operation is limited to administrators only"

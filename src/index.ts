@@ -7,7 +7,7 @@ import * as path from 'path';
 import {} from 'koishi-plugin-adapter-onebot'
 import { FileHandler } from './utils/FileHandle'
 import { IdManager } from './utils/IdManage'
-import { HashManager } from './utils/HashManage'
+import { ContentHashManager } from './utils/HashManage'
 import { AuditManager } from './utils/AuditManage'
 
 // 基础定义
@@ -22,9 +22,11 @@ export const Config: Schema<Config> = Schema.object({
   manager: Schema.array(Schema.string()).required(), // 管理员用户ID
   number: Schema.number().default(60),              // 冷却时间(秒)
   enableAudit: Schema.boolean().default(false),     // 启用审核
+  enableTextDuplicate: Schema.boolean().default(true), // 启用文本查重
+  textDuplicateThreshold: Schema.number().default(0.9), // 文本查重阈值
+  enableImageDuplicate: Schema.boolean().default(true), // 开启图片查重
+  imageDuplicateThreshold: Schema.number().default(0.8), // 图片查重阈值
   imageMaxSize: Schema.number().default(4),         // 图片大小限制(MB)
-  enableDuplicate: Schema.boolean().default(true), // 开启查重
-  duplicateThreshold: Schema.number().default(0.8), // 查重阈值(0-1)
   allowVideo: Schema.boolean().default(true),       // 允许视频
   videoMaxSize: Schema.number().default(16),        // 视频大小限制(MB)
   enablePagination: Schema.boolean().default(false),// 启用分页
@@ -60,13 +62,13 @@ export async function apply(ctx: Context, config: Config) {
 
   // 初始化核心组件
   const idManager = new IdManager(ctx.baseDir);
-  const hashStorage = new HashManager(caveDir);
+  const contentHashManager = new ContentHashManager(caveDir);  // 更新类名
   const auditManager = new AuditManager(ctx, config, caveDir, idManager);
 
   // 等待所有组件初始化完成
   await Promise.all([
     idManager.initialize(path.join(caveDir, 'cave.json'), path.join(caveDir, 'pending.json')),
-    hashStorage.initialize()
+    contentHashManager.initialize()
   ]);
 
   const lastUsed = new Map<string, number>();
@@ -207,7 +209,10 @@ export async function apply(ctx: Context, config: Config) {
     if (targetCave.elements) {
 
       // 直接删除对应的哈希
-      await hashStorage.updateCaveHash(caveId);
+      await contentHashManager.updateCaveContent(caveId, {
+        images: undefined,
+        texts: undefined
+      });
 
       for (const element of targetCave.elements) {
         if ((element.type === 'img' || element.type === 'video') && element.file) {
@@ -273,6 +278,8 @@ export async function apply(ctx: Context, config: Config) {
         return sendMessage(session, 'commands.cave.add.videoDisabled', [], true);
       }
 
+      // 先下载并保存媒体文件，这样我们可以复用buffers
+      const imageBuffers: Buffer[] = [];
       const [savedImages, savedVideos] = await Promise.all([
         imageUrls.length > 0 ? saveMedia(
           imageUrls,
@@ -282,7 +289,8 @@ export async function apply(ctx: Context, config: Config) {
           'img',
           config,
           ctx,
-          session
+          session,
+          imageBuffers // 添加参数用于收集buffer
         ) : [],
         videoUrls.length > 0 ? saveMedia(
           videoUrls,
@@ -321,7 +329,7 @@ export async function apply(ctx: Context, config: Config) {
       }
 
       // 检查是否有hash记录
-      const hashStorage = new HashManager(path.join(ctx.baseDir, 'data', 'cave'));
+      const hashStorage = new ContentHashManager(path.join(ctx.baseDir, 'data', 'cave'));
       await hashStorage.initialize();
       const hashStatus = await hashStorage.getStatus();
 
@@ -355,17 +363,54 @@ export async function apply(ctx: Context, config: Config) {
         elements: cleanElementsForSave(newCave.elements, false)
       });
 
+      // 检查内容重复 - 直接使用已下载的buffers
+      if (config.enableImageDuplicate || config.enableTextDuplicate) {
+        const duplicateResults = await contentHashManager.findDuplicates({
+          images: config.enableImageDuplicate ? imageBuffers : undefined,
+          texts: config.enableTextDuplicate ?
+            textParts.filter((p): p is TextElement => p.type === 'text').map(p => p.content) : undefined
+        }, {
+          image: config.imageDuplicateThreshold,
+          text: config.textDuplicateThreshold
+        });
+
+        // 处理重复检测结果
+        for (const result of duplicateResults) {
+          if (!result) continue;
+
+          const originalCave = data.find(item => item.cave_id === result.caveId);
+          if (!originalCave) continue;
+
+          const duplicateMessage = result.type === 'image' ?
+            session.text('commands.cave.error.similarDuplicateFound', [(result.similarity * 100).toFixed(1)]) :
+            session.text('commands.cave.error.textDuplicateFound', [(result.similarity * 100).toFixed(1)]);
+
+          await session.send(duplicateMessage);
+          await buildMessage(originalCave, resourceDir, session);
+          throw new Error('duplicate_found');
+        }
+      }
+
       // 保存数据并更新hash
       await Promise.all([
         FileHandler.writeJsonData(caveFilePath, data),
-        hashStorage.updateCaveHash(caveId)
+        contentHashManager.updateCaveContent(caveId, {
+          images: savedImages.length > 0 ?
+            await Promise.all(savedImages.map(file =>
+              fs.promises.readFile(path.join(resourceDir, file)))) : undefined,
+          texts: textParts.filter(p => p.type === 'text').map(p => (p as TextElement).content)
+        })
       ]);
 
       await idManager.addStat(session.userId, caveId);
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
+      if (error.message === 'duplicate_found') {
+        return sendMessage(session, 'commands.cave.error.duplicateRejected', [], true);
+      }
       logger.error(`Failed to process add command: ${error.message}`);
+      return sendMessage(session, 'commands.cave.error.addFailed', [], true);
     }
   }
 
@@ -462,8 +507,10 @@ export interface Config {
   whitelist: string[];
   enablePagination: boolean;
   itemsPerPage: number;
-  duplicateThreshold: number;
-  enableDuplicate: boolean;
+  enableImageDuplicate: boolean; // 替换 enableDuplicate
+  imageDuplicateThreshold: number;
+  textDuplicateThreshold: number;
+  enableTextDuplicate: boolean;
 }
 
 // 定义数据类型接口
@@ -677,10 +724,11 @@ async function saveMedia(
   mediaType: 'img' | 'video',
   config: Config,
   ctx: Context,
-  session: any
+  session: any,
+  buffers?: Buffer[] // 新增参数用于收集buffer
 ): Promise<string[]> {
   const accept = mediaType === 'img' ? 'image/*' : 'video/*';
-  const hashStorage = new HashManager(path.join(ctx.baseDir, 'data', 'cave'));
+  const hashStorage = new ContentHashManager(path.join(ctx.baseDir, 'data', 'cave'));
   await hashStorage.initialize();
 
   const downloadTasks = urls.map(async (url, i) => {
@@ -701,6 +749,9 @@ async function saveMedia(
 
       if (!response.data) throw new Error('empty_response');
       const buffer = Buffer.from(response.data);
+      if (buffers && mediaType === 'img') {
+        buffers.push(buffer);
+      }
 
       // 获取MD5作为基础文件名 (对图片和视频统一处理)
       const md5 = path.basename(fileName || `${mediaType}`, ext).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
@@ -728,14 +779,20 @@ async function saveMedia(
       }
 
       // 相似度检查仅对图片进行
-      if (mediaType === 'img' && config.enableDuplicate) {
-        const result = await hashStorage.findDuplicates([buffer], config.duplicateThreshold);
+      if (mediaType === 'img' && config.enableImageDuplicate) {
+        const result = await hashStorage.findDuplicates(
+          { images: [buffer] },
+          {
+            image: config.imageDuplicateThreshold,
+            text: config.textDuplicateThreshold
+          }
+        );
 
         if (result.length > 0 && result[0] !== null) {
           const duplicate = result[0];
           const similarity = duplicate.similarity;
 
-          if (similarity >= config.duplicateThreshold) {
+          if (similarity >= config.imageDuplicateThreshold) {
             const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
             const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
             const originalCave = data.find(item => item.cave_id === duplicate.caveId);

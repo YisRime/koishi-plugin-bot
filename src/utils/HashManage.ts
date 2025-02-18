@@ -9,38 +9,40 @@ const logger = new Logger('HashManager');
 const readFileAsync = promisify(fs.readFile);
 
 /**
- * 存储图片哈希值的数据结构
+ * 内容哈希存储类型
  */
-interface HashData {
-  /** 存储图片哈希值的记录，key为回声洞ID，value为哈希值数组 */
-  hashes: Record<string, string[]>;
-  /** 最后更新时间 */
+interface ContentHashData {
+  imageHashes: Record<string, string[]>;
+  textHashes: Record<string, string[]>;
   lastUpdated?: string;
 }
 
 /**
- * 哈希存储状态信息
+ * 哈希存储状态类型
  */
-interface HashStatus {
-  /** 最后更新时间戳 */
+interface HashStorageStatus {
   lastUpdated: string;
-  /** 所有回声洞的哈希值条目 */
-  entries: Array<{ caveId: number; hashes: string[] }>;
+  entries: Array<{
+    caveId: number;
+    imageHashes: string[];
+    textHashes: string[];
+  }>;
 }
 
 /**
  * 图片哈希值存储管理类
  * 负责管理和维护回声洞图片的哈希值
  */
-export class HashManager {
+export class ContentHashManager {
   // 哈希数据文件名
-  private static readonly HASH_FILE = 'hash.json';
+  private static readonly HASH_FILE = 'content_hashes.json';
   // 回声洞数据文件名
   private static readonly CAVE_FILE = 'cave.json';
   // 批处理大小
   private static readonly BATCH_SIZE = 50;
   // 存储回声洞ID到图片哈希值的映射
-  private hashes = new Map<number, string[]>();
+  private imageHashes = new Map<number, string[]>();
+  private textHashes = new Map<number, string[]>();
   // 初始化状态标志
   private initialized = false;
 
@@ -51,7 +53,7 @@ export class HashManager {
   constructor(private readonly caveDir: string) {}
 
   private get filePath() {
-    return path.join(this.caveDir, HashManager.HASH_FILE);
+    return path.join(this.caveDir, ContentHashManager.HASH_FILE);
   }
 
   private get resourceDir() {
@@ -59,7 +61,7 @@ export class HashManager {
   }
 
   private get caveFilePath() {
-    return path.join(this.caveDir, HashManager.CAVE_FILE);
+    return path.join(this.caveDir, ContentHashManager.CAVE_FILE);
   }
 
   /**
@@ -71,16 +73,16 @@ export class HashManager {
     if (this.initialized) return;
 
     try {
-      const hashData = await FileHandler.readJsonData<HashData>(this.filePath)
+      const hashData = await FileHandler.readJsonData<ContentHashData>(this.filePath)
         .then(data => data[0])
         .catch(() => null);
 
-      if (!hashData?.hashes || Object.keys(hashData.hashes).length === 0) {
-        this.hashes.clear();
+      if (!hashData?.imageHashes || Object.keys(hashData.imageHashes).length === 0) {
+        this.imageHashes.clear();
         await this.buildInitialHashes();
       } else {
-        this.hashes = new Map(
-          Object.entries(hashData.hashes).map(([k, v]) => [Number(k), v as string[]])
+        this.imageHashes = new Map(
+          Object.entries(hashData.imageHashes).map(([k, v]) => [Number(k), v as string[]])
         );
         await this.updateMissingHashes();
       }
@@ -97,14 +99,15 @@ export class HashManager {
    * 获取当前哈希存储状态
    * @returns 包含最后更新时间和所有条目的状态对象
    */
-  async getStatus(): Promise<HashStatus> {
+  async getStatus(): Promise<HashStorageStatus> {
     if (!this.initialized) await this.initialize();
 
     return {
       lastUpdated: new Date().toISOString(),
-      entries: Array.from(this.hashes.entries()).map(([caveId, hashes]) => ({
+      entries: Array.from(this.imageHashes.entries()).map(([caveId, imgHashes]) => ({
         caveId,
-        hashes
+        imageHashes: imgHashes,
+        textHashes: this.textHashes.get(caveId) || []
       }))
     };
   }
@@ -112,25 +115,35 @@ export class HashManager {
   /**
    * 更新指定回声洞的图片哈希值
    * @param caveId 回声洞ID
-   * @param imgBuffers 图片buffer数组
+   * @param content 图片buffer数组
    */
-  async updateCaveHash(caveId: number, imgBuffers?: Buffer[]): Promise<void> {
+  async updateCaveContent(caveId: number, content: {
+    images?: Buffer[],
+    texts?: string[]
+  }): Promise<void> {
     if (!this.initialized) await this.initialize();
 
     try {
-      if (imgBuffers?.length) {
-        const hashes = await Promise.all(
-          imgBuffers.map(buffer => ImageHasher.calculateHash(buffer))
+      if (content.images?.length) {
+        const imageHashes = await Promise.all(
+          content.images.map(buffer => ImageHasher.calculateHash(buffer))
         );
-        this.hashes.set(caveId, hashes);
-        logger.info(`Added ${hashes.length} hashes for cave ${caveId}`);
-      } else {
-        this.hashes.delete(caveId);
-        logger.info(`Deleted hashes for cave ${caveId}`);
+        this.imageHashes.set(caveId, imageHashes);
       }
-      await this.saveHashes();
+
+      if (content.texts?.length) {
+        const textHashes = content.texts.map(text => this.calculateTextHash(text));
+        this.textHashes.set(caveId, textHashes);
+      }
+
+      if (!content.images && !content.texts) {
+        this.imageHashes.delete(caveId);
+        this.textHashes.delete(caveId);
+      }
+
+      await this.saveContentHashes();
     } catch (error) {
-      logger.error(`Failed to update hash (cave ${caveId}): ${error.message}`);
+      logger.error(`Failed to update content hashes (cave ${caveId}): ${error.message}`);
     }
   }
 
@@ -151,7 +164,7 @@ export class HashManager {
         cave.elements?.some(el => el.type === 'img' && el.file)
       );
 
-      this.hashes.clear();
+      this.imageHashes.clear();
       let processedCount = 0;
       const totalImages = cavesWithImages.length;
 
@@ -175,7 +188,7 @@ export class HashManager {
 
           const validHashes = hashes.filter(hash => hash !== null);
           if (validHashes.length > 0) {
-            this.hashes.set(cave.cave_id, validHashes);
+            this.imageHashes.set(cave.cave_id, validHashes);
             processedCount++;
 
             if (processedCount % 100 === 0) {
@@ -188,7 +201,7 @@ export class HashManager {
       };
 
       await this.processBatch(cavesWithImages, processCave);
-      await this.saveHashes();
+      await this.saveContentHashes();
       logger.success(`Update completed. Processed ${processedCount}/${totalImages} images`);
     } catch (error) {
       logger.error(`Full update failed: ${error.message}`);
@@ -198,25 +211,122 @@ export class HashManager {
 
   /**
    * 查找重复的图片
-   * @param imgBuffers 待查找的图片buffer数组
-   * @param threshold 相似度阈值
+   * @param content 待查找的图片buffer数组
+   * @param thresholds 相似度阈值
    * @returns 匹配结果数组，包含索引、回声洞ID和相似度
    */
-  async findDuplicates(imgBuffers: Buffer[], threshold: number): Promise<Array<{
+  async findDuplicates(content: {
+    images?: Buffer[],
+    texts?: string[]
+  }, thresholds: {
+    image: number,
+    text: number
+  }): Promise<Array<{
+    type: 'image' | 'text';
     index: number;
     caveId: number;
-    similarity: number
+    similarity: number;
+  } | null>> {
+    if (!this.initialized) await this.initialize();
+
+    const results: Array<{
+      type: 'image' | 'text';
+      index: number;
+      caveId: number;
+      similarity: number;
+    } | null> = [];
+
+    // 处理图片查重
+    if (content.images?.length) {
+      const imageResults = await this.findImageDuplicates(content.images, thresholds.image);
+      results.push(...imageResults.map(result =>
+        result ? { ...result, type: 'image' as const } : null
+      ));
+    }
+
+    // 处理文本查重
+    if (content.texts?.length) {
+      const textResults = await this.findTextDuplicates(content.texts, thresholds.text);
+      results.push(...textResults.map(result =>
+        result ? { ...result, type: 'text' as const } : null
+      ));
+    }
+
+    return results;
+  }
+
+  private calculateTextHash(text: string): string {
+    // 使用简单的文本规范化和hash算法
+    const normalizedText = text.toLowerCase().trim().replace(/\s+/g, ' ');
+    let hash = 0;
+    for (let i = 0; i < normalizedText.length; i++) {
+      const char = normalizedText.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash.toString(36);
+  }
+
+  private async findTextDuplicates(texts: string[], threshold: number): Promise<Array<{
+    index: number;
+    caveId: number;
+    similarity: number;
+  } | null>> {
+    const inputHashes = texts.map(text => this.calculateTextHash(text));
+    const existingHashes = Array.from(this.textHashes.entries());
+
+    return inputHashes.map((hash, index) => {
+      let maxSimilarity = 0;
+      let matchedCaveId = null;
+
+      for (const [caveId, hashes] of existingHashes) {
+        for (const existingHash of hashes) {
+          const similarity = this.calculateTextSimilarity(hash, existingHash);
+          if (similarity >= threshold && similarity > maxSimilarity) {
+            maxSimilarity = similarity;
+            matchedCaveId = caveId;
+            if (similarity === 1) break;
+          }
+        }
+        if (maxSimilarity === 1) break;
+      }
+
+      return matchedCaveId ? {
+        index,
+        caveId: matchedCaveId,
+        similarity: maxSimilarity
+      } : null;
+    });
+  }
+
+  private calculateTextSimilarity(hash1: string, hash2: string): number {
+    if (hash1 === hash2) return 1;
+    // 实现一个简单的文本相似度算法
+    // 这里可以根据需要使用更复杂的算法
+    const length = Math.max(hash1.length, hash2.length);
+    let matches = 0;
+    for (let i = 0; i < length; i++) {
+      if (hash1[i] === hash2[i]) matches++;
+    }
+    return matches / length;
+  }
+
+  // 重命名原有的图片哈希相关方法
+  private async findImageDuplicates(images: Buffer[], threshold: number): Promise<Array<{
+    index: number;
+    caveId: number;
+    similarity: number;
   } | null>> {
     // 确保存储已初始化
     if (!this.initialized) await this.initialize();
 
     // 计算输入图片的哈希值
     const inputHashes = await Promise.all(
-      imgBuffers.map(buffer => ImageHasher.calculateHash(buffer))
+      images.map(buffer => ImageHasher.calculateHash(buffer))
     );
 
     // 获取现有的所有哈希值
-    const existingHashes = Array.from(this.hashes.entries());
+    const existingHashes = Array.from(this.imageHashes.entries());
 
     return Promise.all(
       inputHashes.map(async (hash, index) => {
@@ -269,9 +379,10 @@ export class HashManager {
    * 保存哈希数据到文件
    * @private
    */
-  private async saveHashes(): Promise<void> {
-    const data: HashData = {
-      hashes: Object.fromEntries(this.hashes),
+  private async saveContentHashes(): Promise<void> {
+    const data: ContentHashData = {
+      imageHashes: Object.fromEntries(this.imageHashes),
+      textHashes: Object.fromEntries(this.textHashes),
       lastUpdated: new Date().toISOString()
     };
     await FileHandler.writeJsonData(this.filePath, [data]);
@@ -317,14 +428,14 @@ export class HashManager {
 
         const validHashes = hashes.filter(hash => hash !== null);
         if (validHashes.length > 0) {
-          this.hashes.set(cave.cave_id, validHashes);
+          this.imageHashes.set(cave.cave_id, validHashes);
         }
       } catch (error) {
         logger.error(`Failed to process cave ${cave.cave_id}: ${error.message}`);
       }
     }
 
-    await this.saveHashes();
+    await this.saveContentHashes();
     logger.success(`Build completed. Processed ${processedImageCount}/${totalImages} images`);
   }
 
@@ -337,7 +448,7 @@ export class HashManager {
     let updatedCount = 0;
 
     for (const cave of caveData) {
-      if (this.hashes.has(cave.cave_id)) continue;
+      if (this.imageHashes.has(cave.cave_id)) continue;
 
       const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
       if (imgElements.length === 0) continue;
@@ -356,7 +467,7 @@ export class HashManager {
 
         const validHashes = hashes.filter(hash => hash !== null);
         if (validHashes.length > 0) {
-          this.hashes.set(cave.cave_id, validHashes);
+          this.imageHashes.set(cave.cave_id, validHashes);
           updatedCount++;
         }
       } catch (error) {
@@ -375,7 +486,7 @@ export class HashManager {
   private async processBatch<T>(
     items: T[],
     processor: (item: T) => Promise<void>,
-    batchSize = HashManager.BATCH_SIZE
+    batchSize = ContentHashManager.BATCH_SIZE
   ): Promise<void> {
     // 按批次处理数组项，避免同时处理太多项导致内存问题
     for (let i = 0; i < items.length; i += batchSize) {
