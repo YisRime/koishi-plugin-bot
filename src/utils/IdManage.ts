@@ -118,7 +118,7 @@ export class IdManager {
       // 保存更新后的状态
       await this.saveStatus();
       this.initialized = true;
-      logger.success(`Cave ID Manager initialized with ${this.deletedIds.size} gaps detected`);
+      logger.success(`Cave ID Manager initialized with ${this.maxId}(-${this.deletedIds.size}) IDs`);
 
     } catch (error) {
       this.initialized = false;

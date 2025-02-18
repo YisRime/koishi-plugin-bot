@@ -92,9 +92,9 @@ export class ContentHashManager {
         await this.updateMissingHashes();
       }
 
-      const totalCaves = this.imageHashes.size;
+      const totalCaves = new Set([...this.imageHashes.keys(), ...this.textHashes.keys()]).size;
       this.initialized = true;
-      logger.success(`Cave Hash Manager initialized with ${totalCaves} caves`);
+      logger.success(`Cave Hash Manager initialized with ${totalCaves} hashes`);
     } catch (error) {
       logger.error(`Initialization failed: ${error.message}`);
       this.initialized = false;
