@@ -88,7 +88,6 @@ export class HashStorage {
    * @param content - 要计算哈希的内容
    */
   async updateHash(caveId: number, type: 'image' | 'text', content: Buffer | string): Promise<void> {
-    if (!this.initialized) await this.initialize();
 
     try {
       const hash = type === 'image'
@@ -120,7 +119,6 @@ export class HashStorage {
       images?: Buffer[];
     }
   ): Promise<void> {
-    if (!this.initialized) await this.initialize();
 
     const oldStats = this.getStorageStats();
     const updatePromises: Promise<void>[] = [];
@@ -160,7 +158,6 @@ export class HashStorage {
     caveId: number;
     similarity: number;
   } | null>> {
-    if (!this.initialized) await this.initialize();
 
     const hashMap = type === 'image' ? this.imageHashes : this.textHashes;
     const calculateSimilarity = type === 'image'
@@ -232,7 +229,6 @@ export class HashStorage {
    * @param caveId - 回声洞ID
    */
   async clearHashes(caveId: number): Promise<void> {
-    if (!this.initialized) await this.initialize();
 
     const wasDeleted = this.imageHashes.delete(caveId) || this.textHashes.delete(caveId);
     if (wasDeleted) {
@@ -284,7 +280,6 @@ export class HashStorage {
       }
     }
 
-    const oldStats = this.getStorageStats();
     let updated = false;
 
     // 处理所有缺失的哈希

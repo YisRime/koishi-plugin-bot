@@ -207,7 +207,6 @@ export async function apply(ctx: Context, config: Config) {
     // 删除相关的媒体文件和哈希记录
     if (targetCave.elements) {
       const hashStorage = new HashStorage(caveDir);
-      await hashStorage.initialize();
 
       // 使用新的清除方法
       await hashStorage.clearHashes(caveId);
