@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from 'koishi';
-import { FileHandler } from './fileHandler';
+import { FileHandler } from './FileHandle';
 
-const logger = new Logger('idManager');
+const logger = new Logger('IdManager');
 
 /**
  * 回声洞对象接口

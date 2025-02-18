@@ -1,11 +1,11 @@
 import { Logger } from 'koishi';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ImageHasher } from './ImageHasher';
-import { FileHandler } from './fileHandler';
+import { ImageHasher } from './ImageHash';
+import { FileHandler } from './FileHandle';
 import { promisify } from 'util';
 
-const logger = new Logger('HashStorage');
+const logger = new Logger('HashManager');
 const readFileAsync = promisify(fs.readFile);
 
 /**
@@ -32,7 +32,7 @@ interface HashStatus {
  * 图片哈希值存储管理类
  * 负责管理和维护回声洞图片的哈希值
  */
-export class HashStorage {
+export class HashManager {
   // 哈希数据文件名
   private static readonly HASH_FILE = 'hash.json';
   // 回声洞数据文件名
@@ -45,13 +45,13 @@ export class HashStorage {
   private initialized = false;
 
   /**
-   * 初始化HashStorage实例
+   * 初始化HashManager实例
    * @param caveDir 回声洞数据目录路径
    */
   constructor(private readonly caveDir: string) {}
 
   private get filePath() {
-    return path.join(this.caveDir, HashStorage.HASH_FILE);
+    return path.join(this.caveDir, HashManager.HASH_FILE);
   }
 
   private get resourceDir() {
@@ -59,7 +59,7 @@ export class HashStorage {
   }
 
   private get caveFilePath() {
-    return path.join(this.caveDir, HashStorage.CAVE_FILE);
+    return path.join(this.caveDir, HashManager.CAVE_FILE);
   }
 
   /**
@@ -375,7 +375,7 @@ export class HashStorage {
   private async processBatch<T>(
     items: T[],
     processor: (item: T) => Promise<void>,
-    batchSize = HashStorage.BATCH_SIZE
+    batchSize = HashManager.BATCH_SIZE
   ): Promise<void> {
     // 按批次处理数组项，避免同时处理太多项导致内存问题
     for (let i = 0; i < items.length; i += batchSize) {
