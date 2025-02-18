@@ -63,8 +63,6 @@ commands:
       notFound: "未找到该回声洞"
       exactDuplicateFound: "发现完全相同的"
       similarDuplicateFound: "发现相似度为 {0}% 的"
-      textDuplicateFound: "发现相似文本！相似度: {0}%"
-      duplicateRejected: "内容重复，投稿被拒绝。"
       addFailed: "添加失败，请稍后重试。"
     message:
       blacklisted: "你已被列入黑名单"

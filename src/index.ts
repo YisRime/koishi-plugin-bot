@@ -253,6 +253,7 @@ export async function apply(ctx: Context, config: Config) {
     session: any,
     content: string[]
   ): Promise<string> {
+    let caveId: number;
     try {
       const inputContent = content.length > 0 ? content.join('\n') : await (async () => {
         await sendMessage(session, 'commands.cave.add.noContent', [], true);
@@ -261,7 +262,7 @@ export async function apply(ctx: Context, config: Config) {
         return reply;
       })();
 
-      const caveId = await idManager.getNextId();
+      caveId = await idManager.getNextId();
 
       if (inputContent.includes('/app/.config/QQ/')) {
         return sendMessage(session, 'commands.cave.add.localFileNotAllowed', [], true);
@@ -365,29 +366,42 @@ export async function apply(ctx: Context, config: Config) {
 
       // 检查内容重复 - 直接使用已下载的buffers
       if (config.enableImageDuplicate || config.enableTextDuplicate) {
-        const duplicateResults = await contentHashManager.findDuplicates({
-          images: config.enableImageDuplicate ? imageBuffers : undefined,
-          texts: config.enableTextDuplicate ?
-            textParts.filter((p): p is TextElement => p.type === 'text').map(p => p.content) : undefined
-        }, {
-          image: config.imageDuplicateThreshold,
-          text: config.textDuplicateThreshold
-        });
+        try {
+          const duplicateResults = await contentHashManager.findDuplicates({
+            images: config.enableImageDuplicate ? imageBuffers : undefined,
+            texts: config.enableTextDuplicate ?
+              textParts.filter((p): p is TextElement => p.type === 'text').map(p => p.content) : undefined
+          }, {
+            image: config.imageDuplicateThreshold,
+            text: config.textDuplicateThreshold
+          });
 
-        // 处理重复检测结果
-        for (const result of duplicateResults) {
-          if (!result) continue;
+          // 处理重复检测结果
+          for (const result of duplicateResults) {
+            if (!result) continue;
 
-          const originalCave = data.find(item => item.cave_id === result.caveId);
-          if (!originalCave) continue;
+            const originalCave = data.find(item => item.cave_id === result.caveId);
+            if (!originalCave) continue;
 
-          const duplicateMessage = result.type === 'image' ?
-            session.text('commands.cave.error.similarDuplicateFound', [(result.similarity * 100).toFixed(1)]) :
-            session.text('commands.cave.error.textDuplicateFound', [(result.similarity * 100).toFixed(1)]);
+            // 回收未使用的ID
+            await idManager.markDeleted(caveId);
 
-          await session.send(duplicateMessage);
-          await buildMessage(originalCave, resourceDir, session);
-          throw new Error('duplicate_found');
+            const duplicateMessage = session.text('commands.cave.error.similarDuplicateFound',
+              [(result.similarity * 100).toFixed(1)]);
+
+            await session.send(duplicateMessage);
+            await buildMessage(originalCave, resourceDir, session);
+            throw new Error('duplicate_found');
+          }
+        } catch (error) {
+          // 确保在任何错误发生时都回收ID
+          if (error.message !== 'duplicate_found') {
+            await idManager.markDeleted(caveId);
+          }
+          if (error.message === 'duplicate_found') {
+            return ''; // 直接返回空字符串，因为消息已经在前面发送
+          }
+          return sendMessage(session, 'commands.cave.error.addFailed', [], true);
         }
       }
 
@@ -406,8 +420,12 @@ export async function apply(ctx: Context, config: Config) {
       return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
     } catch (error) {
+      // 如果不是重复检测导致的错误，也需要回收ID
+      if (error.message !== 'duplicate_found') {
+        await idManager.markDeleted(caveId);
+      }
       if (error.message === 'duplicate_found') {
-        return sendMessage(session, 'commands.cave.error.duplicateRejected', [], true);
+        return ''; // 直接返回空字符串，因为消息已经在前面发送
       }
       logger.error(`Failed to process add command: ${error.message}`);
       return sendMessage(session, 'commands.cave.error.addFailed', [], true);

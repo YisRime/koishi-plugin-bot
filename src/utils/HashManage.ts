@@ -77,12 +77,17 @@ export class ContentHashManager {
         .then(data => data[0])
         .catch(() => null);
 
-      if (!hashData?.imageHashes || Object.keys(hashData.imageHashes).length === 0) {
+      if (!hashData?.imageHashes || !hashData?.textHashes ||
+          Object.keys(hashData.imageHashes).length === 0) {
         this.imageHashes.clear();
+        this.textHashes.clear();
         await this.buildInitialHashes();
       } else {
         this.imageHashes = new Map(
           Object.entries(hashData.imageHashes).map(([k, v]) => [Number(k), v as string[]])
+        );
+        this.textHashes = new Map(
+          Object.entries(hashData.textHashes).map(([k, v]) => [Number(k), v as string[]])
         );
         await this.updateMissingHashes();
       }
@@ -394,41 +399,44 @@ export class ContentHashManager {
    */
   private async buildInitialHashes(): Promise<void> {
     const caveData = await this.loadCaveData();
-    let processedImageCount = 0;
-    // 计算所有图片的总数
-    const totalImages = caveData.reduce((sum, cave) =>
-      sum + (cave.elements?.filter(el => el.type === 'img' && el.file).length || 0), 0);
+    let processedCount = 0;
+    const totalCaves = caveData.length;
 
-    logger.info(`Building hash data for ${totalImages} images...`);
+    logger.info(`Building hash data for ${totalCaves} caves...`);
 
     for (const cave of caveData) {
-      const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
-      if (imgElements.length === 0) continue;
-
       try {
-        const hashes = await Promise.all(
-          imgElements.map(async (imgElement) => {
-            const filePath = path.join(this.resourceDir, imgElement.file);
-            if (!fs.existsSync(filePath)) {
-              logger.warn(`Image not found: ${filePath}`);
-              return null;
-            }
-            const imgBuffer = await fs.promises.readFile(filePath);
-            const hash = await ImageHasher.calculateHash(imgBuffer);
-            processedImageCount++;
+        // 处理图片哈希
+        const imgElements = cave.elements?.filter(el => el.type === 'img' && el.file) || [];
+        if (imgElements.length > 0) {
+          const hashes = await Promise.all(
+            imgElements.map(async (imgElement) => {
+              const filePath = path.join(this.resourceDir, imgElement.file);
+              if (!fs.existsSync(filePath)) {
+                logger.warn(`Image not found: ${filePath}`);
+                return null;
+              }
+              const imgBuffer = await fs.promises.readFile(filePath);
+              return await ImageHasher.calculateHash(imgBuffer);
+            })
+          );
 
-            // 每处理100张图片显示一次进度
-            if (processedImageCount % 100 === 0) {
-              logger.info(`Progress: ${processedImageCount}/${totalImages} images`);
-            }
+          const validHashes = hashes.filter(hash => hash !== null);
+          if (validHashes.length > 0) {
+            this.imageHashes.set(cave.cave_id, validHashes);
+          }
+        }
 
-            return hash;
-          })
-        );
+        // 处理文本哈希
+        const textElements = cave.elements?.filter(el => el.type === 'text' && (el as any).content) || [];
+        if (textElements.length > 0) {
+          const textHashes = textElements.map(el => this.calculateTextHash((el as any).content));
+          this.textHashes.set(cave.cave_id, textHashes);
+        }
 
-        const validHashes = hashes.filter(hash => hash !== null);
-        if (validHashes.length > 0) {
-          this.imageHashes.set(cave.cave_id, validHashes);
+        processedCount++;
+        if (processedCount % 100 === 0) {
+          logger.info(`Progress: ${processedCount}/${totalCaves} caves`);
         }
       } catch (error) {
         logger.error(`Failed to process cave ${cave.cave_id}: ${error.message}`);
@@ -436,7 +444,7 @@ export class ContentHashManager {
     }
 
     await this.saveContentHashes();
-    logger.success(`Build completed. Processed ${processedImageCount}/${totalImages} images`);
+    logger.success(`Build completed. Processed ${processedCount}/${totalCaves} caves`);
   }
 
   /**
