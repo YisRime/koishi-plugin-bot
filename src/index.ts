@@ -8,6 +8,8 @@ import {} from 'koishi-plugin-adapter-onebot'
 import { FileHandler } from './utils/fileHandler'
 import { IdManager } from './utils/idManager'
 import { HashStorage } from './utils/HashStorage'
+import { handleAudit, sendAuditMessage } from './utils/auditHandler'
+import { extractMediaContent, saveMedia, buildMessage } from './utils/mediaHandler'
 
 // 基础定义
 export const name = 'best-cave';
@@ -117,19 +119,19 @@ export async function apply(ctx: Context, config: Config) {
     options: any,
     content: string[]
   ): Promise<string> {
-    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath);
-    const isApprove = Boolean(options.p);
+    const pendingData = await FileHandler.readJsonData<PendingCave>(pendingFilePath)
+    const isApprove = Boolean(options.p)
     if ((options.p === true && content[0] === 'all') ||
         (options.d === true && content[0] === 'all')) {
-      return await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session);
+      return await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, idManager)
     }
     const id = parseInt(content[0] ||
       (typeof options.p === 'string' ? options.p : '') ||
-      (typeof options.d === 'string' ? options.d : ''));
+      (typeof options.d === 'string' ? options.d : ''))
     if (isNaN(id)) {
-      return sendMessage(session, 'commands.cave.error.invalidId', [], true);
+      return sendMessage(session, 'commands.cave.error.invalidId', [], true)
     }
-    return sendMessage(session, await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, id), [], true);
+    return await handleAudit(pendingData, isApprove, caveFilePath, resourceDir, pendingFilePath, session, idManager, id)
   }
 
   async function processView(
@@ -287,7 +289,7 @@ export async function apply(ctx: Context, config: Config) {
             await session.send(session.text('commands.cave.error.exactDuplicateFound') +
               await buildMessage(duplicateCave, resourceDir, session));
             await idManager.markDeleted(caveId);
-            return ''; // 检测到重复时直接返回
+            throw new Error('duplicate_found'); // 检测到重复时直接抛出错误来阻止添加
           }
         }
       }
@@ -321,12 +323,6 @@ export async function apply(ctx: Context, config: Config) {
           ) : []
         ]);
 
-        // 如果返回的是 null，说明检测到重复
-        if (savedImages === null || savedVideos === null) {
-          await idManager.markDeleted(caveId);
-          return '';
-        }
-
         const newCave: CaveObject = {
           cave_id: caveId,
           elements: [
@@ -337,7 +333,7 @@ export async function apply(ctx: Context, config: Config) {
               // 保持原始文本和图片的相对位置
               index: el.index
             }))
-          ].sort((a) => a.index - a.index),
+          ].sort((a, b) => a.index - b.index),
           contributor_number: session.userId,
           contributor_name: session.username
         };
@@ -349,17 +345,6 @@ export async function apply(ctx: Context, config: Config) {
             file: savedVideos[0],
             index: Number.MAX_SAFE_INTEGER
           });
-        }
-
-        // 如果启用了hash记录,先检查是否有需要检测的图片
-        const existingData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-        const hasImages = existingData.some(cave =>
-          cave.elements?.some(element => element.type === 'img' && element.file)
-        );
-
-        // 初始化 hashStorage，它会自动处理所有现有图片的哈希
-        if (hasImages) {
-          await hashStorage.initialize();
         }
 
         // 处理审核逻辑
@@ -396,7 +381,6 @@ export async function apply(ctx: Context, config: Config) {
           };
 
           if (updates.texts.length || updates.images.length) {
-            // 在添加回声洞时设置 silent 为 true，避免重复日志
             await hashStorage.batchUpdateHashes(updates);
           }
         }
@@ -412,159 +396,17 @@ export async function apply(ctx: Context, config: Config) {
         return sendMessage(session, 'commands.cave.add.addSuccess', [caveId], false);
 
       } catch (error) {
+        // 对于重复内容的错误，需要先清理cave ID再抛出错误
         if (error.message === 'duplicate_found') {
           await idManager.markDeleted(caveId);
-          return '';
         }
-        throw error;
+        throw error('${error.message}');
       }
 
     } catch (error) {
       logger.error(`Failed to process add command: ${error.message}`);
       return sendMessage(session, error.message, [], true);
     }
-  }
-
-  // 合并审核相关函数
-  async function handleAudit(
-    pendingData: PendingCave[],
-    isApprove: boolean,
-    caveFilePath: string,
-    resourceDir: string,
-    pendingFilePath: string,
-    session: any,
-    targetId?: number
-  ): Promise<string> {
-    if (pendingData.length === 0) {
-      return sendMessage(session, 'commands.cave.audit.noPending', [], true);
-    }
-
-    // 处理单条审核
-    if (typeof targetId === 'number') {
-      const targetCave = pendingData.find(item => item.cave_id === targetId);
-      if (!targetCave) {
-        return sendMessage(session, 'commands.cave.audit.pendingNotFound', [], true);
-      }
-
-      const newPendingData = pendingData.filter(item => item.cave_id !== targetId);
-
-      if (isApprove) {
-        const oldCaveData = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-        // 确保cave_id保持不变
-        const newCaveData = [...oldCaveData, {
-          ...targetCave,
-          cave_id: targetId,
-          elements: cleanElementsForSave(targetCave.elements, false)
-        }];
-
-        await FileHandler.withTransaction([
-          {
-            filePath: caveFilePath,
-            operation: async () => FileHandler.writeJsonData(caveFilePath, newCaveData),
-            rollback: async () => FileHandler.writeJsonData(caveFilePath, oldCaveData)
-          },
-          {
-            filePath: pendingFilePath,
-            operation: async () => FileHandler.writeJsonData(pendingFilePath, newPendingData),
-            rollback: async () => FileHandler.writeJsonData(pendingFilePath, pendingData)
-          }
-        ]);
-        await idManager.addStat(targetCave.contributor_number, targetId);
-      } else {
-        // 拒绝审核时，需要将ID标记为已删除
-        await FileHandler.writeJsonData(pendingFilePath, newPendingData);
-        await idManager.markDeleted(targetId);
-
-        // 删除关联的媒体文件
-        if (targetCave.elements) {
-          for (const element of targetCave.elements) {
-            if ((element.type === 'img' || element.type === 'video') && element.file) {
-              const fullPath = path.join(resourceDir, element.file);
-              if (fs.existsSync(fullPath)) {
-                await fs.promises.unlink(fullPath);
-              }
-            }
-          }
-        }
-      }
-
-      const remainingCount = newPendingData.length;
-      if (remainingCount > 0) {
-        const remainingIds = newPendingData.map(c => c.cave_id).join(', ');
-        const action = isApprove ? 'auditPassed' : 'auditRejected';
-        return sendMessage(session, 'commands.cave.audit.pendingResult', [
-          session.text(`commands.cave.audit.${action}`),
-          remainingCount,
-          remainingIds
-        ], false);
-      }
-      return sendMessage(
-        session,
-        isApprove ? 'commands.cave.audit.auditPassed' : 'commands.cave.audit.auditRejected',
-        [],
-        false
-      );
-    }
-
-    // 处理批量审核
-    const data = isApprove ? await FileHandler.readJsonData<CaveObject>(caveFilePath) : null;
-    let processedCount = 0;
-
-    if (isApprove && data) {
-      const oldData = [...data];
-      const newData = [...data];
-
-      await FileHandler.withTransaction([
-        {
-          filePath: caveFilePath,
-          operation: async () => {
-            for (const cave of pendingData) {
-              newData.push({
-                ...cave,
-                cave_id: cave.cave_id,
-                elements: cleanElementsForSave(cave.elements, false)
-              });
-              processedCount++;
-              await idManager.addStat(cave.contributor_number, cave.cave_id);
-            }
-            return FileHandler.writeJsonData(caveFilePath, newData);
-          },
-          rollback: async () => FileHandler.writeJsonData(caveFilePath, oldData)
-        },
-        {
-          filePath: pendingFilePath,
-          operation: async () => FileHandler.writeJsonData(pendingFilePath, []),
-          rollback: async () => FileHandler.writeJsonData(pendingFilePath, pendingData)
-        }
-      ]);
-    } else {
-      // 拒绝审核时，需要将所有ID标记为已删除
-      for (const cave of pendingData) {
-        await idManager.markDeleted(cave.cave_id);
-      }
-
-      await FileHandler.writeJsonData(pendingFilePath, []);
-      // 删除所有被拒绝投稿的媒体文件
-      for (const cave of pendingData) {
-        if (cave.elements) {
-          for (const element of cave.elements) {
-            if ((element.type === 'img' || element.type === 'video') && element.file) {
-              const fullPath = path.join(resourceDir, element.file);
-              if (fs.existsSync(fullPath)) {
-                await fs.promises.unlink(fullPath);
-              }
-            }
-          }
-        }
-        processedCount++;
-      }
-    }
-
-    return sendMessage(session, 'commands.cave.audit.batchAuditResult', [
-      isApprove ? '通过' : '拒绝',
-      processedCount,
-      pendingData.length
-    ], false);
   }
 
   // 注册命令并配置权限检查
@@ -650,43 +492,50 @@ const logger = new Logger('cave');
 
 // 核心类型定义
 export interface Config {
-  manager: string[];
-  number: number;
-  enableAudit: boolean;
-  allowVideo: boolean;
-  videoMaxSize: number;
-  imageMaxSize: number;
-  blacklist: string[];
-  whitelist: string[];
-  enablePagination: boolean;
-  itemsPerPage: number;
-  duplicateThreshold: number;
-  enableDuplicate: boolean;
-  enableMD5: boolean;
+  manager: string[]
+  number: number
+  enableAudit: boolean
+  allowVideo: boolean
+  videoMaxSize: number
+  imageMaxSize: number
+  blacklist: string[]
+  whitelist: string[]
+  enablePagination: boolean
+  itemsPerPage: number
+  duplicateThreshold: number
+  enableDuplicate: boolean
+  enableMD5: boolean
 }
 
 // 定义数据类型接口
 interface BaseElement {
-  type: 'text' | 'img' | 'video';
-  index: number;  // 元素排序索引
+  type: 'text' | 'img' | 'video'
+  index: number  // 元素排序索引
 }
 
 interface TextElement extends BaseElement {
-  type: 'text';
-  content: string; // 文本内容
+  type: 'text'
+  content: string // 文本内容
 }
 
 interface MediaElement extends BaseElement {
-  type: 'img' | 'video';
-  file?: string;     // 保存的文件名
-  fileName?: string; // 原始文件名
-  fileSize?: string; // 文件大小
-  filePath?: string; // 文件路径
+  type: 'img' | 'video'
+  file?: string     // 保存的文件名
+  fileName?: string // 原始文件名
+  fileSize?: string // 文件大小
+  filePath?: string // 文件路径
 }
-type Element = TextElement | MediaElement;
 
-interface CaveObject { cave_id: number; elements: Element[]; contributor_number: string; contributor_name: string }
-interface PendingCave extends CaveObject {}
+type Element = TextElement | MediaElement
+
+export interface CaveObject {
+  cave_id: number
+  elements: Element[]
+  contributor_number: string
+  contributor_name: string
+}
+
+export interface PendingCave extends CaveObject {}
 
 // 工具函数定义
 // session: 会话上下文
@@ -718,24 +567,6 @@ async function sendMessage(
   return '';
 }
 
-// 审核相关功能
-// 发送审核消息给管理员
-async function sendAuditMessage(ctx: Context, config: Config, cave: PendingCave, content: string, session: any) {
-  const auditMessage = `${session.text('commands.cave.audit.title')}\n${content}
-${session.text('commands.cave.audit.from')}${cave.contributor_number}`;
-
-  for (const managerId of config.manager) {
-    const bot = ctx.bots[0];
-    if (bot) {
-      try {
-        await bot.sendPrivateMessage(managerId, auditMessage);
-      } catch (error) {
-        logger.error(session.text('commands.cave.audit.sendFailed', [managerId]));
-      }
-    }
-  }
-}
-
 // 消息构建工具
 // 清理元素数据用于保存
 function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): Element[] {
@@ -762,250 +593,4 @@ function cleanElementsForSave(elements: Element[], keepIndex: boolean = false): 
   });
 
   return keepIndex ? cleanedElements.sort((a, b) => (a.index || 0) - (b.index || 0)) : cleanedElements;
-}
-
-// 处理媒体文件
-async function processMediaFile(filePath: string, type: 'image' | 'video'): Promise<string | null> {
-  const data = await fs.promises.readFile(filePath).catch(() => null);
-  if (!data) return null;
-  return `data:${type}/${type === 'image' ? 'png' : 'mp4'};base64,${data.toString('base64')}`;
-}
-
-// 构建消息内容
-async function buildMessage(cave: CaveObject, resourceDir: string, session?: any): Promise<string> {
-  if (!cave?.elements?.length) {
-    return session.text('commands.cave.error.noContent');
-  }
-
-  // 分离视频元素和其他元素，并确保按index排序
-  const videoElement = cave.elements.find((el): el is MediaElement => el.type === 'video');
-  const nonVideoElements = cave.elements
-    .filter(el => el.type !== 'video')
-    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-
-  // 如果有视频元素，先发送基本信息，然后单独发送视频
-  if (videoElement?.file) {
-    // 构建基本信息
-    const basicInfo = [
-    session.text('commands.cave.message.caveTitle', [cave.cave_id]),
-    session.text('commands.cave.message.contributorSuffix', [cave.contributor_name])
-    ].join('\n');
-
-    // 先发送标题和作者信息
-    await session?.send(basicInfo);
-
-    // 发送视频
-    const filePath = path.join(resourceDir, videoElement.file);
-    const base64Data = await processMediaFile(filePath, 'video');
-    if (base64Data && session) {
-      await session.send(h('video', { src: base64Data }));
-    }
-    return '';
-  }
-
-  // 如果没有视频，按原来的方式处理
-  const lines = [session.text('commands.cave.message.caveTitle', [cave.cave_id])];
-
-  for (const element of nonVideoElements) {
-    if (element.type === 'text') {
-      lines.push(element.content);
-    } else if (element.type === 'img' && element.file) {
-      const filePath = path.join(resourceDir, element.file);
-      const base64Data = await processMediaFile(filePath, 'image');
-      if (base64Data) {
-        lines.push(h('image', { src: base64Data }));
-      }
-    }
-  }
-
-  lines.push(session.text('commands.cave.message.contributorSuffix', [cave.contributor_name]));
-  return lines.join('\n');
-}
-
-// 媒体处理相关函数
-// 从原始内容中提取文本、图片和视频元素
-async function extractMediaContent(
-  originalContent: string,
-  config: Config,
-  session: any
-): Promise<{
-  imageUrls: string[],
-  imageElements: Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>,
-  videoUrls: string[],
-  videoElements: Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>,
-  textParts: Element[]
-}> {
-  const textParts = originalContent
-    .split(/<(img|video)[^>]+>/)
-    .map((text, idx) => text.trim() && ({
-      type: 'text' as const,
-      content: text.replace(/^(img|video)$/, '').trim(),
-      index: idx * 3
-    }))
-    .filter(text => text && text.content);
-
-  const getMediaElements = (type: 'img' | 'video', maxSize: number) => {
-    const regex = new RegExp(`<${type}[^>]+src="([^"]+)"[^>]*>`, 'g');
-    const elements: Array<{ type: typeof type; index: number; fileName?: string; fileSize?: string }> = [];
-    const urls: string[] = [];
-
-    let match;
-    let idx = 0;
-    while ((match = regex.exec(originalContent)) !== null) {
-      const element = match[0];
-      const url = match[1];
-      const fileName = element.match(/file="([^"]+)"/)?.[1];
-      const fileSize = element.match(/fileSize="([^"]+)"/)?.[1];
-
-      if (fileSize) {
-        const sizeInBytes = parseInt(fileSize);
-        if (sizeInBytes > maxSize * 1024 * 1024) {
-          throw new Error(session.text('commands.cave.message.mediaSizeExceeded', [type]));
-        }
-      }
-
-      urls.push(url);
-      elements.push({
-        type,
-        index: type === 'video' ? Number.MAX_SAFE_INTEGER : idx * 3 + 1,
-        fileName,
-        fileSize
-      });
-      idx++;
-    }
-    return { urls, elements };
-  };
-
-  // 分别检查图片和视频
-  const { urls: imageUrls, elements: imageElementsRaw } = getMediaElements('img', config.imageMaxSize);
-  const imageElements = imageElementsRaw as Array<{ type: 'img'; index: number; fileName?: string; fileSize?: string }>;
-  const { urls: videoUrls, elements: videoElementsRaw } = getMediaElements('video', config.videoMaxSize);
-  const videoElements = videoElementsRaw as Array<{ type: 'video'; index: number; fileName?: string; fileSize?: string }>;
-
-  return { imageUrls, imageElements, videoUrls, videoElements, textParts };
-}
-
-// 下载并保存媒体文件到本地
-async function saveMedia(
-  urls: string[],
-  fileNames: (string | undefined)[],
-  resourceDir: string,
-  caveId: number,
-  mediaType: 'img' | 'video',
-  config: Config,
-  ctx: Context,
-  session: any
-): Promise<string[] | null> {  // 修改返回类型
-  const accept = mediaType === 'img' ? 'image/*' : 'video/*';
-  const hashStorage = new HashStorage(path.join(ctx.baseDir, 'data', 'cave'));
-  await hashStorage.initialize();
-
-  // 批量下载和处理文件
-  const downloadPromises = urls.map(async (url, i) => {
-    const fileName = fileNames[i];
-    const ext = path.extname(fileName || url) || (mediaType === 'img' ? '.png' : '.mp4');
-
-    try {
-      const response = await ctx.http(decodeURIComponent(url).replace(/&amp;/g, '&'), {
-        method: 'GET',
-        responseType: 'arraybuffer',
-        timeout: 30000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': accept,
-          'Referer': 'https://qq.com'
-        }
-      });
-
-      if (!response.data) throw new Error('empty_response');
-      const buffer = Buffer.from(response.data);
-
-      // 统一处理图片和视频的文件名和MD5查重
-      const baseName = path.basename(fileName || (mediaType === 'img' ? 'image' : 'video'), ext)
-        .replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
-
-      // 先进行 MD5 查重，如果有重复直接抛出错误
-      if (config.enableMD5) {
-        const files = await fs.promises.readdir(resourceDir);
-        const duplicateFile = files.find(file => file.startsWith(baseName + '_'));
-        if (duplicateFile) {
-          const duplicateCaveId = parseInt(duplicateFile.split('_')[1]);
-          if (!isNaN(duplicateCaveId)) {
-            const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-            const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-            const originalCave = data.find(item => item.cave_id === duplicateCaveId);
-            if (originalCave) {
-              const message = session.text('commands.cave.error.exactDuplicateFound');
-              await session.send(message + await buildMessage(originalCave, resourceDir, session));
-              throw new Error('duplicate_found');
-            }
-          }
-        }
-      }
-
-      // 如果是图片，还需要进行相似度检查
-      if (mediaType === 'img' && config.enableDuplicate) {
-        try {
-          const result = await hashStorage.findDuplicatesFromContent('image', [buffer], config.duplicateThreshold);
-          if (result.length > 0 && result[0] !== null) {
-            const duplicate = result[0];
-            const similarity = duplicate.similarity;
-
-            if (similarity >= config.duplicateThreshold) {
-              const caveFilePath = path.join(ctx.baseDir, 'data', 'cave', 'cave.json');
-              const data = await FileHandler.readJsonData<CaveObject>(caveFilePath);
-              const originalCave = data.find(item => item.cave_id === duplicate.caveId);
-
-              if (originalCave) {
-                const message = session.text('commands.cave.error.similarDuplicateFound',
-                  [(similarity * 100).toFixed(1)]);
-                await session.send(message + await buildMessage(originalCave, resourceDir, session));
-                throw new Error('duplicate_found');
-              }
-            }
-          }
-        } catch (error) {
-          logger.debug(`Skipping duplicate check due to error: ${error.message}`);
-        }
-      }
-
-      // 保存文件
-      const finalFileName = `${caveId}_${baseName}${ext}`;
-      const filePath = path.join(resourceDir, finalFileName);
-      await FileHandler.saveMediaFile(filePath, buffer);
-
-      // 如果是图片且启用了相似度检查，更新hash存储
-      if (mediaType === 'img' && config.enableDuplicate) {
-        try {
-          await hashStorage.updateHash(caveId, 'image', buffer);
-        } catch (error) {
-          logger.debug(`Failed to update image hash: ${error.message}`);
-        }
-      }
-
-      return finalFileName;
-
-    } catch (error) {
-      if (error.message === 'duplicate_found') {
-        throw error;
-      }
-      logger.error(`Failed to download media: ${error.message}`);
-    }
-  });
-
-  try {
-    const results = await Promise.all(downloadPromises);
-
-    // 如果任何一个 Promise 返回 undefined（表示检测到重复），则返回 null
-    if (results.some(result => result === undefined)) {
-      return null;
-    }
-
-    return results.filter(Boolean) as string[];
-  } catch (error) {
-    if (error.message === 'duplicate_found') {
-      return null;
-    }
-    throw error;
-  }
 }
