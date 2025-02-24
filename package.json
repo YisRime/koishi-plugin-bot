@@ -1,19 +1,28 @@
 {
   "name": "koishi-plugin-bot",
-  "description": "个人构建，内容随机同步其他插件，请点击头像查看本人所有插件",
+  "description": "个人构建，内容随机同步其他插件，请不要使用这个插件，点击头像查看本人所有插件",
   "version": "1.4.0",
+  "contributors": [
+    "Yis_Rime <yis_rime@outlook.com>"
+  ],
+  "homepage": "https://github.com/YisRime/koishi-plugin-bot",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YisRime/koishi-plugin-bot.git"
+  },
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
     "dist"
   ],
-  "license": "MIT",
+  "license": "GPL-3.0",
   "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "bot"
   ],
   "devDependencies": {},
   "peerDependencies": {
