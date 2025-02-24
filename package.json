@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-bot",
   "description": "个人构建，内容随机同步其他插件，请点击头像查看本人所有插件",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
