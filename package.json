@@ -17,14 +17,12 @@
     "dist"
   ],
   "license": "GPL-3.0",
-  "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
     "plugin",
     "bot"
   ],
-  "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.18.3",
     "koishi-plugin-adapter-onebot": "^6.1.3"
