@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-bot",
   "description": "个人构建，内容随机同步本人其他插件，点击头像查看本人所有插件",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
   ],
