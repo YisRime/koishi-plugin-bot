@@ -1,85 +1,177 @@
-_config:
-  manager: "Administrator"
-  number: "Cooldown time (seconds)"
-  enableAudit: "Enable moderation"
-  enableTextDuplicate: "Enable text duplicate check"
-  textDuplicateThreshold: "Text similarity threshold (0-1)"
-  enableImageDuplicate: "Enable image duplicate check"
-  imageDuplicateThreshold: "Image similarity threshold (0-1)"
-  imageMaxSize: "Maximum image size (MB)"
-  allowVideo: "Allow video upload"
-  videoMaxSize: "Maximum video size (MB)"
-  enablePagination: "Enable statistics pagination"
-  itemsPerPage: "Items per page"
-  blacklist: "Blacklist (users)"
-  whitelist: "Moderation whitelist (users/groups/channels)"
+config_autolike:
+  $desc: "Auto-like Configuration"
+  adminAccount: "Admin Account"
+  enableNotify: "Enable notification when like is successful"
+  adminOnly: "Only admin can configure auto-like list"
+  enableAutoBatch: "Enable daily automatic batch likes"
+
+config_mute:
+  $desc: "Mute Configuration"
+  sleep:
+    type:
+      $desc: "Sleep Mode"
+      $inner:
+        - "Fixed Duration"
+        - "Until Time"
+        - "Random Duration"
+    duration: "Fixed mute duration (hours)"
+    until: "Mute until time (HH:MM)"
+    min: "Minimum mute duration (hours)"
+    max: "Maximum mute duration (hours)"
+  mute:
+    type:
+      $desc: "Normal Mute Mode"
+      $inner:
+        - "Fixed Duration"
+        - "Random Duration"
+    duration: "Fixed duration (minutes)"
+    min: "Minimum duration (minutes)"
+    max: "Maximum duration (minutes)"
+  allowedTimeRange: "Allowed sleep time range (HH-HH)"
+  maxAllowedDuration: "Maximum normal mute limit (minutes)"
+  enableMessage: "Enable mute notification"
+  enableMuteOthers: "Allow muting others"
+  probability: "Mute success probability"
+
+config_jrrp:
+  $desc: "Daily Luck Configuration"
+  choice:
+    $desc: "Algorithm Selection"
+    $inner:
+      - "Modulo Algorithm"
+      - "Normal Distribution Algorithm"
+      - "Linear Congruential Algorithm"
+  identificationCode: "Identification Code Secret Key"
+  fool:
+    type:
+      $desc: "April Fool's Mode"
+      $inner:
+        - "Off"
+        - "On"
+    date: "Display date (MM-DD) (leave empty to keep enabled)"
+    displayMode:
+      $desc: "Display Mode"
+      $inner:
+        - "Binary"
+        - "Expression"
+    baseNumber: "Expression base number"
+
+config_range:
+  $desc: "Range Configuration"
+  rangeMessages:
+    $desc: "Ranges (max 10, modify text in localization)"
+    $inner: "Set prompts for different ranges"
+  specialMessages:
+    $desc: "Special Values (max 10, modify text in localization)"
+    $inner: "Set prompts for special values"
+  holidayMessages:
+    $desc: "Dates (max 10, modify text in localization)"
+    $inner: "Set prompts for specific dates (MM-DD)"
 
 commands:
-  cave:
-    description: "Echo Cave"
-    usage: "Support adding, drawing, viewing, and managing echo caves"
-    examples: |-
-      Use cave to randomly draw an echo
-      Use -a to add directly or add by reference
-      Use -g to view specific echo
-      Use -r to delete specific echo
-    options:
-      a: "Add echo"
-      g: "View echo"
-      r: "Delete echo"
-      l: "Query submission statistics"
-    pass:
-      description: Approve cave submission
-      usage: |
-        Approve cave submission with specific ID
-        cave.pass <ID> - Approve submission
-        cave.pass all - Approve all pending submissions
-    reject:
-      description: Reject cave submission
-      usage: |
-        Reject cave submission with specific ID
-        cave.reject <ID> - Reject submission
-        cave.reject all - Reject all pending submissions
-    add:
-      noContent: "Please send content within one minute"
-      operationTimeout: "Operation timeout, addition cancelled"
-      videoDisabled: "Video upload not allowed"
-      submitPending: "Submission successful, ID is ({0})"
-      addSuccess: "Added successfully, ID is ({0})"
-      mediaSizeExceeded: "{0} file size exceeds limit"
-      localFileNotAllowed: "Local file path detected, cannot save"
-    remove:
-      noPermission: "You don't have permission to delete others' echos"
-      deletePending: "Delete (pending review)"
-      deleted: "Deleted"
-    list:
-      pageInfo: "Page {0} / {1}"
-      header: "Currently there are {0} echos:"
-      totalItems: "User {0} has submitted {1} items:"
-      idsLine: "{0}"
-    audit:
-      noPending: "No pending echos for review"
-      pendingNotFound: "Pending echo not found"
-      pendingResult: "{0}, {1} pending echos remaining: [{2}]"
-      auditPassed: "Approved"
-      auditRejected: "Rejected"
-      batchAuditResult: "{0} {1}/{2} echos"
-      title: "Pending echos:"
-      from: "Submitted by:"
-      sendFailed: "Failed to send moderation message, cannot contact administrator {0}"
-    error:
-      noContent: "Echo content is empty"
-      getCave: "Failed to get echo"
-      noCave: "No echos available"
-      invalidId: "Please enter a valid echo ID"
-      notFound: "Echo not found"
-      exactDuplicateFound: "Found exactly identical"
-      similarDuplicateFound: "Found {0}% similar"
-      addFailed: "Add failed, please try again later."
-    message:
-      blacklisted: "You have been blacklisted"
-      managerOnly: "This operation is limited to administrators only"
-      cooldown: "Group chat cooling down... Please try again in {0} seconds"
-      caveTitle: "Echo Cave —— ({0})"
-      contributorSuffix: "—— {0}"
-      mediaSizeExceeded: "{0} file size exceeds limit"
+  sleep:
+    description: "Quality Sleep"
+    usage: |-
+      Mute for specified duration
+      Supports three modes: Fixed Duration, Until Time, Random Duration
+    messages:
+      success: "Good night, sweet dreams!"
+      failed: "Failed, please check if bot has permissions"
+    errors:
+      invalid_time: "Invalid time format"
+      not_allowed_time: "Current time is not within allowed range ({0})"
+
+  zanwo:
+    description: "Like"
+    usage: |-
+      Automatically like user
+      zanwo - Like yourself
+      zanwo.user @user - Like specified user
+      zanwo.list - View like list
+      zanwo.add @user - Add to like list
+      zanwo.remove @user - Remove from like list
+    messages:
+      list: "Current like list: {0}"
+      add_success: "Added {0} to like list"
+      add_failed: "Add failed"
+      remove_success: "Removed {0} from like list"
+      remove_failed: "Remove failed"
+      no_targets: "Like list is empty"
+      success: "Like complete, remember to like back {0}~"
+      like_failed: "Like failed"
+      target_not_found: "User not found"
+      permission_denied: "Admin only"
+
+  mute:
+    description: "Random Mute"
+    usage: |-
+      mute [duration] - Random mute
+      mute.me [duration] - Mute yourself
+      mute.user @user [duration] - Mute specified user
+    messages:
+      errors:
+        no_valid_members: "No valid members to mute"
+        target_not_found: "User not found"
+        duration_too_long: "Mute duration ({0} minutes) exceeds limit"
+      notify:
+        self_muted: "You have been muted for {0} minutes {1} seconds"
+        target_muted: "Muted {0} for {1} minutes {2} seconds"
+        others_disabled: "Muting others is disabled"
+
+  jrrp:
+    description: "Daily Luck"
+    usage: |-
+      jrrp - Check today's luck
+      jrrp.date <date> - Check luck for specific date
+      jrrp.score <score> - Find date for specific score
+    messages:
+      result: "Your luck today is: {0}"
+      prompt: "Would you like to check your luck today?"
+      cancel: "Alright, have a nice day!"
+      error: "Error calculating daily luck"
+      found_date: "Your next {0} points will appear on {1}"
+      not_found: "You won't get {0} points in the next year"
+      invalid_number: "Please enter an integer between 0-100"
+      range:
+        1: "...(It's percentile)"
+        2: "?! No way..."
+        3: "! Ugh..."
+        4: "! Barely acceptable...?"
+        5: "! It's okay, it's okay."
+        6: "! Lucky today!"
+        7: "! Excellent!"
+        8: "! Almost 100..."
+        9: "Spare"
+        10: "Spare"
+      special:
+        1: "! Terrible!"
+        2: "! Fifty-fifty..."
+        3: "! 100! 100!!!!"
+        4: "Spare"
+        5: "Spare"
+        6: "Spare"
+        7: "Spare"
+        8: "Spare"
+        9: "Spare"
+        10: "Spare"
+      date:
+        1: "Happy New Year!"
+        2: "Merry Christmas!"
+        3: "Spare"
+        4: "Spare"
+        5: "Spare"
+        6: "Spare"
+        7: "Spare"
+        8: "Spare"
+        9: "Spare"
+        10: "Spare"
+      identification_mode:
+        invalid_code: "Invalid identification code format! Please use format XXXX-XXXX-XXXX-XXXX"
+        bind_success: "Identification code bound successfully!"
+        unbind_success: "Identification code unbound/unbinding successful!"
+        already_bound: "You've already bound this identification code"
+        rebind_success: "Identification code rebinding successful!"
+        perfect_score_first: "Hidden theme 'Lucky Pink' unlocked!\nGo to PCL2->More->Toolbox->Daily Luck to confirm"
+        zero_prompt: "Before viewing results, please agree to the following terms:\n1. I acknowledge PCL2's Daily Luck feature is completely bug-free.\n2. PCL2 is not responsible for any indirect property damage (e.g., smashing computers).\n(y/n)"
+    errors:
+      invalid_date: "Invalid date format, please use YYYY-MM-DD or MM-DD format"

@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-bot",
-  "description": "个人构建，内容随机同步其他插件，请不要使用这个插件，点击头像查看本人所有插件",
+  "description": "个人构建，内容随机同步本人其他插件，点击头像查看本人所有插件",
   "version": "1.4.1",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
@@ -27,11 +27,9 @@
   "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.18.3",
-    "sharp": "^0.33.5",
     "koishi-plugin-adapter-onebot": "^6.1.3"
   },
   "dependencies": {
-    "sharp": "^0.33.5",
     "koishi-plugin-adapter-onebot": "^6.1.3"
   }
 }
