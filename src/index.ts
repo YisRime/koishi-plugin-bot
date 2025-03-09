@@ -1,403 +1,252 @@
-import { Context, Schema } from 'koishi'
+import { Context, Schema, segment, h } from 'koishi'  // 添加h导入
+import axios from 'axios'
+import fs from 'fs'
+import path from 'path'
+import { formatPlayerInfo } from './formatter'
+import { formatPlayerInfoToHtml, renderToImage } from './renderer'
 
-export const name = 'statistical-ranking'
-export const inject = { required: ['database'] }
+export const name = 'bot'
+export const inject = {
+  optional: ['puppeteer'] // 标记puppeteer为可选服务
+}
 
-// 配置定义
 export interface Config {
-  enableLegacyImport?: boolean
+  bindingsFile?: string
+  enableImageRendering?: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
-  enableLegacyImport: Schema.boolean().default(false).description('启用统计数据导入')
+  bindingsFile: Schema.string().default('ddnet_bindings.json').description('存储用户绑定信息的 JSON 文件名'),
+  enableImageRendering: Schema.boolean().default(true).description('是否启用图片渲染功能')
 })
 
-// 类型定义
-declare module 'koishi' {
-  interface Tables {
-    'analytics.stat': StatRecord
-    'analytics.command': LegacyCommandRecord
-    binding: BindingRecord
-  }
-}
-
-interface StatRecord {
-  type: 'command' | 'message'
-  platform: string
-  channelId: string
-  userId: string
-  command?: string
-  count: number
-  lastTime: Date
-}
-
-interface LegacyCommandRecord {
-  name: string
-  userId: string
-  channelId: string
-  platform?: string
-  date: number
-  hour: number
-  count: number
-}
-
-interface BindingRecord {
-  pid: string
-  platform: string
-  aid: number
-  bid: number
-}
-
-// 工具函数
-const utils = {
-  async getName(session: any, id: string, type: 'user' | 'guild'): Promise<string> {
-    try {
-      if (type === 'user') {
-        const info = await session.bot.getGuildMember?.(session.channelId, id)
-        return info?.nickname || info?.username || id
-      } else {
-        const guilds = await session.bot.getGuildList()
-        const guild = (Array.isArray(guilds) ? guilds : [guilds])
-          .find(g => g.id === id)
-        return guild?.name || id
-      }
-    } catch {
-      return id
-    }
-  },
-
-  formatCount(count: number): string {
-    return count.toString().padStart(6, ' ')
-  },
-
-  formatCommand(command: string): string {
-    return command.padEnd(15, ' ')
-  },
-
-  formatTimeAgo(date: Date): string {
-    if (isNaN(date.getTime())) {
-      return '未知时间'
-    }
-
-    const now = Date.now()
-    if (date.getTime() > now) {
-      date = new Date()
-    }
-
-    const diff = Math.max(0, now - date.getTime())
-    if (diff < 300000) return '一会前'
-
-    const units = [
-      { div: 31536000000, unit: '年' },
-      { div: 2592000000, unit: '月' },
-      { div: 86400000, unit: '天' },
-      { div: 3600000, unit: '小时' },
-      { div: 60000, unit: '分钟' }
-    ]
-
-    const parts = []
-    let remaining = diff
-
-    for (const { div, unit } of units) {
-      const val = Math.floor(remaining / div)
-      if (val > 0) {
-        parts.push(`${val} ${unit}`)
-        remaining %= div
-        if (parts.length === 2) break
-      }
-    }
-
-    return parts.length ? parts.join(' ') + '前' : '一会前'
-  }
-}
-
-// 数据库操作
-const database = {
-  initialize(ctx: Context) {
-    ctx.model.extend('analytics.stat', {
-      type: 'string',
-      platform: 'string',
-      channelId: 'string',
-      userId: 'string',
-      command: 'string',
-      count: 'unsigned',
-      lastTime: 'timestamp',
-    }, {
-      primary: ['type', 'platform', 'channelId', 'userId', 'command'],
-    })
-  },
-
-  async saveRecord(ctx: Context, data: Partial<StatRecord>) {
-    if (!data.type || !data.platform || !data.channelId || !data.userId) {
-      ctx.logger.warn('saveRecord: missing required fields', data)
-      return
-    }
-
-    const query = {
-      type: data.type,
-      platform: data.platform,
-      channelId: data.channelId,
-      userId: data.userId,
-      command: data.type === 'command' ? data.command || '' : '',
-    }
-
-    try {
-      const existing = await ctx.database.get('analytics.stat', query)
-      if (existing.length) {
-        await ctx.database.set('analytics.stat', query, {
-          count: existing[0].count + 1,
-          lastTime: new Date(),
-        })
-      } else {
-        await ctx.database.create('analytics.stat', {
-          ...query,
-          count: 1,
-          lastTime: new Date(),
-        })
-      }
-    } catch (e) {
-      ctx.logger.error('Failed to save stat record:', e)
-    }
-  },
-
-  async importLegacyData(ctx: Context, session?: any, overwrite = false) {
-    const hasLegacyTable = Object.keys(ctx.database.tables).includes('analytics.command')
-    if (!hasLegacyTable) {
-      throw new Error('未找到历史数据')
-    }
-
-    const legacyCommands = await ctx.database.get('analytics.command', {})
-    session.send(`发现 ${legacyCommands.length} 条历史命令记录`)
-
-    if (overwrite) {
-      await ctx.database.remove('analytics.stat', { type: 'command' })
-    }
-
-    const bindings = await ctx.database.get('binding', {})
-    const userIdMap = new Map<string, string>()
-    for (const binding of bindings) {
-      const key = `${binding.platform}:${binding.aid}`
-      if (binding.pid) userIdMap.set(key, binding.pid)
-    }
-
-    let importedCount = 0
-
-    for (const cmd of legacyCommands) {
-      const platform = cmd.platform || ''
-      const key = `${platform}:${cmd.userId}`
-      const realUserId = userIdMap.get(key) || cmd.userId
-      const command = cmd.name || ''
-
-      const query = {
-        type: 'command' as const,
-        platform,
-        channelId: cmd.channelId,
-        userId: realUserId,
-        command,
-      }
-
-      try {
-        if (!overwrite) {
-          const existing = await ctx.database.get('analytics.stat', query)
-          if (existing.length) {
-            const timestamp = cmd.date * 86400000 + cmd.hour * 3600000
-            const validTime = new Date(timestamp)
-            const now = Date.now()
-            const importTime = isNaN(validTime.getTime()) || validTime.getTime() > now
-              ? new Date()
-              : validTime
-
-            await ctx.database.set('analytics.stat', query, {
-              count: existing[0].count + (cmd.count || 1),
-              lastTime: new Date(Math.max(
-                existing[0].lastTime.getTime(),
-                importTime.getTime()
-              ))
-            })
-            importedCount++
-            continue
-          }
-        }
-
-        const timestamp = cmd.date * 86400000 + cmd.hour * 3600000
-        const validTime = new Date(timestamp)
-        const now = Date.now()
-        const lastTime = isNaN(validTime.getTime()) || validTime.getTime() > now
-          ? new Date()
-          : validTime
-
-        await ctx.database.create('analytics.stat', {
-          ...query,
-          count: cmd.count || 1,
-          lastTime
-        })
-        importedCount++
-      } catch (e) {
-        ctx.logger.error('Failed to import record:', e, query)
-      }
-
-    }
-  },
-
-  async clearStats(ctx: Context, options: {
-    type?: 'command' | 'message'
-    userId?: string
-    platform?: string
-    channelId?: string
-    command?: string
-  }) {
-    const query: any = {}
-    for (const [key, value] of Object.entries(options)) {
-      if (value) query[key] = value
-    }
-    const result = await ctx.database.remove('analytics.stat', query)
-    return Number(result ?? 0)
-  }
+// 简化的绑定数据类型，使用对象而非数组
+interface BindingsData {
+  [userId: string]: string  // userId -> nickname 映射
 }
 
 export async function apply(ctx: Context, config: Config) {
-  database.initialize(ctx)
+  // JSON 文件路径
+  const bindingsFilePath = path.resolve(ctx.baseDir, config.bindingsFile || 'ddnet_bindings.json')
 
-  ctx.on('command/before-execute', ({session, command}) =>
-    database.saveRecord(ctx, {
-      type: 'command',
-      platform: session.platform,
-      channelId: session.channelId,
-      userId: session.userId,
-      command: command.name
-    }))
-
-  ctx.on('message', (session) =>
-    database.saveRecord(ctx, {
-      type: 'message',
-      platform: session.platform,
-      channelId: session.channelId,
-      userId: session.userId
-    }))
-
-  const stat = ctx.command('stat', '查看命令统计')
-    .option('user', '-u [user:string] 指定用户统计')
-    .option('group', '-g [group:string] 指定群组统计')
-    .option('platform', '-p [platform:string] 指定平台统计')
-    .option('command', '-c [command:string] 指定命令统计')
-    .action(async ({options}) => {
-      const query: any = { type: 'command' }
-      if (options.user) query.userId = options.user
-      if (options.group) query.channelId = options.group
-      if (options.platform) query.platform = options.platform
-      if (options.command) query.command = options.command
-
-      const records = await ctx.database.get('analytics.stat', query)
-      if (!records.length) return '未找到相关记录'
-
-      const conditions = []
-      if (options.user) conditions.push(`用户 ${options.user}`)
-      if (options.group) conditions.push(`群组 ${options.group}`)
-      if (options.platform) conditions.push(`平台 ${options.platform}`)
-      if (options.command) conditions.push(`命令 ${options.command}`)
-      const title = conditions.length
-        ? `${conditions.join(' ')} 命令统计 ——`
-        : '全局命令统计 ——'
-
-      // 修改统计逻辑，将子命令合并到主命令
-      const stats = records.reduce((map, record) => {
-        // 提取主命令名称（去掉子命令部分）
-        const mainCommand = record.command.split('.')[0]
-        const curr = map.get(mainCommand) || { count: 0, lastTime: record.lastTime }
-        curr.count += record.count
-        if (record.lastTime > curr.lastTime) curr.lastTime = record.lastTime
-        map.set(mainCommand, curr)
-        return map
-      }, new Map())
-
-      const lines = Array.from(stats.entries())
-        .sort((a, b) => b[1].count - a[1].count)
-        .map(([key, {count, lastTime}]) =>
-          `${utils.formatCommand(key)}${utils.formatCount(count)} 次  ${utils.formatTimeAgo(lastTime).padEnd(20, ' ')}`)
-
-      return title + '\n\n' + lines.join('\n')
-    })
-
-  stat.subcommand('.clear', '清除统计数据')
-    .option('type', '-t <type:string> 指定清除类型', { authority: 3 })
-    .option('user', '-u [user:string] 指定用户')
-    .option('platform', '-p [platform:string] 指定平台')
-    .option('group', '-g [group:string] 指定群组')
-    .option('command', '-c [command:string] 指定命令')
-    .action(async ({ options }) => {
-      const type = options.type as 'command' | 'message'
-      if (type && !['command', 'message'].includes(type)) {
-        return '无效类型'
-      }
-
-      await database.clearStats(ctx, {
-        type,
-        userId: options.user,
-        platform: options.platform,
-        channelId: options.group,
-        command: options.command
-      })
-
-      const conditions = []
-      if (type) conditions.push(type === 'command' ? '命令' : '消息')
-      if (options.user) conditions.push(`用户 ${options.user}`)
-      if (options.platform) conditions.push(`平台 ${options.platform}`)
-      if (options.group) conditions.push(`群组 ${options.group}`)
-      if (options.command) conditions.push(`命令 ${options.command}`)
-
-      return conditions.length
-        ? `已删除${conditions.join('、')}的统计记录`
-        : '已删除所有统计记录'
-    })
-
-  if (config.enableLegacyImport) {
-    stat.subcommand('.import', '导入历史统计数据')
-      .option('force', '-f 覆盖现有数据')
-      .action(async ({ session, options }) => {
-        try {
-          await database.importLegacyData(ctx, session, options.force)
-          return '导入完成'
-        } catch (e) {
-          return `导入失败：${e.message}`
-        }
-      })
+  // 检查是否支持图片渲染
+  const hasRendering = config.enableImageRendering && ctx.puppeteer != null
+  if (config.enableImageRendering && !ctx.puppeteer) {
+    ctx.logger.warn('未检测到puppeteer服务，图片渲染功能将不可用')
   }
 
-  stat.subcommand('.user', '查看发言统计')
-    .option('user', '-u [user:string] 指定用户统计')
-    .option('group', '-g [group:string] 指定群组统计')
-    .option('platform', '-p [platform:string] 指定平台统计')
-    .action(async ({session, options}) => {
-      const query: any = { type: 'message' }
-      if (options.user) query.userId = options.user
-      if (options.group) query.channelId = options.group
-      if (options.platform) query.platform = options.platform
+  // 加载绑定数据
+  function loadBindings(): BindingsData {
+    try {
+      if (fs.existsSync(bindingsFilePath)) {
+        const data = fs.readFileSync(bindingsFilePath, 'utf8')
+        return JSON.parse(data) as BindingsData
+      }
+    } catch (error) {
+      ctx.logger.error(`Failed to load bindings file: ${error}`)
+    }
+    return {}  // 返回空对象，而不是空数组
+  }
 
-      const records = await ctx.database.get('analytics.stat', query)
-      if (!records.length) return '未找到相关记录'
+  // 保存绑定数据
+  function saveBindings(data: BindingsData): void {
+    try {
+      const dirPath = path.dirname(bindingsFilePath)
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true })
+      }
+      fs.writeFileSync(bindingsFilePath, JSON.stringify(data, null, 2), 'utf8')
+    } catch (error) {
+      ctx.logger.error(`Failed to save bindings file: ${error}`)
+    }
+  }
 
-      const conditions = []
-      if (options.user) conditions.push(`用户 ${options.user}`)
-      if (options.group) conditions.push(`群组 ${options.group}`)
-      if (options.platform) conditions.push(`平台 ${options.platform}`)
-      const title = conditions.length
-        ? `${conditions.join(' ')} 发言统计 ——`
-        : '全局发言统计 ——'
+  // 获取绑定昵称 - 简化版本
+  function getBoundNickname(userId: string): string | null {
+    const data = loadBindings()
+    return data[userId] || null
+  }
 
-      const stats = records.reduce((map, record) => {
-        const key = record.userId
-        const curr = map.get(key) || { count: 0, lastTime: record.lastTime }
-        curr.count += record.count
-        if (record.lastTime > curr.lastTime) curr.lastTime = record.lastTime
-        map.set(key, curr)
-        return map
-      }, new Map())
+  // 绑定昵称 - 简化版本
+  function bindNickname(userId: string, nickname: string): void {
+    const data = loadBindings()
+    data[userId] = nickname
+    saveBindings(data)
+  }
 
-      const lines = await Promise.all(Array.from(stats.entries())
-        .sort((a, b) => b[1].count - a[1].count)
-        .map(async ([key, {count, lastTime}]) =>
-          `${await utils.getName(session, key, 'user')}: ${count}条（${utils.formatTimeAgo(lastTime)}）`))
+  // 解除绑定 - 简化版本
+  function unbindNickname(userId: string): boolean {
+    const data = loadBindings()
+    if (userId in data) {
+      delete data[userId]
+      saveBindings(data)
+      return true
+    }
+    return false
+  }
 
-      return title + '\n' + lines.join('\n')
+  // 查询玩家数据的核心函数
+  async function queryPlayer(playerName: string): Promise<any> {
+    const url = `https://ddnet.org/players/?json2=${encodeURIComponent(playerName)}`
+    const response = await axios.get(url)
+    const data = response.data
+
+    if (!data || !data.player) {
+      throw new Error(`未找到玩家 ${playerName} 的信息`)
+    }
+
+    // 检查查询的玩家名是否与返回的玩家名匹配（不区分大小写）
+    if (data.player.toLowerCase() !== playerName.toLowerCase()) {
+      throw new Error(`未找到玩家 ${playerName} 的信息，API 返回的是 ${data.player} 的信息`)
+    }
+
+    return data
+  }
+
+  // 处理图片渲染请求
+  async function handleImageRequest(data: any, session: any): Promise<h> {
+    await session.send(`正在为您生成 ${data.player} 的信息图，请稍候...`)
+
+    // 将数据转换为HTML，并渲染为图片
+    const html = formatPlayerInfoToHtml(data)
+    const imageBuffer = await renderToImage(html, ctx)
+
+    // 使用h.image发送图片
+    return h.image(imageBuffer, 'image/png')
+  }
+
+  // 添加 DDNet 玩家查询命令组
+  const cmd = ctx.command('ddrnet', 'DDNet 玩家信息查询')
+    .action(async () => {
+      return '请使用子命令：\n- ddrnet <玩家名> - 查询指定玩家信息\n- ddrnet.bind <玩家名> - 绑定玩家昵称\n- ddrnet.unbind - 解除绑定'
+    })
+
+  // 查询命令
+  cmd.subcommand('.query <player:string>', '查询 DDNet 玩家信息')
+    .option('image', '-i 以图片形式显示结果')
+    .alias('')  // 允许直接使用 ddrnet <玩家名> 进行查询
+    .action(async ({ session, options }, player) => {
+      // 如果没有提供玩家名，尝试使用绑定的昵称
+      if (!player) {
+        if (!session?.userId) {
+          return '请输入要查询的玩家名称或先绑定您的 DDNet 玩家名'
+        }
+
+        const boundNickname = getBoundNickname(session.userId)
+        if (!boundNickname) {
+          return '您尚未绑定 DDNet 玩家名，请使用 ddrnet.bind <玩家名> 进行绑定，或直接指定要查询的玩家名'
+        }
+        player = boundNickname
+      }
+
+      try {
+        // 查询玩家数据
+        const data = await queryPlayer(player)
+
+        // 检查是否需要渲染图片
+        const useImage = options.image && hasRendering
+
+        if (useImage) {
+          try {
+            return await handleImageRequest(data, session)
+          } catch (error) {
+            ctx.logger.error('生成图片失败:', error)
+            // 图片渲染失败时回退到文本模式
+            await session.send('图片生成失败，将以文本形式显示数据...')
+            return formatPlayerInfo(data)
+          }
+        } else {
+          // 返回文本格式
+          return formatPlayerInfo(data)
+        }
+      } catch (error) {
+        ctx.logger.error('查询失败:', error)
+        return typeof error === 'object' && error.message ? error.message : '查询失败，请稍后再试'
+      }
+    })
+
+  // 绑定命令
+  cmd.subcommand('.bind <player:string>', '绑定 DDNet 玩家名称')
+    .action(async ({ session }, player) => {
+      if (!player) {
+        return '请输入要绑定的玩家名称'
+      }
+
+      if (!session?.userId) {
+        return '无法识别您的用户信息，绑定失败'
+      }
+
+      try {
+        // 验证玩家是否存在
+        const url = `https://ddnet.org/players/?json2=${encodeURIComponent(player)}`
+        const response = await axios.get(url)
+        const data = response.data
+
+        if (!data || !data.player) {
+          return `未找到玩家 ${player}，绑定失败`
+        }
+
+        // 使用 API 返回的准确玩家名进行绑定
+        const exactPlayerName = data.player
+
+        // 保存绑定信息
+        bindNickname(session.userId, exactPlayerName)
+
+        return `成功将您的账号与 DDNet 玩家 ${exactPlayerName} 绑定`
+      } catch (error) {
+        return '绑定失败，请稍后再试'
+      }
+    })
+
+  // 解除绑定命令
+  cmd.subcommand('.unbind', '解除 DDNet 玩家名称绑定')
+    .action(async ({ session }) => {
+      if (!session?.userId) {
+        return '无法识别您的用户信息，解绑失败'
+      }
+
+      const boundNickname = getBoundNickname(session.userId)
+      if (!boundNickname) {
+        return '您尚未绑定 DDNet 玩家名'
+      }
+
+      if (unbindNickname(session.userId)) {
+        return `已成功解除与玩家 ${boundNickname} 的绑定`
+      } else {
+        return '解绑失败，请稍后再试'
+      }
+    })
+
+  // 图片查询命令别名 - 修复参数传递
+  cmd.subcommand('.image <player:string>', '以图片形式查询 DDNet 玩家信息')
+    .alias('.img')
+    .action(async ({ session }, player) => {
+      try {
+        // 如果没有提供玩家名，尝试使用绑定的昵称
+        if (!player && session?.userId) {
+          const boundNickname = getBoundNickname(session.userId)
+          if (boundNickname) {
+            player = boundNickname
+          }
+        }
+
+        if (!player) {
+          return '请输入要查询的玩家名称或先绑定您的 DDNet 玩家名'
+        }
+
+        // 检查是否支持图片渲染
+        if (!hasRendering) {
+          return '抱歉，图片渲染功能不可用，请安装puppeteer服务'
+        }
+
+        // 查询玩家数据
+        const data = await queryPlayer(player)
+
+        // 直接调用图片渲染处理
+        return await handleImageRequest(data, session)
+      } catch (error) {
+        ctx.logger.error('图片查询失败:', error)
+        return typeof error === 'object' && error.message ? error.message : '查询失败，请稍后再试'
+      }
     })
 }
