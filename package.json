@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-bot",
-  "description": "个人构建，内容随机同步本人其他插件，点击头像查看本人所有插件",
+  "description": "个人自用测试插件，点击头像查看本人所有插件",
   "version": "1.4.3",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
@@ -23,11 +23,8 @@
     "plugin",
     "bot"
   ],
+  "devDependencies": {},
   "peerDependencies": {
-    "koishi": "^4.18.3",
-    "axios": "1.8.2"
-  },
-  "dependencies": {
-    "axios": "1.8.2"
+    "koishi": "^4.18.7"
   }
 }
