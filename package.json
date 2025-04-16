@@ -23,7 +23,6 @@
     "plugin",
     "bot"
   ],
-  "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.18.7"
   }
