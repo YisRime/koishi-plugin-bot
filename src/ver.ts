@@ -106,7 +106,7 @@ async function sendUpdateNotification(ctx: Context, targets: UpdateTarget[], ver
  * @returns {void}
  */
 export function registerVer(ctx: Context, mc: Command) {
-  mc.subcommand('ver', '查询 Minecraft 最新版本')
+  mc.subcommand('.ver', '查询 Minecraft 最新版本')
     .action(async () => {
       try {
         const { release, snapshot } = await getLatestVersion(ctx)

@@ -148,12 +148,12 @@ export function registerPlayer(ctx: Context, parent: any) {
         const profile = await fetchPlayerProfile(ctx, username);
         const modelType = profile.skin.model === 'slim' ? '纤细' : '经典';
         return h('message', [
-          h.text(`\n玩家: ${profile.name} [${modelType}] `), profile.cape ? h.text('披风') : null,
+          h.text(`\n玩家: ${profile.name} [${modelType}] `), profile.cape && h.text('披风'),
           h.text(`\nUUID: ${profile.uuidDashed}`),
           h.text('\n在游戏中使用 "/give @p minecraft:xxx" 来获取玩家头颅'),
           h.text(`\n1.12及之前:skull 1 3 {SkullOwner:"${profile.name}"}`),
           h.text(`\n1.13及之后:player_head{SkullOwner:"${profile.name}"}`)
-        ].filter(Boolean));
+        ]);
       } catch (error) {
         return error.message;
       }
