@@ -46,8 +46,8 @@ export const Config: Schema<Config> = Schema.intersect([
       { type: 'bedrock', url: 'https://api.mcsrvstat.us/bedrock/2/${address}' }
     ]).role('table'),
     serverTemplate: Schema.string().role('textarea')
-    .description('服务器信息模板 (使用{占位符}替换服务器数据)')
-    .default('{name}\n{icon}\n{motd}\n版本: {version} [{edition}]\n游戏模式: {gamemode}\n服务器软件: {software}\n▸ 在线人数: {playercount} ({playersonline}/{playersmax})\n▸ 连接延迟: {pingms}ms\n\n▌技术信息\n▸ IP地址: {ip}\n▸ SRV记录: {srv}\n▸ 服务器ID: {serverid}\n▸ EULA状态: {eulablock}\n在线玩家 ({playerscount})\n{playerlist:15}\n插件列表 ({pluginscount})\n{pluginslist:10}\n模组列表 ({modscount})\n{modslist:10}')
+    .description('服务器信息模板（使用{...}替换数据，[...]包围条件性显示内容）')
+    .default('{icon}\n{name}\n{motd}\n{version} | {online}/{max} | {ping}ms\nIP: {ip}\nSRV: {srv}\n{edition} {gamemode} {software} {serverid} {eulablock}[\n在线玩家({playercount}):\n{playerlist:10}][\n插件列表({plugincount}):\n{pluginlist:10}][\n模组列表({modcount}):\n{modlist:10}]')
   }).description('服务器查询配置')
 ])
 

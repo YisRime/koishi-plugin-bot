@@ -157,7 +157,7 @@ function formatServerStatus(status: ServerStatus, config: Config) {
       .map(i => i.version ? `${i.name}-${i.version}` : i.name)
       .join(', ') + (show < items.length ? '...' : '');
   };
-  // 各部分内容生成器
+  // 各部分内容生成
   const parts = {
     name: () => `${status.host}:${status.port}`,
     ip: () => status.ip_address,
@@ -165,34 +165,40 @@ function formatServerStatus(status: ServerStatus, config: Config) {
     icon: () => status.icon?.startsWith('data:image/png;base64,') ? h.image(status.icon).toString() : '',
     motd: () => status.motd,
     version: () => status.version?.name_clean || '未知',
-    playersonline: () => `${status.players.online ?? 0}`,
-    playersmax: () => `${status.players.max ?? 0}`,
-    playercount: () => `${status.players.online ?? 0}/${status.players.max ?? 0}`,
-    pingms: () => status.retrieved_at ? `${Date.now() - status.retrieved_at}` : '',
+    online: () => `${status.players.online ?? 0}`,
+    max: () => `${status.players.max ?? 0}`,
+    ping: () => status.retrieved_at ? `${Date.now() - status.retrieved_at}` : '',
     software: () => status.software,
     edition: () => status.edition ? { MCPE: '基岩版', MCEE: '教育版' }[status.edition] || status.edition : '',
     gamemode: () => status.gamemode,
     eulablock: () => status.eula_blocked ? '已被封禁' : '',
     serverid: () => status.server_id,
     playerlist: (limit?: number) => formatList(status.players.list, limit),
-    playerscount: () => `${status.players.list?.length || 0}`,
-    pluginslist: (limit?: number) => formatList(status.plugins, limit),
-    pluginscount: () => `${status.plugins?.length || 0}`,
-    modslist: (limit?: number) => formatList(status.mods, limit),
-    modscount: () => `${status.mods?.length || 0}`
+    playercount: () => `${status.players.list?.length || 0}`,
+    pluginlist: (limit?: number) => formatList(status.plugins, limit),
+    plugincount: () => `${status.plugins?.length || 0}`,
+    modlist: (limit?: number) => formatList(status.mods, limit),
+    modcount: () => `${status.mods?.length || 0}`
   };
   // 使用模板格式化输出
   const template = config.serverTemplate || `${status.host}:${status.port} - ${status.version?.name_clean || '未知'}`;
-  // 替换占位符并清理结果
-  return template.match(/\{([^{}]+)\}/g)?.reduce((result, placeholder) => {
-    const [name, limitStr] = placeholder.slice(1, -1).split(':');
-    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
-    const text = parts[name]?.(limit);
-    return !text
-      ? result.replace(new RegExp(`\\s*${placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`), '')
-      : result.replace(placeholder, text);
-  }, template)
-  .trim();
+  // 替换占位符
+  const replacePlaceholders = (text: string) => {
+    return text.replace(/\{([^{}]+)\}/g, (match, content) => {
+      const [name, limitStr] = content.split(':');
+      const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+      const value = parts[name]?.(limit) || '';
+      return value;
+    });
+  };
+  // 先替换所有占位符
+  let result = replacePlaceholders(template);
+  // 处理条件性方括号，如果内容为空则整段不显示
+  result = result.replace(/\[([\s\S]*?)\]/g, (_, content) => {
+    return content.trim() ? content : '';
+  });
+  // 清理多余空行
+  return result.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**
