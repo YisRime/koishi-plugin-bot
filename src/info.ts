@@ -9,7 +9,7 @@ import { Config } from './index'
  * @property {number} port - 服务器端口
  * @property {string|null} [ip_address] - 服务器解析后的 IP 地址
  * @property {boolean} [eula_blocked] - 服务器是否因违反 EULA 被封禁
- * @property {number} [retrieved_at] - 信息获取时间戳
+ * @property {number} [ping] - 延迟时间(毫秒)
  * @property {object} [version] - 服务器版本信息
  * @property {string} [version.name_clean] - 清理过的版本名称
  * @property {string|null} [version.name] - 原始版本名称
@@ -34,7 +34,7 @@ interface ServerStatus {
   port: number
   ip_address?: string | null
   eula_blocked?: boolean
-  retrieved_at?: number
+  ping?: number
   version?: { name_clean?: string, name?: string | null }
   players: { online: number | null, max: number | null, list?: string[] }
   motd?: string
@@ -105,11 +105,19 @@ async function fetchServerStatus(server: string, forceType: 'java' | 'bedrock', 
     for (const apiUrl of apiEndpoints) {
       try {
         const requestUrl = apiUrl.replace('${address}', address);
+        const startTime = Date.now();
         const response = await fetch(requestUrl, {
           headers: {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'},
           method: 'GET'
         });
-        if (response.ok) return normalizeApiResponse(await response.json(), address, serverType);
+        const endTime = Date.now();
+        const pingTime = endTime - startTime;
+        if (response.ok) {
+          const data = await response.json();
+          const result = normalizeApiResponse(data, address, serverType);
+          result.ping = pingTime;
+          return result;
+        }
         errors.push(`${requestUrl} 请求失败: ${response.status}`);
       } catch (error) {
         errors.push(`${apiUrl.replace('${address}', address)} 连接错误: ${error.message}`);
@@ -149,8 +157,6 @@ function normalizeApiResponse(data: any, address: string, serverType: 'java' | '
     port: data.port || parseInt(address.split(':')[1]) || (serverType === 'java' ? 25565 : 19132),
     ip_address: data.ip_address || data.ip,
     eula_blocked: data.eula_blocked || data.blocked,
-    retrieved_at: data.debug?.cachetime ? data.debug.cachetime * 1000 :
-                 data.retrieved_at || data.timestamp || data.query_time || Date.now(),
     version: {
       name_clean: data.version?.name_clean || data.version || data.server?.version || data.server_version,
       name: data.version?.name || data.protocol?.name || data.version?.protocol_name
@@ -208,7 +214,7 @@ function formatServerStatus(status: ServerStatus, config: Config) {
     version: () => status.version?.name_clean || '未知',
     online: () => `${status.players.online ?? 0}`,
     max: () => `${status.players.max ?? 0}`,
-    ping: () => status.retrieved_at ? `${Date.now() - status.retrieved_at}` : '',
+    ping: () => status.ping ? `${status.ping}ms` : '未知',
     software: () => status.software,
     edition: () => status.edition ? { MCPE: '基岩版', MCEE: '教育版' }[status.edition] || status.edition : '',
     gamemode: () => status.gamemode,
