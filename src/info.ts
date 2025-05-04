@@ -1,6 +1,33 @@
 import { Context, h } from 'koishi'
 import { Config } from './index'
 
+/**
+ * Minecraft 服务器状态信息接口
+ * @interface ServerStatus
+ * @property {boolean} online - 服务器是否在线
+ * @property {string} host - 服务器主机地址
+ * @property {number} port - 服务器端口
+ * @property {string|null} [ip_address] - 服务器解析后的 IP 地址
+ * @property {boolean} [eula_blocked] - 服务器是否因违反 EULA 被封禁
+ * @property {number} [retrieved_at] - 信息获取时间戳
+ * @property {object} [version] - 服务器版本信息
+ * @property {string} [version.name_clean] - 清理过的版本名称
+ * @property {string|null} [version.name] - 原始版本名称
+ * @property {object} players - 玩家信息
+ * @property {number|null} players.online - 在线玩家数量
+ * @property {number|null} players.max - 最大玩家数量
+ * @property {string[]} [players.list] - 在线玩家列表
+ * @property {string} [motd] - 服务器描述信息
+ * @property {string|null} [icon] - 服务器图标(Base64)
+ * @property {Array<{name: string, version?: string}>} [mods] - 服务器模组列表
+ * @property {string|null} [software] - 服务器软件
+ * @property {Array<{name: string, version?: string|null}>} [plugins] - 服务器插件列表
+ * @property {{host: string, port: number}|null} [srv_record] - SRV 记录信息
+ * @property {string|null} [gamemode] - 游戏模式
+ * @property {string|null} [server_id] - 服务器唯一标识
+ * @property {'MCPE'|'MCEE'|null} [edition] - 服务器版本类型(基岩版/教育版)
+ * @property {string} [error] - 错误信息
+ */
 interface ServerStatus {
   online: boolean
   host: string
@@ -24,6 +51,9 @@ interface ServerStatus {
 
 /**
  * 解析并验证 Minecraft 服务器地址
+ * @param {string} input - 输入的服务器地址
+ * @returns {string} 验证后的服务器地址
+ * @throws {Error} 当地址无效时抛出错误
  */
 function validateServerAddress(input: string): string {
   // 检查禁止的本地/内网地址
@@ -59,6 +89,10 @@ function validateServerAddress(input: string): string {
 
 /**
  * 获取 Minecraft 服务器状态
+ * @param {string} server - 服务器地址(可包含端口)
+ * @param {'java'|'bedrock'} forceType - 强制使用的服务器类型
+ * @param {Config} [config] - 配置信息
+ * @returns {Promise<ServerStatus>} 服务器状态信息
  */
 async function fetchServerStatus(server: string, forceType: 'java' | 'bedrock', config?: Config): Promise<ServerStatus> {
   try {
@@ -92,6 +126,10 @@ async function fetchServerStatus(server: string, forceType: 'java' | 'bedrock', 
 
 /**
  * 标准化 API 响应格式，自动猜测可能的格式
+ * @param {any} data - API 响应的原始数据
+ * @param {string} address - 服务器地址
+ * @param {'java'|'bedrock'} serverType - 服务器类型
+ * @returns {ServerStatus} 标准化后的服务器状态
  */
 function normalizeApiResponse(data: any, address: string, serverType: 'java' | 'bedrock'): ServerStatus {
   // 检查服务器是否在线
@@ -146,6 +184,9 @@ function normalizeApiResponse(data: any, address: string, serverType: 'java' | '
 
 /**
  * 格式化服务器状态信息
+ * @param {ServerStatus} status - 服务器状态对象
+ * @param {Config} config - 配置信息
+ * @returns {string} 格式化后的服务器状态文本
  */
 function formatServerStatus(status: ServerStatus, config: Config) {
   if (!status.online) return status.error || '服务器离线 - 连接失败';
@@ -202,26 +243,56 @@ function formatServerStatus(status: ServerStatus, config: Config) {
 }
 
 /**
+ * 根据会话查找群组对应的服务器
+ * @param {any} session - 会话对象
+ * @param {Config} config - 配置信息
+ * @returns {{server: string, serverId: number}|{error: string}} 服务器信息或错误信息
+ */
+function findGroupServer(session: any, config: Config): { server: string, serverId: number } | { error: string } {
+  const mapping = config.serverMaps.find(m =>m.platform === session.platform && m.channelId === session.guildId);
+  if (!mapping) return { error: '请提供服务器地址' };
+  if (!mapping.serverAddress) return { error: `服务器 #${mapping.serverId} 未配置地址` };
+  return { server: mapping.serverAddress, serverId: mapping.serverId };
+}
+
+/**
  * 注册服务器信息命令
+ * @param {Context} ctx - Koishi 上下文
+ * @param {any} parent - 父命令
+ * @param {Config} config - 插件配置
  */
 export function registerInfo(ctx: Context, parent: any, config: Config) {
-  const mcinfo = parent.subcommand('.info <server>', '查询 Minecraft 服务器信息')
-    .usage(`mc.info <地址[:端口]> - 查询 Java 服务器\nmc.info.be <地址[:端口]> - 查询 Bedrock 服务器`)
-    .action(async ({}, server) => {
+  const mcinfo = parent.subcommand('.info [server]', '查询 Minecraft 服务器状态')
+    .usage(`mc.info [地址[:端口]] - 查询 Java 服务器\nmc.info.be [地址[:端口]] - 查询 Bedrock 服务器`)
+    .action(async ({ session }, server) => {
       try {
+        if (!server && session) {
+          const groupServer = findGroupServer(session, config);
+          if ('error' in groupServer) return groupServer.error;
+          server = groupServer.server;
+          return fetchServerStatus(server, 'java', config).then(status => formatServerStatus(status, config));
+        }
         const status = await fetchServerStatus(server, 'java', config);
         return formatServerStatus(status, config);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`Java 服务器信息查询失败: ${error.message}`, error);
+        return `信息查询失败`;
       }
     });
-  mcinfo.subcommand('.be <server>', '查询 Bedrock 服务器')
-    .action(async ({}, server) => {
+  mcinfo.subcommand('.be [server]', '查询 Bedrock 服务器')
+    .action(async ({ session }, server) => {
       try {
+        if (!server && session) {
+          const groupServer = findGroupServer(session, config);
+          if ('error' in groupServer) return groupServer.error;
+          server = groupServer.server;
+          return fetchServerStatus(server, 'bedrock', config).then(status => formatServerStatus(status, config));
+        }
         const status = await fetchServerStatus(server, 'bedrock', config);
         return formatServerStatus(status, config);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`Bedrock 服务器信息查询失败: ${error.message}`, error);
+        return `信息查询失败`;
       }
     });
 }

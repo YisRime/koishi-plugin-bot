@@ -46,7 +46,8 @@ async function fetchPlayerProfile(ctx: Context, username: string): Promise<Minec
       ...(texturesData.textures.CAPE && { cape: { url: texturesData.textures.CAPE.url } })
     };
   } catch (error) {
-    throw new Error(`玩家信息获取失败: ${error.response.data.error || error.message}`);
+    ctx.logger.error(`玩家信息获取失败: ${error.message}`, error);
+    throw new Error(`玩家信息获取失败: ${error.message}`);
   }
 }
 
@@ -155,7 +156,8 @@ export function registerPlayer(ctx: Context, parent: any) {
           h.text(`\n1.13及之后:player_head{SkullOwner:"${profile.name}"}`)
         ]);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`查询玩家信息失败: ${error.message}`, error);
+        return `查询玩家信息失败`;
       }
     });
   player.subcommand('.skin <username>', '获取玩家皮肤预览')
@@ -171,7 +173,8 @@ export function registerPlayer(ctx: Context, parent: any) {
         const skinImage = await renderPlayerSkin(ctx, profile.skin.url, (showCape || showElytra) ? profile.cape?.url : undefined, showElytra, options.bg);
         return h.image(`data:image/png;base64,${skinImage}`);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`获取玩家皮肤预览失败: ${error.message}`, error);
+        return `获取玩家皮肤失败`;
       }
     });
   player.subcommand('.head <username>', '获取玩家大头娃娃')
@@ -182,7 +185,8 @@ export function registerPlayer(ctx: Context, parent: any) {
         const profile = await fetchPlayerProfile(ctx, username);
         return h.image(`data:image/png;base64,${await renderPlayerHead(ctx, profile.skin.url, options.bg)}`);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`获取玩家大头娃娃失败: ${error.message}`, error);
+        return `获取玩家皮肤失败`;
       }
     });
   player.subcommand('.raw <username>', '获取玩家原始皮肤')
@@ -192,7 +196,8 @@ export function registerPlayer(ctx: Context, parent: any) {
         const profile = await fetchPlayerProfile(ctx, username);
         return h.image(profile.skin.url);
       } catch (error) {
-        return error.message;
+        ctx.logger.error(`获取玩家原始皮肤失败: ${error.message}`, error);
+        return `获取玩家皮肤失败`;
       }
     });
 }

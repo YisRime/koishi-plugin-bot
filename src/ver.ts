@@ -15,6 +15,21 @@ export interface UpdateTarget {
 }
 
 /**
+ * 群组到服务器的映射配置
+ * @interface ServerMapping
+ * @property {string} platform - 平台ID
+ * @property {string} channelId - 频道ID
+ * @property {number} serverId - 对应的服务器ID
+ * @property {string} [serverAddress] - 用于服务器查询的地址(可选)
+ */
+export interface ServerMapping {
+  platform: string
+  channelId: string
+  serverId: number
+  serverAddress?: string
+}
+
+/**
  * Minecraft版本清单API数据结构
  * @interface MinecraftVersion
  */
@@ -118,6 +133,19 @@ export function registerVer(ctx: Context, mc: Command) {
     })
 }
 
+// 存储版本检查定时器
+let versionCheckInterval: any = null;
+
+/**
+ * 清理版本检查定时器
+ */
+export function cleanupVerCheck() {
+  if (versionCheckInterval) {
+    clearInterval(versionCheckInterval);
+    versionCheckInterval = null;
+  }
+}
+
 /**
  * 设置Minecraft版本更新检测和通知
  * @param {Context} ctx - Koishi上下文
@@ -144,9 +172,8 @@ export function regVerCheck(ctx: Context, config: Config) {
     } catch (error) {
     }
   }
-  // 初始化
+  // 初始化并设置定时任务
   checkVersions()
-  // 设置定时任务
   const interval = (config.updInterval) * 60 * 1000
-  ctx.setInterval(checkVersions, interval)
+  versionCheckInterval = ctx.setInterval(checkVersions, interval)
 }
