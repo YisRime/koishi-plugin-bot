@@ -141,7 +141,8 @@ async function fetchServerStatus(server: string, forceType: 'java' | 'bedrock', 
  */
 function normalizeApiResponse(data: any, address: string, serverType: 'java' | 'bedrock'): ServerStatus {
   // 检查服务器是否在线
-  if (data.online === false || (data.status === 'error' && !data.players)) {
+  if (data.online === false || (data.status === 'error' && !data.players) ||
+      (data.status === 'offline') || (typeof data.status === 'string' && data.status.toLowerCase() === 'offline')) {
     return {
       online: false,
       host: data.hostname || data.host || data.ip || address.split(':')[0],
@@ -154,8 +155,8 @@ function normalizeApiResponse(data: any, address: string, serverType: 'java' | '
   return {
     online: true,
     host: data.hostname || data.host || data.server || address.split(':')[0],
-    port: data.port || parseInt(address.split(':')[1]) || (serverType === 'java' ? 25565 : 19132),
-    ip_address: data.ip_address || data.ip,
+    port: data.port || data.ipv6Port || parseInt(address.split(':')[1]) || (serverType === 'java' ? 25565 : 19132),
+    ip_address: data.ip_address || data.ip || data.hostip,
     eula_blocked: data.eula_blocked || data.blocked,
     version: {
       name_clean: data.version?.name_clean || data.version || data.server?.version || data.server_version,
@@ -163,18 +164,21 @@ function normalizeApiResponse(data: any, address: string, serverType: 'java' | '
     },
     players: {
       online: data.players?.online ?? data.players?.now ?? data.players_online ?? data.online_players ?? 0,
-      max: data.players?.max ?? data.max_players ?? 0,
+      max: data.players?.max ?? data.players_max ?? data.max_players ?? 0,
       list: Array.isArray(data.players?.list)
         ? data.players.list.map(p => typeof p === 'string' ? p : p.name || p.name_clean || p.id)
-        : (data.players?.sample?.map(p => p.name) || data.player_list)
+        : (Array.isArray(data.players)
+           ? data.players.map(p => typeof p === 'string' ? p : p.name || p.name_clean || p.id)
+           : data.players?.sample?.map(p => p.name) || data.player_list)
     },
     motd: data.motd?.clean?.[0] || (Array.isArray(data.motd?.clean) ? data.motd.clean[0] : null) ||
           data.motd?.raw?.[0] || data.motd || data.description?.text || data.description || data.server_motd,
-    icon: data.icon || data.favicon,
+    icon: data.icon || data.favicon || data.favocion,
     mods: (data.mods && (Array.isArray(data.mods)
            ? data.mods.map(m => typeof m === 'string' ? { name: m } : m)
            : Object.entries(data.mods).map(([k, v]) => ({ name: k, version: v }))))
            || data.modinfo?.modList?.map(m => ({ name: m.modid, version: m.version }))
+           || (data.modInfo ? { name: data.modInfo } : null)
            || data.modlist,
     software: data.software || data.server?.name || data.server_software,
     plugins: (data.plugins && (Array.isArray(data.plugins)
@@ -182,9 +186,9 @@ function normalizeApiResponse(data: any, address: string, serverType: 'java' | '
               : Object.entries(data.plugins).map(([k, v]) => ({ name: k, version: v }))))
               || data.plugin_list,
     srv_record: data.srv_record || data.srv,
-    gamemode: data.gamemode || data.game_type,
-    server_id: data.server_id || data.serverid || data.uuid,
-    edition: data.edition
+    gamemode: data.gamemode || data.game_type || data.gametype,
+    server_id: data.server_id || data.serverid || data.uuid || data.serverId,
+    edition: data.edition || (serverType === 'bedrock' ? 'MCPE' : null) || (data.platform === 'MINECRAFT_BEDROCK' ? 'MCPE' : null)
   };
 }
 
