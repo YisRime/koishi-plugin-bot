@@ -9,6 +9,7 @@ export interface Result {
   url: string
   extract?: string
   source: string
+  fullContent?: boolean // 表示内容是否是完整爬取的
 }
 
 // 表示搜索结果列表
@@ -57,6 +58,63 @@ export async function safeRequest(ctx: Context, url: string, params = {}, option
 }
 
 /**
+ * 通用网页内容爬取函数
+ * @param ctx Koishi上下文
+ * @param url 要爬取的URL
+ * @param extractorFn 可选的内容提取函数
+ */
+export async function fetchPageContent(
+  ctx: Context,
+  url: string,
+  extractorFn?: (page: any) => Promise<string | null>
+): Promise<string | null> {
+  if (!ctx.puppeteer) {
+    ctx.logger.warn('爬取页面内容需要puppeteer服务')
+    return null
+  }
+
+  try {
+    ctx.logger.info(`开始爬取页面内容: ${url}`)
+    const page = await ctx.puppeteer.page()
+
+    // 设置请求超时和页面加载超时
+    await page.setDefaultNavigationTimeout(20000)
+
+    // 设置用户代理，模拟正常浏览器
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    // 加载页面
+    await page.goto(url, { waitUntil: 'networkidle2' })
+
+    let content: string | null = null
+
+    // 如果提供了自定义提取器函数，则使用它
+    if (extractorFn) {
+      content = await extractorFn(page)
+    } else {
+      // 默认的通用提取逻辑
+      content = await page.evaluate(() => {
+        const article = document.querySelector('article') || document.querySelector('main') || document.querySelector('body')
+        return article ? article.textContent : null
+      })
+    }
+
+    await page.close()
+
+    if (content && content.length > 0) {
+      ctx.logger.info(`页面内容爬取成功，长度: ${content.length}字符`)
+      return content
+    }
+
+    ctx.logger.warn('页面内容爬取成功，但未获取到有效内容')
+    return null
+  } catch (error) {
+    ctx.logger.error(`爬取页面内容失败: ${error.message}`)
+    return null
+  }
+}
+
+/**
  * 处理并输出搜索结果
  */
 export async function render(ctx: Context, session: Session, result: Result | null, mode: OutputMode = 'fwd'): Promise<any> {
@@ -70,6 +128,19 @@ export async function render(ctx: Context, session: Session, result: Result | nu
     ctx.logger.info(`[Wiki] 使用链接: ${result.url}`)
   } else if (result.source === 'mcmod') {
     ctx.logger.info(`[MCMod] 使用链接: ${result.url}`)
+  }
+
+  // 如果结果中没有完整内容标记，尝试爬取完整内容
+  if (!result.fullContent) {
+    ctx.logger.info(`尝试获取完整内容: ${result.url}`)
+
+    // 根据源类型使用对应模块的函数获取内容
+    const fullContent = await fetchPageContent(ctx, result.url)
+    if (fullContent) {
+      result.extract = fullContent
+      result.fullContent = true
+      ctx.logger.info(`已获取完整内容，长度: ${fullContent.length}字符`)
+    }
   }
 
   if (result.extract) {
@@ -310,18 +381,24 @@ export function parseMode(options, config?: { outputMode?: OutputMode }): Output
 export async function renderList(
   session: Session,
   searchResults: SearchResults,
-  mode: OutputMode = 'text'
+  mode: OutputMode = 'text',
+  options: { showExcerpt?: boolean } = { showExcerpt: true }
 ): Promise<any> {
   if (!searchResults?.results?.length) return '未找到相关词条'
 
   // 过滤掉无效链接的结果
-  const validResults = searchResults.results.filter(result => result.url && result.title);
+  const validResults = searchResults.results.filter(result => result.url && result.title)
 
   if (session.app.logger && validResults.length > 0) {
+    const sourceName = validResults[0].source.toUpperCase()
     const logger = session.app.logger
-    logger.info(`[${validResults[0].source.toUpperCase()}] 生成搜索结果列表，共 ${validResults.length} 项`)
+    logger.info(`[${sourceName}] 生成搜索结果列表，共 ${validResults.length} 项`)
     validResults.forEach((result, i) => {
-      logger.info(`[${result.source.toUpperCase()}] 列表项 ${i+1}: ${result.title} - ${result.url}`)
+      logger.info(`[${sourceName}] 列表项 ${i+1}: ${result.title} - ${result.url}`)
+      if (options.showExcerpt && result.extract && result.extract.length > 0) {
+        const excerpt = result.extract.substring(0, 80) + '...'
+        logger.info(`[${sourceName}] 内容概览 ${i+1}: ${excerpt}`)
+      }
     })
   }
 
@@ -330,10 +407,41 @@ export async function renderList(
   // 生成所有结果的列表，优化显示格式
   const listText = validResults.map((result, i) => {
     // 确保标题和URL都正确显示，如果标题为空则显示"未命名"
-    const displayTitle = result.title.trim() || '未命名词条';
-    return `${i + 1}. ${displayTitle}\n   ${result.url}`;
+    const displayTitle = result.title.trim() || '未命名词条'
+
+    // 提取分类信息（对于MC百科结果）
+    let categoryInfo = ''
+    if (result.source === 'mcmod' && result.extract && result.extract.includes('分类：')) {
+      const categoryMatch = result.extract.match(/分类：([^|]+)/)
+      if (categoryMatch) {
+        categoryInfo = `[${categoryMatch[1].trim()}] `
+      }
+    }
+
+    // 基础格式：序号、分类标签、标题、链接
+    let itemText = `${i + 1}. ${categoryInfo}${displayTitle}\n   ${result.url}`
+
+    // 如果配置了显示摘要并且存在摘要，添加到列表项
+    if (options.showExcerpt && result.extract) {
+      // 从摘要中去除元数据部分（通常在 \n\n 后面）
+      let excerpt = result.extract
+      const metadataPos = excerpt.indexOf('\n\n')
+      if (metadataPos > -1) {
+        excerpt = excerpt.substring(0, metadataPos)
+      }
+
+      // 限制摘要长度并添加到结果中
+      if (excerpt.length > 100) {
+        excerpt = excerpt.substring(0, 100) + '...'
+      }
+
+      itemText += `\n   ${excerpt}`
+    }
+
+    return itemText
   }).join('\n\n')
 
+  const sourceName = validResults[0].source === 'wiki' ? 'Minecraft Wiki' : 'MC百科'
   const promptText = `找到 ${searchResults.total || validResults.length} 条相关词条，请回复数字选择查看详情：`
 
   // 发送结果列表
@@ -346,8 +454,8 @@ export async function renderList(
   if (mode === 'fwd' && session.platform === 'onebot') {
     try {
       const fwdMsgs = [
-        { type: 'node', data: { name: '搜索结果', uin: session.selfId || '10000', content: promptText } },
-        { type: 'node', data: { name: '搜索结果', uin: session.selfId || '10000', content: listText } }
+        { type: 'node', data: { name: `${sourceName}搜索`, uin: session.selfId || '10000', content: promptText } },
+        { type: 'node', data: { name: `${sourceName}搜索`, uin: session.selfId || '10000', content: listText } }
       ]
 
       const onebot = session.bot
@@ -363,6 +471,8 @@ export async function renderList(
         await sendList()
       }
     } catch (error) {
+      const sourceName = validResults[0].source.toUpperCase()
+      session.app.logger.warn(`[${sourceName}] 合并转发失败: ${error.message}`)
       await sendList()
     }
   } else {
@@ -378,9 +488,9 @@ export async function renderList(
       return '选择无效，已取消查询'
     }
 
-    // 直接返回选择的结果链接
+    // 返回完整的结果对象以便详细查看
     const selectedResult = validResults[selection - 1]
-    return `${selectedResult.title}\n${selectedResult.url}`
+    return render(session.app, session, selectedResult, mode)
   } catch {
     return '查询已超时或被取消'
   }
