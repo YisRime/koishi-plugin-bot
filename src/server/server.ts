@@ -1,5 +1,5 @@
-import { Config } from './index'
-import { executeRconCommand, findServer, sendMinecraftMessage, formatMinecraftText } from './servertool'
+import { Config } from '../index'
+import { executeRconCommand, findServer, sendMinecraftMessage, formatMinecraftText } from './service'
 
 /**
  * 处理服务器命令前的通用逻辑

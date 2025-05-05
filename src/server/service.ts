@@ -1,6 +1,6 @@
 import { Context, Session } from 'koishi'
 import { Rcon } from 'rcon-client'
-import { Config } from './index'
+import { Config } from '../index'
 import { WebSocket, WebSocketServer } from 'ws'
 
 /**

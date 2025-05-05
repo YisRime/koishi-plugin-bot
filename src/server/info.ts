@@ -1,5 +1,5 @@
 import { Context, h } from 'koishi'
-import { Config } from './index'
+import { Config } from '../index'
 
 /**
  * Minecraft 服务器状态信息接口
@@ -272,7 +272,7 @@ function findGroupServer(session: any, config: Config): { server: string, server
  * @param {Config} config - 插件配置
  */
 export function registerInfo(ctx: Context, parent: any, config: Config) {
-  const mcinfo = parent.subcommand('.info [server]', '查询 Minecraft 服务器状态')
+  const mcinfo = parent.subcommand('.info [server]', '查询 Minecraft 服务器')
     .usage(`mc.info [地址[:端口]] - 查询 Java 服务器\nmc.info.be [地址[:端口]] - 查询 Bedrock 服务器`)
     .action(async ({ session }, server) => {
       try {
@@ -285,7 +285,7 @@ export function registerInfo(ctx: Context, parent: any, config: Config) {
         const status = await fetchServerStatus(server, 'java', config);
         return formatServerStatus(status, config);
       } catch (error) {
-        ctx.logger.error(`Java 服务器信息查询失败: ${error.message}`, error);
+        ctx.logger.error(`Java 服务器查询失败: ${error.message}`, error);
         return `信息查询失败`;
       }
     });
@@ -301,7 +301,7 @@ export function registerInfo(ctx: Context, parent: any, config: Config) {
         const status = await fetchServerStatus(server, 'bedrock', config);
         return formatServerStatus(status, config);
       } catch (error) {
-        ctx.logger.error(`Bedrock 服务器信息查询失败: ${error.message}`, error);
+        ctx.logger.error(`Bedrock 服务器查询失败: ${error.message}`, error);
         return `信息查询失败`;
       }
     });

@@ -1,14 +1,14 @@
 import { Context, Command } from 'koishi'
-import { Config } from './index'
+import { Config } from '../index'
 
 /**
  * 更新目标配置
- * @interface UpdateTarget
+ * @interface UpdTarget
  * @property {string} platform - 机器人平台名称
  * @property {string} channelId - 频道/群组ID
  * @property {'release' | 'snapshot' | 'both'} type - 通知类型：正式版、快照版或两者都通知
  */
-export interface UpdateTarget {
+export interface UpdTarget {
   platform: string
   channelId: string
   type: 'release' | 'snapshot' | 'both'
@@ -16,13 +16,13 @@ export interface UpdateTarget {
 
 /**
  * 群组到服务器的映射配置
- * @interface ServerMapping
+ * @interface ServerMaps
  * @property {string} platform - 平台ID
  * @property {string} channelId - 频道ID
  * @property {number} serverId - 对应的服务器ID
  * @property {string} [serverAddress] - 用于服务器查询的地址(可选)
  */
-export interface ServerMapping {
+export interface ServerMaps {
   platform: string
   channelId: string
   serverId: number
@@ -95,12 +95,12 @@ async function getLatestVersion(ctx: Context): Promise<{ release: VersionInfo; s
 /**
  * 向指定目标发送更新通知
  * @param {Context} ctx - Koishi上下文
- * @param {UpdateTarget[]} targets - 通知目标列表
+ * @param {UpdTarget[]} targets - 通知目标列表
  * @param {VersionType} versionType - 版本类型（正式版或快照版）
  * @param {VersionInfo} versionInfo - 版本信息
  * @returns {Promise<void>}
  */
-async function sendUpdateNotification(ctx: Context, targets: UpdateTarget[], versionType: VersionType, versionInfo: VersionInfo) {
+async function sendUpdateNotification(ctx: Context, targets: UpdTarget[], versionType: VersionType, versionInfo: VersionInfo) {
   const typeName = versionType === 'release' ? '正式版' : '快照版'
   const updateMsg = `Minecraft ${typeName}更新：${versionInfo.id}\n发布时间: ${new Date(versionInfo.releaseTime).toLocaleString('zh-CN')}`
   for (const target of targets.filter(t => t.type === 'both' || t.type === versionType)) {

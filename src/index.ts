@@ -1,27 +1,42 @@
 import { Context, Schema } from 'koishi'
-import { registerPlayer } from './player'
-import { registerInfo } from './info'
-import { registerServer } from './server'
-import { registerVer, regVerCheck, UpdateTarget, cleanupVerCheck, ServerMapping } from './ver'
-import { initWebSocket, cleanupWebSocket, WsServerConfig, RconServerConfig } from './servertool'
+import { registerPlayer } from './tool/player'
+import { registerInfo } from './server/info'
+import { registerServer } from './server/server'
+import { registerVer, regVerCheck, UpdTarget, cleanupVerCheck, ServerMaps } from './tool/ver'
+import { initWebSocket, cleanupWebSocket, WsServerConfig, RconServerConfig } from './server/service'
+import { registerWiki } from './wiki/wiki'
+import { registerMod } from './wiki/mcmod'
+import { OutputMode } from './wiki/utils'
 
 export const name = 'bot'
 export const inject = {optional: ['puppeteer']}
 
 export interface Config {
-  noticeTargets: UpdateTarget[]
+  noticeTargets: UpdTarget[]
   updInterval: number
   verEnabled: boolean
   playerEnabled: boolean
   infoEnabled: boolean
+  wikiEnabled: boolean
+  mcmodEnabled: boolean
+  outputMode: OutputMode
   serverApis?: Array<{ type: 'java' | 'bedrock'; url: string }>
   serverTemplate: string
-  serverMaps: ServerMapping[]
+  serverMaps: ServerMaps[]
   rconServers: RconServerConfig[]
   wsServers: WsServerConfig[]
 }
 
 export const Config: Schema<Config> = Schema.intersect([
+  Schema.object({
+    wikiEnabled: Schema.boolean().description('启用 Wiki 查询').default(true),
+    mcmodEnabled: Schema.boolean().description('启用 MC百科 查询').default(true),
+    outputMode: Schema.union([
+      Schema.const('text').description('纯文本'),
+      Schema.const('fwd').description('合并转发'),
+      Schema.const('shot').description('网页截图')
+    ]).description('显示模式').default('fwd')
+  }).description('网页查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),
     verEnabled: Schema.boolean().description('启用最新版本查询').default(true),
@@ -73,7 +88,7 @@ export const Config: Schema<Config> = Schema.intersect([
       name: Schema.string().description('名称').default('Server'),
       websocketMode: Schema.union([
         Schema.const('client').description('客户端'),
-        Schema.const('server').description('服务器')
+        Schema.const('server').description('服务端')
       ]).description('模式').default('server'),
       websocketAddress: Schema.string().description('地址').default('localhost:8080'),
       websocketToken: Schema.string().description('密码').role('secret')
@@ -93,6 +108,10 @@ export function apply(ctx: Context, config: Config) {
   // 服务器连接
   if (config.rconServers.length > 0 || config.wsServers.length > 0) registerServer(mc, config)
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
+  // MC Wiki 查询
+  config.wikiEnabled !== false && registerWiki(ctx, mc, config)
+  // MC 百科 查询
+  config.mcmodEnabled !== false && registerMod(ctx, mc, config)
 }
 
 export function dispose() {
