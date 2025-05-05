@@ -35,16 +35,16 @@ export async function safeRequest(ctx: Context, url: string, params = {}, option
   // 记录完整URL
   const queryParams = new URLSearchParams(params as Record<string, string>).toString()
   const fullUrl = queryParams ? `${url}?${queryParams}` : url
-  ctx.logger.debug(`发起请求: ${fullUrl}`)
+  ctx.logger.info(`发起请求: ${fullUrl}`)
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await ctx.http.get(url, requestOptions)
       // 记录响应概览
       if (typeof response === 'object') {
-        ctx.logger.debug(`响应数据: ${JSON.stringify(response).substring(0, 100)}...`)
+        ctx.logger.info(`响应数据: ${JSON.stringify(response).substring(0, 100)}...`)
       } else if (typeof response === 'string') {
-        ctx.logger.debug(`响应长度: ${response.length}字节, 前100字符: ${response.substring(0, 100)}...`)
+        ctx.logger.info(`响应长度: ${response.length}字节, 前100字符: ${response.substring(0, 100)}...`)
       }
       return response
     } catch (error) {
@@ -63,16 +63,24 @@ export async function render(ctx: Context, session: Session, result: Result | nu
   if (!result) return '未找到相关词条'
 
   ctx.logger.info(`渲染 "${result.title}" (模式: ${mode})`)
-  ctx.logger.debug(`渲染链接: ${result.url}`)
+  ctx.logger.info(`渲染链接: ${result.url}`)
+
+  // 记录链接来源
+  if (result.source === 'wiki') {
+    ctx.logger.info(`[Wiki] 使用链接: ${result.url}`)
+  } else if (result.source === 'mcmod') {
+    ctx.logger.info(`[MCMod] 使用链接: ${result.url}`)
+  }
 
   if (result.extract) {
     const excerpt = result.extract.substring(0, 100) + (result.extract.length > 100 ? '...' : '')
-    ctx.logger.debug(`内容概览: ${excerpt}`)
+    ctx.logger.info(`内容概览: ${excerpt}`)
   }
 
   try {
     // 按优先级尝试不同渲染模式
     if (mode === 'shot') {
+      ctx.logger.info(`尝试截图模式获取: ${result.url}`)
       const output = await renderShot(ctx, result)
       if (output) {
         ctx.logger.info('截图渲染成功')
@@ -225,6 +233,7 @@ export async function renderShot(ctx: Context, result: Result): Promise<any> {
 
     // 加载页面
     ctx.logger.info(`开始加载页面: ${result.url}`)
+    ctx.logger.info(`[${result.source.toUpperCase()}] 请求截图: ${result.url}`)
     await page.goto(result.url, { waitUntil: 'networkidle0' })
 
     // 选择内容区域
@@ -307,6 +316,14 @@ export async function renderList(
 
   // 过滤掉无效链接的结果
   const validResults = searchResults.results.filter(result => result.url && result.title);
+
+  if (session.app.logger && validResults.length > 0) {
+    const logger = session.app.logger
+    logger.info(`[${validResults[0].source.toUpperCase()}] 生成搜索结果列表，共 ${validResults.length} 项`)
+    validResults.forEach((result, i) => {
+      logger.info(`[${result.source.toUpperCase()}] 列表项 ${i+1}: ${result.title} - ${result.url}`)
+    })
+  }
 
   if (!validResults.length) return '未找到有效的搜索结果'
 

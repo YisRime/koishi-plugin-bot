@@ -9,7 +9,7 @@ const BASE_URL = 'https://zh.minecraft.wiki/w/'
 // 基础Wiki API请求函数
 async function wikiRequest(ctx: Context, query: string, getExtract = false): Promise<any> {
   ctx.logger.info(`[Wiki] 搜索: "${query}"`)
-  ctx.logger.debug(`[Wiki] 请求链接: ${API_ENDPOINT}?action=query&list=search&srsearch=${encodeURIComponent(query)}`)
+  ctx.logger.info(`[Wiki] 请求链接: ${API_ENDPOINT}?action=query&list=search&srsearch=${encodeURIComponent(query)}`)
 
   try {
     // 搜索请求
@@ -33,20 +33,21 @@ async function wikiRequest(ctx: Context, query: string, getExtract = false): Pro
     const results = searchResults.map(hit => {
       const title = hit.title
       const url = `${BASE_URL}${encodeURIComponent(title.replace(/ /g, '_'))}`
+      ctx.logger.info(`[Wiki] 生成链接: ${url} (标题: ${title})`)
       const snippet = hit.snippet?.replace(/<\/?span[^>]*>/g, '').replace(/<\/?searchmatch>/g, '') || ''
       return { title, url, extract: snippet, source: 'wiki' }
     })
 
     ctx.logger.info(`[Wiki] 搜索成功，找到 ${results.length} 条结果`)
     if (results.length > 0) {
-      ctx.logger.debug(`[Wiki] 第一条结果: ${results[0].title} - ${results[0].url}`)
+      ctx.logger.info(`[Wiki] 第一条结果: ${results[0].title} - ${results[0].url}`)
     }
 
     // 如果需要获取第一个结果的详细内容
     if (getExtract && results.length > 0) {
       try {
         const pageTitle = results[0].title
-        ctx.logger.debug(`[Wiki] 获取详细内容: ${pageTitle}`)
+        ctx.logger.info(`[Wiki] 获取详细内容: ${pageTitle}`)
 
         const pageRes = await safeRequest(ctx, API_ENDPOINT, {
           action: 'query',
@@ -63,7 +64,7 @@ async function wikiRequest(ctx: Context, query: string, getExtract = false): Pro
           const pageId = Object.keys(pages)[0]
           results[0].extract = pages[pageId]?.extract || '暂无内容'
           const excerpt = results[0].extract.substring(0, 100) + '...'
-          ctx.logger.debug(`[Wiki] 内容概览: ${excerpt}`)
+          ctx.logger.info(`[Wiki] 内容概览: ${excerpt}`)
         }
       } catch (error) {
         ctx.logger.warn(`[Wiki] 获取内容失败: ${error.message}`)
