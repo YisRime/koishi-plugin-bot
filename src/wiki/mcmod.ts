@@ -1,4 +1,4 @@
-import { Context, Command } from 'koishi'
+import { Context, Command, Session } from 'koishi'
 import { render, parseMode, renderList, safeRequest, cleanText, Result, SearchResults } from './utils'
 import { Config } from '../index'
 
@@ -115,7 +115,62 @@ async function parseMcmodResults(ctx: Context, query: string): Promise<{ results
           extract = cleanMcmodText(bodyHtml.replace(/<em>(.*?)<\/em>/g, '$1').replace(/<[^>]*>/g, ''));
         }
 
-        results.push({ title, url, extract, source: 'mcmod' });
+        // 提取页脚信息
+        const footerInfo: Record<string, string> = {};
+        const footMatch = itemHtml.match(/<div class="foot">([\s\S]*?)<\/div>/i);
+        if (footMatch) {
+          // 提取快照时间
+          const snapshotMatch = footMatch[1].match(/快照时间：<\/span><span class="value">([^<]+)<\/span>/);
+          if (snapshotMatch) {
+            footerInfo['snapshot'] = snapshotMatch[1].trim();
+          }
+
+          // 提取来源
+          const sourceMatch = footMatch[1].match(/来自：<\/span><span class="value"><a[^>]*>([^<]+)<\/a>/);
+          if (sourceMatch) {
+            footerInfo['source'] = sourceMatch[1].trim();
+          }
+        }
+
+        // 提取分类信息
+        let category = '';
+        const categoryMatch = itemHtml.match(/<div class="class-category"><ul><li><a class="([^"]+)" href="[^"]+\/class\/category\/[^"]+" target="_blank"><\/a>/i);
+        if (categoryMatch) {
+          const categoryClass = categoryMatch[1]; // 例如 c_1, c_23 等
+          // 转换分类代码到分类名称
+          const categoryMap: Record<string, string> = {
+            'c_1': '科技', 'c_2': '魔法', 'c_3': '冒险',
+            'c_4': '农业', 'c_5': '装饰', 'c_21': '魔改',
+            'c_23': '实用', 'c_24': '辅助'
+          };
+          category = categoryMap[categoryClass] || '其他';
+        }
+
+        // 构建增强的描述
+        let enhancedExtract = extract;
+
+        // 添加分类和页脚信息到描述末尾
+        const infoDetails = [];
+        if (category) {
+          infoDetails.push(`分类：${category}`);
+        }
+        if (footerInfo.snapshot) {
+          infoDetails.push(`快照时间：${footerInfo.snapshot}`);
+        }
+        if (footerInfo.source) {
+          infoDetails.push(`来源：${footerInfo.source}`);
+        }
+
+        if (infoDetails.length > 0) {
+          enhancedExtract += `\n\n${infoDetails.join(' | ')}`;
+        }
+
+        results.push({
+          title,
+          url,
+          extract: enhancedExtract,
+          source: 'mcmod'
+        });
       }
     };
 
@@ -135,6 +190,123 @@ async function parseMcmodResults(ctx: Context, query: string): Promise<{ results
   } catch (error) {
     ctx.logger.error(`[MCMod] 搜索失败: ${error.message}`);
     return { results: [], total: 0 };
+  }
+}
+
+/**
+ * 为MCMod百科定制的搜索结果列表渲染，包含内容概览
+ */
+async function renderMcmodList(
+  session: Session,
+  searchResults: SearchResults,
+  mode: 'text' | 'fwd' | 'shot' = 'text',
+  showExcerpt: boolean = true
+): Promise<any> {
+  if (!searchResults?.results?.length) return '未找到相关词条'
+
+  // 过滤掉无效链接的结果
+  const validResults = searchResults.results.filter(result => result.url && result.title)
+
+  if (session.app.logger && validResults.length > 0) {
+    const logger = session.app.logger
+    logger.info(`[MCMod] 生成搜索结果列表，共 ${validResults.length} 项`)
+    validResults.forEach((result, i) => {
+      logger.info(`[MCMod] 列表项 ${i+1}: ${result.title} - ${result.url}`)
+      if (result.extract && result.extract.length > 0) {
+        const excerpt = result.extract.substring(0, 80) + '...'
+        logger.info(`[MCMod] 内容概览 ${i+1}: ${excerpt}`)
+      }
+    })
+  }
+
+  if (!validResults.length) return '未找到有效的搜索结果'
+
+  // 生成所有结果的列表，优化显示格式，包含内容概览
+  const listText = validResults.map((result, i) => {
+    // 确保标题和URL都正确显示，如果标题为空则显示"未命名"
+    const displayTitle = result.title.trim() || '未命名词条'
+
+    // 提取分类信息
+    let categoryInfo = ''
+    if (result.extract && result.extract.includes('分类：')) {
+      const categoryMatch = result.extract.match(/分类：([^|]+)/)
+      if (categoryMatch) {
+        categoryInfo = `[${categoryMatch[1].trim()}] `
+      }
+    }
+
+    let itemText = `${i + 1}. ${categoryInfo}${displayTitle}\n   ${result.url}`
+
+    // 如果配置了显示摘要并且存在摘要，添加到列表项
+    if (showExcerpt && result.extract) {
+      // 从摘要中去除元数据部分（通常在 \n\n 后面）
+      let excerpt = result.extract
+      const metadataPos = excerpt.indexOf('\n\n分类：')
+      if (metadataPos > -1) {
+        excerpt = excerpt.substring(0, metadataPos)
+      }
+
+      // 限制摘要长度
+      if (excerpt.length > 100) {
+        excerpt = excerpt.substring(0, 100) + '...'
+      }
+
+      itemText += `\n   ${excerpt}`
+    }
+
+    return itemText
+  }).join('\n\n')
+
+  const promptText = `找到 ${searchResults.total || validResults.length} 条相关词条，请回复数字选择查看详情：`
+
+  // 发送结果列表
+  const sendList = async () => {
+    await session.send(promptText)
+    await session.send(listText)
+  }
+
+  // 根据平台和模式选择显示方式
+  if (mode === 'fwd' && session.platform === 'onebot') {
+    try {
+      const fwdMsgs = [
+        { type: 'node', data: { name: 'MC百科搜索', uin: session.selfId || '10000', content: promptText } },
+        { type: 'node', data: { name: 'MC百科搜索', uin: session.selfId || '10000', content: listText } }
+      ]
+
+      const onebot = session.bot
+      if (onebot) {
+        if (session.guildId) {
+          await onebot.internal.sendGroupForwardMsg(session.guildId, fwdMsgs)
+        } else if (session.userId) {
+          await onebot.internal.sendPrivateForwardMsg(session.userId, fwdMsgs)
+        } else {
+          await sendList()
+        }
+      } else {
+        await sendList()
+      }
+    } catch (error) {
+      session.app.logger.warn(`[MCMod] 合并转发失败: ${error.message}`)
+      await sendList()
+    }
+  } else {
+    await sendList()
+  }
+
+  // 等待用户选择
+  try {
+    const response = await session.prompt(30 * 1000)
+    const selection = parseInt(response)
+
+    if (isNaN(selection) || selection < 1 || selection > validResults.length) {
+      return '选择无效，已取消查询'
+    }
+
+    // 返回完整的结果对象以便详细查看
+    const selectedResult = validResults[selection - 1]
+    return render(session.app, session, selectedResult, mode)
+  } catch {
+    return '查询已超时或被取消'
   }
 }
 
@@ -164,11 +336,18 @@ export function registerMod(ctx: Context, mc: Command, config?: Config) {
   // 子命令：搜索多个结果
   mod.subcommand('.search <query:text>', '搜索MC百科显示多个结果')
     .option('visual', '-v <mode:string>', { fallback: '' })
+    .option('excerpt', '-e', { fallback: true })
     .action(async ({ session, options }, query) => {
       if (!query) return '请输入要搜索的内容'
       const searchResults = await searchMcmodList(ctx, query)
-      return searchResults.results.length === 0
-        ? '未找到相关百科词条'
-        : renderList(session, searchResults, parseMode(options, config))
+      if (searchResults.results.length === 0) return '未找到相关百科词条'
+
+      // 使用自定义渲染函数，而不是通用的renderList
+      return renderMcmodList(
+        session,
+        searchResults,
+        parseMode(options, config),
+        options.excerpt !== false
+      )
     })
 }
