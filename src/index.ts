@@ -4,6 +4,11 @@ import { registerInfo } from './server/info'
 import { registerServer } from './server/server'
 import { registerVer, regVerCheck, UpdTarget, cleanupVerCheck, ServerMaps } from './tool/ver'
 import { initWebSocket, cleanupWebSocket, WsServerConfig, RconServerConfig } from './server/service'
+import { registerCurseForge } from './resource/curseforge'
+import { registerModrinth } from './resource/modrinth'
+import { registerSearch } from './resource/search'
+import { registerMcmod } from './resource/mcmod'
+import { registerMcwiki } from './resource/mcwiki'
 
 export const name = 'bot'
 export const inject = {optional: ['puppeteer']}
@@ -19,16 +24,27 @@ export interface Config {
   serverMaps: ServerMaps[]
   rconServers: RconServerConfig[]
   wsServers: WsServerConfig[]
+  outputMode: 'text' | 'fwd' | 'shot'
+  curseforgeEnabled: boolean
+  modrinthEnabled: boolean
+  mcmodEnabled: boolean
+  mcwikiEnabled: boolean
+  curseforgeApiKey?: string
 }
 
 export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
+    mcwikiEnabled: Schema.boolean().description('启用 Minecraft Wiki 查询').default(true),
+    mcmodEnabled: Schema.boolean().description('启用 MCMOD 查询').default(true),
+    modrinthEnabled: Schema.boolean().description('启用 Modrinth 查询').default(true),
+    curseforgeEnabled: Schema.boolean().description('启用 CurseForge 查询').default(true),
+    curseforgeApiKey: Schema.string().description('CurseForge API 密钥').role('secret'),
     outputMode: Schema.union([
       Schema.const('text').description('纯文本'),
       Schema.const('fwd').description('合并转发'),
       Schema.const('shot').description('网页截图')
     ]).description('显示模式').default('fwd')
-  }).description('网页查询配置'),
+  }).description('资源查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),
     verEnabled: Schema.boolean().description('启用最新版本查询').default(true),
@@ -100,6 +116,14 @@ export function apply(ctx: Context, config: Config) {
   // 服务器连接
   if (config.rconServers.length > 0 || config.wsServers.length > 0) registerServer(mc, config)
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
+  // 资源查询
+  if (config.modrinthEnabled) registerModrinth(ctx, mc, config)
+  if (config.curseforgeEnabled && config.curseforgeApiKey) registerCurseForge(ctx, mc, config)
+  if (config.mcmodEnabled) registerMcmod(ctx, mc, config)
+  if (config.mcwikiEnabled) registerMcwiki(ctx, mc, config)
+  // 统一搜索
+  if (config.mcmodEnabled || config.mcwikiEnabled || config.modrinthEnabled
+    || (config.curseforgeEnabled && config.curseforgeApiKey)) registerSearch(ctx, mc, config)
 }
 
 export function dispose() {
