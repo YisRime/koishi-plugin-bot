@@ -1,5 +1,5 @@
 import { Context, Command } from 'koishi'
-import { render, parseMode, renderList, safeRequest, fetchPageContent, Result, SearchResults } from './utils'
+import { render, parseMode, renderList, safeRequest, fetchPageContent, Result, SearchResults, ContentType, SearchResultItem } from './utils'
 import { Config } from '../index'
 
 // 定义常量
@@ -11,36 +11,26 @@ const BASE_URL = 'https://zh.minecraft.wiki/w/'
  */
 export async function extractWikiContent(page): Promise<string | null> {
   try {
-    // 等待内容加载
     await page.waitForSelector('.mw-parser-output', { timeout: 10000 })
 
-    // 使用评估来提取并格式化内容
-    const content = await page.evaluate(() => {
-      // 页面主要内容容器
+    return await page.evaluate(() => {
       const contentElement = document.querySelector('.mw-parser-output')
       if (!contentElement) return null
 
-      // 提取标题
       const title = document.querySelector('.mw-page-title-main')?.textContent || document.querySelector('h1')?.textContent || ''
-
-      // 构建结果内容，以标题开始
       let result = title ? `《${title}》\n\n` : ''
 
-      // 获取所有段落和标题
+      // 处理元素
       const elements = Array.from(contentElement.children)
 
-      // 处理每个元素
+      // 需要跳过的元素类名
+      const skipClasses = ['toc', 'navbox', 'infobox', 'noprint']
+
       for (const element of elements) {
-        // 跳过目录、导航箱、信息框等不需要的元素
-        if (element.classList.contains('toc') ||
-            element.classList.contains('navbox') ||
-            element.classList.contains('infobox') ||
-            element.classList.contains('noprint') ||
-            element.id === 'toc') {
+        if (skipClasses.some(cls => element.classList.contains(cls)) || element.id === 'toc') {
           continue
         }
 
-        // 处理不同类型的元素
         const tagName = element.tagName.toLowerCase()
 
         // 处理标题
@@ -54,9 +44,7 @@ export async function extractWikiContent(page): Promise<string | null> {
         else if (tagName === 'p') {
           const paragraphText = element.textContent?.trim() || ''
           if (paragraphText) {
-            // 去除参考文献标记 [1], [2] 等
-            const cleanText = paragraphText.replace(/\[\d+\]/g, '')
-            result += `\n${cleanText}`
+            result += `\n${paragraphText.replace(/\[\d+\]/g, '')}`
           }
         }
         // 处理列表
@@ -69,25 +57,15 @@ export async function extractWikiContent(page): Promise<string | null> {
             }
           }
         }
-        // 处理表格(简化为文本)
+        // 处理表格
         else if (tagName === 'table') {
           const caption = element.querySelector('caption')?.textContent?.trim()
-          if (caption) {
-            result += `\n\n【表格：${caption}】`
-          } else {
-            result += '\n\n【表格内容】'
-          }
-          // 这里可以进一步处理表格内容，但为简化起见，我们只添加表格标题
+          result += caption ? `\n\n【表格：${caption}】` : '\n\n【表格内容】'
         }
       }
 
-      // 清理多余空行和空格
-      return result
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
+      return result.replace(/\n{3,}/g, '\n\n').trim()
     })
-
-    return content
   } catch (error) {
     console.error('提取Wiki内容失败:', error)
     return null
@@ -95,12 +73,11 @@ export async function extractWikiContent(page): Promise<string | null> {
 }
 
 // 基础Wiki API请求函数
-async function wikiRequest(ctx: Context, query: string, getExtract = false): Promise<any> {
+async function wikiRequest(ctx: Context, query: string): Promise<{items: SearchResultItem[], total: number, queryUrl: string}> {
+  const searchUrl = `${API_ENDPOINT}?action=query&list=search&srsearch=${encodeURIComponent(query)}`
   ctx.logger.info(`[Wiki] 搜索: "${query}"`)
-  ctx.logger.info(`[Wiki] 请求链接: ${API_ENDPOINT}?action=query&list=search&srsearch=${encodeURIComponent(query)}`)
 
   try {
-    // 搜索请求
     const res = await safeRequest(ctx, API_ENDPOINT, {
       action: 'query',
       list: 'search',
@@ -114,88 +91,108 @@ async function wikiRequest(ctx: Context, query: string, getExtract = false): Pro
 
     if (!searchResults.length) {
       ctx.logger.info(`[Wiki] 未找到结果`)
-      return { results: [], total }
+      return { items: [], total: 0, queryUrl: searchUrl }
     }
 
     // 转换搜索结果
-    const results = searchResults.map(hit => {
-      const title = hit.title
-      const url = `${BASE_URL}${encodeURIComponent(title.replace(/ /g, '_'))}`
-      ctx.logger.info(`[Wiki] 生成链接: ${url} (标题: ${title})`)
-      const snippet = hit.snippet?.replace(/<\/?span[^>]*>/g, '').replace(/<\/?searchmatch>/g, '') || ''
-      return { title, url, extract: snippet, source: 'wiki' }
-    })
+    const items: SearchResultItem[] = searchResults.map(hit => ({
+      title: hit.title,
+      url: `${BASE_URL}${encodeURIComponent(hit.title.replace(/ /g, '_'))}`,
+      excerpt: hit.snippet?.replace(/<\/?span[^>]*>/g, '').replace(/<\/?searchmatch>/g, '') || '',
+      source: 'wiki'
+    }))
 
-    ctx.logger.info(`[Wiki] 搜索成功，找到 ${results.length} 条结果`)
-    if (results.length > 0) {
-      ctx.logger.info(`[Wiki] 第一条结果: ${results[0].title} - ${results[0].url}`)
-    }
-
-    // 如果需要获取第一个结果的详细内容，只获取API摘要，完整内容由render函数统一处理
-    if (getExtract && results.length > 0) {
-      try {
-        const pageTitle = results[0].title
-        ctx.logger.info(`[Wiki] 获取API摘要: ${pageTitle}`)
-
-        // 通过API获取摘要
-        const pageRes = await safeRequest(ctx, API_ENDPOINT, {
-          action: 'query',
-          prop: 'extracts',
-          explaintext: true,
-          titles: pageTitle,
-          format: 'json',
-          utf8: 1,
-          exlimit: 1
-        })
-
-        if (pageRes?.query?.pages) {
-          const pages = pageRes.query.pages
-          const pageId = Object.keys(pages)[0]
-          results[0].extract = pages[pageId]?.extract || '暂无内容'
-          const excerpt = results[0].extract.substring(0, 100) + '...'
-          ctx.logger.info(`[Wiki] API摘要获取成功: ${excerpt}`)
-        }
-      } catch (error) {
-        ctx.logger.warn(`[Wiki] 获取API摘要失败: ${error.message}`)
-      }
-    }
-
-    return { results, total }
+    ctx.logger.info(`[Wiki] 搜索成功，找到 ${items.length} 条结果`)
+    return { items, total, queryUrl: searchUrl }
   } catch (error) {
     ctx.logger.error(`[Wiki] 搜索失败: ${error.message}`)
-    return { results: [], total: 0 }
+    return { items: [], total: 0, queryUrl: searchUrl }
   }
 }
 
 // 搜索Minecraft维基并返回结果
 export async function searchWiki(ctx: Context, query: string): Promise<Result | null> {
-  const { results } = await wikiRequest(ctx, query, true)
+  const { items } = await wikiRequest(ctx, query)
 
-  // 如果有结果但没有完整内容，尝试获取
-  if (results.length > 0 && !results[0].fullContent) {
+  if (items.length > 0) {
+    return await getWikiDetail(ctx, items[0].title, items[0].url)
+  }
+
+  return null
+}
+
+// 获取Wiki词条详细内容
+export async function getWikiDetail(ctx: Context, title: string, url?: string): Promise<Result | null> {
+  try {
+    ctx.logger.info(`[Wiki] 获取词条详情: ${title}`)
+
+    // 如果没有提供URL，则构建URL
+    if (!url) {
+      url = `${BASE_URL}${encodeURIComponent(title.replace(/ /g, '_'))}`
+    }
+
+    // 先获取API摘要
+    const pageRes = await safeRequest(ctx, API_ENDPOINT, {
+      action: 'query',
+      prop: 'extracts',
+      explaintext: true,
+      titles: title,
+      format: 'json',
+      utf8: 1,
+      exlimit: 1
+    })
+
+    let apiExtract = ''
+    if (pageRes?.query?.pages) {
+      const pages = pageRes.query.pages
+      const pageId = Object.keys(pages)[0]
+      apiExtract = pages[pageId]?.extract || '暂无内容'
+    }
+
+    // 创建结果对象
+    const result: Result = {
+      title,
+      url,
+      contents: [{
+        type: ContentType.TEXT,
+        value: apiExtract
+      }],
+      source: 'wiki',
+      apiExtract
+    }
+
+    // 获取完整内容
     try {
-      const fullContent = await fetchPageContent(ctx, results[0].url, extractWikiContent)
+      const fullContent = await fetchPageContent(ctx, url, extractWikiContent)
       if (fullContent) {
-        results[0].extract = fullContent
-        results[0].fullContent = true
+        result.contents.push({
+          type: ContentType.FULL_EXTRACT,
+          value: fullContent
+        })
         ctx.logger.info(`[Wiki] 已获取Wiki完整内容，长度: ${fullContent.length}字符`)
       }
     } catch (error) {
       ctx.logger.warn(`[Wiki] 获取完整内容失败: ${error.message}`)
     }
-  }
 
-  return results.length > 0 ? results[0] : null
+    return result
+  } catch (error) {
+    ctx.logger.error(`[Wiki] 获取词条详情失败: ${error.message}`)
+    return null
+  }
 }
 
 // 搜索Minecraft维基并返回多个结果
 export async function searchWikiList(ctx: Context, query: string): Promise<SearchResults> {
-  const { results, total } = await wikiRequest(ctx, query)
-  return { query, total, results }
+  const { items, total, queryUrl } = await wikiRequest(ctx, query)
+  return { query, queryUrl, total, items }
 }
 
 // 注册wiki搜索命令
 export function registerWiki(ctx: Context, mc: Command, config?: Config) {
+  // 提供方法给其他模块调用
+  ctx.provide('wiki_getDetail', (title: string, url?: string) => getWikiDetail(ctx, title, url))
+
   // 主命令：查询单个结果
   const wiki = mc.subcommand('.wiki <query:text>', '查询Minecraft Wiki词条')
     .option('visual', '-v <mode:string>', { fallback: '' })
@@ -212,9 +209,8 @@ export function registerWiki(ctx: Context, mc: Command, config?: Config) {
     .action(async ({ session, options }, query) => {
       if (!query) return '请输入要搜索的内容'
       const searchResults = await searchWikiList(ctx, query)
-      if (searchResults.results.length === 0) return '未找到相关Wiki词条'
+      if (searchResults.items.length === 0) return '未找到相关Wiki词条'
 
-      // 使用更新后的 renderList，支持摘要显示选项
       return renderList(
         session,
         searchResults,

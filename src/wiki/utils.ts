@@ -3,20 +3,42 @@ import {} from 'koishi-plugin-adapter-onebot'
 
 export type OutputMode = 'text' | 'fwd' | 'shot'
 
+// 内容类型枚举
+export enum ContentType {
+  TEXT = 'text',
+  FULL_EXTRACT = 'full_extract'
+}
+
+// 表示内容的接口
+export interface Content {
+  type: ContentType;
+  value: string;
+}
+
 // 表示单个词条的详细内容
 export interface Result {
-  title: string
-  url: string
-  extract?: string
-  source: string
-  fullContent?: boolean // 表示内容是否是完整爬取的
+  title: string;
+  url: string;
+  contents: Content[];  // 使用内容数组
+  source: string;   // 来源：'wiki' 或 'mcmod'
+  apiExtract?: string; // 可选的API摘要
+}
+
+// 表示搜索结果列表中的单项
+export interface SearchResultItem {
+  title: string;
+  url: string;
+  excerpt: string;   // 摘要内容
+  source: string;    // 来源：'wiki' 或 'mcmod'
+  category?: string; // 可选的分类信息
 }
 
 // 表示搜索结果列表
 export interface SearchResults {
-  query: string
-  total: number
-  results: Result[]
+  query: string;
+  queryUrl: string;
+  total: number;
+  items: SearchResultItem[]; // 使用专门的搜索结果项
 }
 
 /**
@@ -41,12 +63,9 @@ export async function safeRequest(ctx: Context, url: string, params = {}, option
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await ctx.http.get(url, requestOptions)
-      // 记录响应概览
-      if (typeof response === 'object') {
-        ctx.logger.info(`响应数据: ${JSON.stringify(response).substring(0, 100)}...`)
-      } else if (typeof response === 'string') {
-        ctx.logger.info(`响应长度: ${response.length}字节, 前100字符: ${response.substring(0, 100)}...`)
-      }
+      ctx.logger.info(`请求成功，响应数据大小: ${
+        typeof response === 'object' ? JSON.stringify(response).length : response.length
+      } 字节`)
       return response
     } catch (error) {
       ctx.logger.warn(`请求失败(${attempt}/${maxRetries}): ${error.message}`)
@@ -59,9 +78,6 @@ export async function safeRequest(ctx: Context, url: string, params = {}, option
 
 /**
  * 通用网页内容爬取函数
- * @param ctx Koishi上下文
- * @param url 要爬取的URL
- * @param extractorFn 可选的内容提取函数
  */
 export async function fetchPageContent(
   ctx: Context,
@@ -115,66 +131,58 @@ export async function fetchPageContent(
 }
 
 /**
+ * 从Result中获取内容
+ */
+function getContent(result: Result): string {
+  const fullContent = result.contents.find(c => c.type === ContentType.FULL_EXTRACT);
+  const textContent = result.contents.find(c => c.type === ContentType.TEXT);
+
+  return fullContent?.value || textContent?.value || result.apiExtract || '暂无简介';
+}
+
+/**
  * 处理并输出搜索结果
  */
 export async function render(ctx: Context, session: Session, result: Result | null, mode: OutputMode = 'fwd'): Promise<any> {
   if (!result) return '未找到相关词条'
 
   ctx.logger.info(`渲染 "${result.title}" (模式: ${mode})`)
-  ctx.logger.info(`渲染链接: ${result.url}`)
 
-  // 记录链接来源
-  if (result.source === 'wiki') {
-    ctx.logger.info(`[Wiki] 使用链接: ${result.url}`)
-  } else if (result.source === 'mcmod') {
-    ctx.logger.info(`[MCMod] 使用链接: ${result.url}`)
-  }
+  // 获取内容
+  let extract = getContent(result);
 
-  // 如果结果中没有完整内容标记，尝试爬取完整内容
-  if (!result.fullContent) {
+  // 如果没有内容，尝试爬取
+  if (!extract) {
     ctx.logger.info(`尝试获取完整内容: ${result.url}`)
-
-    // 根据源类型使用对应模块的函数获取内容
     const fullContent = await fetchPageContent(ctx, result.url)
-    if (fullContent) {
-      result.extract = fullContent
-      result.fullContent = true
-      ctx.logger.info(`已获取完整内容，长度: ${fullContent.length}字符`)
-    }
-  }
 
-  if (result.extract) {
-    const excerpt = result.extract.substring(0, 100) + (result.extract.length > 100 ? '...' : '')
-    ctx.logger.info(`内容概览: ${excerpt}`)
+    if (fullContent) {
+      result.contents.push({
+        type: ContentType.FULL_EXTRACT,
+        value: fullContent
+      });
+      extract = fullContent;
+    }
   }
 
   try {
     // 按优先级尝试不同渲染模式
     if (mode === 'shot') {
-      ctx.logger.info(`尝试截图模式获取: ${result.url}`)
       const output = await renderShot(ctx, result)
-      if (output) {
-        ctx.logger.info('截图渲染成功')
-        return output
-      }
+      if (output) return output;
       mode = 'fwd'
       ctx.logger.info('截图失败，回退到合并转发')
     }
 
     if (mode === 'fwd') {
       const output = await renderFwd(ctx, session, result)
-      if (output !== null) {
-        ctx.logger.info('合并转发渲染成功')
-        return output
-      }
+      if (output !== null) return output;
       mode = 'text'
       ctx.logger.info('合并转发失败，回退到文本')
     }
 
     // 默认使用文本模式
-    const output = await renderText(ctx, session, result)
-    ctx.logger.info(`文本渲染完成`)
-    return output
+    return await renderText(ctx, session, result)
   } catch (error) {
     ctx.logger.error(`渲染失败: ${error.message}`)
     return `${result.title}\n\n查看更多: ${result.url}`
@@ -217,7 +225,7 @@ function smartTextSplit(text: string): string[] {
  * 文本输出模式
  */
 export async function renderText(ctx: Context, session: Session, result: Result): Promise<string | string[]> {
-  const extract = result.extract || '暂无简介'
+  const extract = getContent(result);
   const segments = smartTextSplit(extract)
   const messages = [`${result.title}\n\n${segments[0]}`]
 
@@ -250,17 +258,15 @@ export async function renderText(ctx: Context, session: Session, result: Result)
  * 合并转发输出模式
  */
 export async function renderFwd(ctx: Context, session: Session, result: Result): Promise<any> {
-  if (session.platform !== 'onebot') {
-    ctx.logger.info(`非OneBot平台(${session.platform})，不支持合并转发`)
-    return null
-  }
+  if (session.platform !== 'onebot') return null;
 
   const onebot = session.bot
   if (!onebot) return null
 
   try {
     const srcName = result.source === 'wiki' ? 'Minecraft Wiki' : 'MC百科'
-    const segments = smartTextSplit(result.extract || '暂无简介')
+    const extract = getContent(result);
+    const segments = smartTextSplit(extract);
 
     // 构造合并转发消息节点
     const fwdMsgs = [
@@ -292,19 +298,13 @@ export async function renderFwd(ctx: Context, session: Session, result: Result):
  * 网页截图输出模式
  */
 export async function renderShot(ctx: Context, result: Result): Promise<any> {
-  if (!ctx.puppeteer) {
-    ctx.logger.warn('截图服务不可用')
-    return null
-  }
+  if (!ctx.puppeteer) return null;
 
   try {
     const page = await ctx.puppeteer.page()
-    // 设置高清截图
     await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1.5 })
 
-    // 加载页面
     ctx.logger.info(`开始加载页面: ${result.url}`)
-    ctx.logger.info(`[${result.source.toUpperCase()}] 请求截图: ${result.url}`)
     await page.goto(result.url, { waitUntil: 'networkidle0' })
 
     // 选择内容区域
@@ -384,78 +384,53 @@ export async function renderList(
   mode: OutputMode = 'text',
   options: { showExcerpt?: boolean } = { showExcerpt: true }
 ): Promise<any> {
-  if (!searchResults?.results?.length) return '未找到相关词条'
+  if (!searchResults?.items?.length) return '未找到相关词条'
 
   // 过滤掉无效链接的结果
-  const validResults = searchResults.results.filter(result => result.url && result.title)
-
-  if (session.app.logger && validResults.length > 0) {
-    const sourceName = validResults[0].source.toUpperCase()
-    const logger = session.app.logger
-    logger.info(`[${sourceName}] 生成搜索结果列表，共 ${validResults.length} 项`)
-    validResults.forEach((result, i) => {
-      logger.info(`[${sourceName}] 列表项 ${i+1}: ${result.title} - ${result.url}`)
-      if (options.showExcerpt && result.extract && result.extract.length > 0) {
-        const excerpt = result.extract.substring(0, 80) + '...'
-        logger.info(`[${sourceName}] 内容概览 ${i+1}: ${excerpt}`)
-      }
-    })
-  }
-
+  const validResults = searchResults.items.filter(item => item.url && item.title)
   if (!validResults.length) return '未找到有效的搜索结果'
 
-  // 生成所有结果的列表，优化显示格式
-  const listText = validResults.map((result, i) => {
-    // 确保标题和URL都正确显示，如果标题为空则显示"未命名"
-    const displayTitle = result.title.trim() || '未命名词条'
+  const logger = session.app.logger;
+  const sourceName = validResults[0].source.toUpperCase();
+  logger?.info(`[${sourceName}] 生成搜索结果列表，共 ${validResults.length} 项`);
 
-    // 提取分类信息（对于MC百科结果）
+  // 生成列表文本
+  const listText = validResults.map((item, i) => {
+    const displayTitle = item.title.trim() || '未命名词条'
+
+    // 提取分类信息
     let categoryInfo = ''
-    if (result.source === 'mcmod' && result.extract && result.extract.includes('分类：')) {
-      const categoryMatch = result.extract.match(/分类：([^|]+)/)
-      if (categoryMatch) {
-        categoryInfo = `[${categoryMatch[1].trim()}] `
-      }
+    if (item.category) {
+      categoryInfo = `[${item.category}] `
     }
 
-    // 基础格式：序号、分类标签、标题、链接
-    let itemText = `${i + 1}. ${categoryInfo}${displayTitle}\n   ${result.url}`
+    // 基础格式
+    let itemText = `${i + 1}. ${categoryInfo}${displayTitle}\n   ${item.url}`
 
-    // 如果配置了显示摘要并且存在摘要，添加到列表项
-    if (options.showExcerpt && result.extract) {
-      // 从摘要中去除元数据部分（通常在 \n\n 后面）
-      let excerpt = result.extract
-      const metadataPos = excerpt.indexOf('\n\n')
-      if (metadataPos > -1) {
-        excerpt = excerpt.substring(0, metadataPos)
-      }
-
-      // 限制摘要长度并添加到结果中
-      if (excerpt.length > 100) {
-        excerpt = excerpt.substring(0, 100) + '...'
-      }
-
-      itemText += `\n   ${excerpt}`
+    // 添加摘要
+    if (options.showExcerpt && item.excerpt) {
+      const cleanExcerpt = item.excerpt.split('\n\n')[0].substring(0, 100) + (item.excerpt.length > 100 ? '...' : '');
+      itemText += `\n   ${cleanExcerpt}`
     }
 
     return itemText
   }).join('\n\n')
 
-  const sourceName = validResults[0].source === 'wiki' ? 'Minecraft Wiki' : 'MC百科'
+  const sourceName2 = validResults[0].source === 'wiki' ? 'Minecraft Wiki' : 'MC百科'
   const promptText = `找到 ${searchResults.total || validResults.length} 条相关词条，请回复数字选择查看详情：`
 
-  // 发送结果列表
+  // 发送函数
   const sendList = async () => {
     await session.send(promptText)
     await session.send(listText)
   }
 
-  // 根据平台和模式选择显示方式
+  // 选择显示方式
   if (mode === 'fwd' && session.platform === 'onebot') {
     try {
       const fwdMsgs = [
-        { type: 'node', data: { name: `${sourceName}搜索`, uin: session.selfId || '10000', content: promptText } },
-        { type: 'node', data: { name: `${sourceName}搜索`, uin: session.selfId || '10000', content: listText } }
+        { type: 'node', data: { name: `${sourceName2}搜索`, uin: session.selfId || '10000', content: promptText } },
+        { type: 'node', data: { name: `${sourceName2}搜索`, uin: session.selfId || '10000', content: listText } }
       ]
 
       const onebot = session.bot
@@ -471,8 +446,7 @@ export async function renderList(
         await sendList()
       }
     } catch (error) {
-      const sourceName = validResults[0].source.toUpperCase()
-      session.app.logger.warn(`[${sourceName}] 合并转发失败: ${error.message}`)
+      logger?.warn(`[${sourceName}] 合并转发失败: ${error.message}`)
       await sendList()
     }
   } else {
@@ -488,9 +462,45 @@ export async function renderList(
       return '选择无效，已取消查询'
     }
 
-    // 返回完整的结果对象以便详细查看
-    const selectedResult = validResults[selection - 1]
-    return render(session.app, session, selectedResult, mode)
+    // 获取用户选择的结果
+    const selectedItem = validResults[selection - 1]
+    const source = selectedItem.source
+
+    // 根据源获取详细内容
+    try {
+      const app = session.app
+      let result: Result | null = null
+
+      // 直接调用对应函数获取详情
+      if (source === 'wiki') {
+        // 动态导入避免循环依赖
+        const wikiModule = await import('./wiki')
+        if (!wikiModule.getWikiDetail) {
+          throw new Error('Wiki详情获取函数未定义')
+        }
+        result = await wikiModule.getWikiDetail(app, selectedItem.title, selectedItem.url)
+      }
+      else if (source === 'mcmod') {
+        // 动态导入避免循环依赖
+        const mcmodModule = await import('./mcmod')
+        if (!mcmodModule.getMcmodDetail) {
+          throw new Error('MC百科详情获取函数未定义')
+        }
+        result = await mcmodModule.getMcmodDetail(app, selectedItem.title, selectedItem.url)
+      }
+      else {
+        throw new Error(`不支持的内容源：${source}`)
+      }
+
+      if (!result) {
+        throw new Error(`获取${source === 'wiki' ? 'Wiki' : 'MC百科'}详情失败`)
+      }
+
+      return render(app, session, result, mode)
+    } catch (error) {
+      session.app.logger?.error(`[Detail] 获取详情失败: ${error.message}`)
+      return `获取详情失败: ${error.message}`
+    }
   } catch {
     return '查询已超时或被取消'
   }

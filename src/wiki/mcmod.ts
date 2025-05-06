@@ -1,5 +1,5 @@
-import { Context, Command, Session } from 'koishi'
-import { render, parseMode, renderList, safeRequest, cleanText, fetchPageContent, Result, SearchResults } from './utils'
+import { Context, Command } from 'koishi'
+import { render, parseMode, renderList, safeRequest, cleanText, fetchPageContent, Result, SearchResults, Content, ContentType, SearchResultItem } from './utils'
 import { Config } from '../index'
 
 /**
@@ -21,28 +21,25 @@ function normalizeUrl(url: string, ctx?: Context): string {
 
   // 添加https前缀并确保使用HTTPS
   let normalizedUrl = url
-  if (!normalizedUrl.startsWith('http')) normalizedUrl = 'https://' + normalizedUrl
-  else if (normalizedUrl.startsWith('http:')) normalizedUrl = normalizedUrl.replace('http:', 'https:')
-
-  // 过滤无效链接
-  const isInvalid = normalizedUrl.includes('/class/category/')
-  const result = isInvalid ? '' : normalizedUrl
-
-  if (ctx) {
-    if (isInvalid) {
-      ctx.logger.info(`[MCMod] 过滤无效链接: ${normalizedUrl}`)
-    } else if (normalizedUrl !== url) {
-      ctx.logger.info(`[MCMod] 规范化链接: ${url} -> ${normalizedUrl}`)
-    }
+  if (!normalizedUrl.startsWith('http')) {
+    normalizedUrl = 'https://' + normalizedUrl
+  } else if (normalizedUrl.startsWith('http:')) {
+    normalizedUrl = normalizedUrl.replace('http:', 'https:')
   }
 
-  return result
+  // 过滤无效链接
+  if (normalizedUrl.includes('/class/category/')) {
+    ctx?.logger.info(`[MCMod] 过滤无效链接: ${normalizedUrl}`)
+    return ''
+  }
+
+  return normalizedUrl
 }
 
 /**
- * 从HTML中提取搜索结果
+ * 从HTML中提取搜索结果列表
  */
-async function parseMcmodResults(ctx: Context, query: string, getFullContent = false): Promise<{ results: Result[], total: number }> {
+async function parseMcmodResults(ctx: Context, query: string): Promise<{ items: SearchResultItem[], total: number, queryUrl: string }> {
   const searchUrl = `https://search.mcmod.cn/s?key=${encodeURIComponent(query)}&filter=0&site=1`
   ctx.logger.info(`[MCMod] 搜索: "${query}"`)
   ctx.logger.info(`[MCMod] 请求链接: ${searchUrl}`)
@@ -54,91 +51,52 @@ async function parseMcmodResults(ctx: Context, query: string, getFullContent = f
     const totalMatch = html.match(/找到约\s*(\d+)\s*条结果/i)
     const total = totalMatch ? parseInt(totalMatch[1]) : 0
 
-    // 提取所有结果项
-    const results: Result[] = []
+    const items: SearchResultItem[] = []
 
-    // 使用一个函数提取所有结果项
-    const extractResults = () => {
-      // 首先尝试获取所有结果项
-      const resultItems = html.match(/<div class="result-item">[\s\S]*?<\/div>\s*<\/div>/g) || []
+    // 提取结果项
+    const resultItems = html.match(/<div class="result-item">[\s\S]*?<\/div>\s*<\/div>/g) || []
 
-      resultItems.forEach(itemHtml => {
-        if (results.length >= 20) return // 限制最多20个结果
+    for (const itemHtml of resultItems) {
+      if (items.length >= 20) break; // 限制最多20个结果
 
-        try {
-          // 直接从result-item中查找带有href的<a>标签
-          // 注意查找格式为 <a target="_blank" href="https://www.mcmod.cn/class/..."
-          const linkRegex = /<a\s+[^>]*?href="(https?:\/\/www\.mcmod\.cn\/class\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
-          const linkMatch = itemHtml.match(linkRegex);
+      try {
+        // 查找URL和标题
+        const linkRegex = /<a\s+[^>]*?href="(https?:\/\/www\.mcmod\.cn\/class\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
+        const altLinkRegex = /<a\s+[^>]*?href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
 
-          if (!linkMatch) {
-            // 如果没找到完整URL格式的链接，尝试查找任何形式的链接
-            const altLinkRegex = /<a\s+[^>]*?href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i;
-            const altMatch = itemHtml.match(altLinkRegex);
+        let rawUrl = '', title = '';
 
-            if (!altMatch) {
-              ctx.logger.debug(`[MCMod] 未在结果项中找到链接`);
-              return;
-            }
+        // 优先查找完整URL格式的链接
+        const linkMatch = itemHtml.match(linkRegex);
+        if (linkMatch) {
+          rawUrl = linkMatch[1];
+          title = cleanMcmodText(linkMatch[2].replace(/<[^>]*>/g, ''));
+        } else {
+          // 尝试查找任何形式的链接
+          const altMatch = itemHtml.match(altLinkRegex);
+          if (!altMatch) continue;
 
-            // 使用备用匹配结果
-            const rawUrl = altMatch[1];
-            const url = normalizeUrl(rawUrl, ctx);
-            if (!url) return;
-
-            const title = cleanMcmodText(altMatch[2].replace(/<[^>]*>/g, ''));
-            extractBodyContent(itemHtml, title, url);
-          } else {
-            // 找到了完整URL格式的链接
-            const rawUrl = linkMatch[1];
-            ctx.logger.info(`[MCMod] 提取到完整格式链接: ${rawUrl}`);
-            const url = normalizeUrl(rawUrl, ctx);
-            if (!url) return;
-
-            const title = cleanMcmodText(linkMatch[2].replace(/<[^>]*>/g, ''));
-            extractBodyContent(itemHtml, title, url);
-          }
-        } catch (error) {
-          ctx.logger.warn(`[MCMod] 解析结果项失败: ${error.message}`);
+          rawUrl = altMatch[1];
+          title = cleanMcmodText(altMatch[2].replace(/<[^>]*>/g, ''));
         }
-      });
 
-      // 辅助函数：提取正文内容并添加到结果
-      function extractBodyContent(itemHtml: string, title: string, url: string) {
-        ctx.logger.info(`[MCMod] 处理结果: 标题 "${title}", 链接 ${url}`);
+        const url = normalizeUrl(rawUrl, ctx);
+        if (!url) continue;
 
         // 提取正文内容
         const bodyMatch = itemHtml.match(/<div class="body">([\s\S]*?)<\/div>/i);
-        let extract = '';
+        let excerpt = '';
         if (bodyMatch) {
           const bodyHtml = bodyMatch[1];
-          extract = cleanMcmodText(bodyHtml.replace(/<em>(.*?)<\/em>/g, '$1').replace(/<[^>]*>/g, ''));
-        }
-
-        // 提取页脚信息
-        const footerInfo: Record<string, string> = {};
-        const footMatch = itemHtml.match(/<div class="foot">([\s\S]*?)<\/div>/i);
-        if (footMatch) {
-          // 提取快照时间
-          const snapshotMatch = footMatch[1].match(/快照时间：<\/span><span class="value">([^<]+)<\/span>/);
-          if (snapshotMatch) {
-            footerInfo['snapshot'] = snapshotMatch[1].trim();
-          }
-
-          // 提取来源
-          const sourceMatch = footMatch[1].match(/来自：<\/span><span class="value"><a[^>]*>([^<]+)<\/a>/);
-          if (sourceMatch) {
-            footerInfo['source'] = sourceMatch[1].trim();
-          }
+          excerpt = cleanMcmodText(bodyHtml.replace(/<em>(.*?)<\/em>/g, '$1').replace(/<[^>]*>/g, ''));
         }
 
         // 提取分类信息
         let category = '';
         const categoryMatch = itemHtml.match(/<div class="class-category"><ul><li><a class="([^"]+)" href="[^"]+\/class\/category\/[^"]+" target="_blank"><\/a>/i);
         if (categoryMatch) {
-          const categoryClass = categoryMatch[1]; // 例如 c_1, c_23 等
-          // 转换分类代码到分类名称
-          const categoryMap: Record<string, string> = {
+          const categoryClass = categoryMatch[1];
+          const categoryMap = {
             'c_1': '科技', 'c_2': '魔法', 'c_3': '冒险',
             'c_4': '农业', 'c_5': '装饰', 'c_21': '魔改',
             'c_23': '实用', 'c_24': '辅助'
@@ -146,66 +104,48 @@ async function parseMcmodResults(ctx: Context, query: string, getFullContent = f
           category = categoryMap[categoryClass] || '其他';
         }
 
-        // 构建增强的描述
-        let enhancedExtract = extract;
+        // 提取页脚信息
+        const footMatch = itemHtml.match(/<div class="foot">([\s\S]*?)<\/div>/i);
+        let snapshot = '', source = '';
 
-        // 添加分类和页脚信息到描述末尾
+        if (footMatch) {
+          const snapshotMatch = footMatch[1].match(/快照时间：<\/span><span class="value">([^<]+)<\/span>/);
+          if (snapshotMatch) snapshot = snapshotMatch[1].trim();
+
+          const sourceMatch = footMatch[1].match(/来自：<\/span><span class="value"><a[^>]*>([^<]+)<\/a>/);
+          if (sourceMatch) source = sourceMatch[1].trim();
+        }
+
+        // 增强描述
+        let enhancedExcerpt = excerpt;
         const infoDetails = [];
-        if (category) {
-          infoDetails.push(`分类：${category}`);
-        }
-        if (footerInfo.snapshot) {
-          infoDetails.push(`快照时间：${footerInfo.snapshot}`);
-        }
-        if (footerInfo.source) {
-          infoDetails.push(`来源：${footerInfo.source}`);
-        }
+
+        if (category) infoDetails.push(`分类：${category}`);
+        if (snapshot) infoDetails.push(`快照时间：${snapshot}`);
+        if (source) infoDetails.push(`来源：${source}`);
 
         if (infoDetails.length > 0) {
-          enhancedExtract += `\n\n${infoDetails.join(' | ')}`;
+          enhancedExcerpt += `\n\n${infoDetails.join(' | ')}`;
         }
 
-        results.push({
+        // 添加到结果
+        items.push({
           title,
           url,
-          extract: enhancedExtract,
-          source: 'mcmod'
+          excerpt: enhancedExcerpt,
+          source: 'mcmod',
+          category
         });
-      }
-    };
-
-    // 提取搜索结果
-    extractResults();
-
-    ctx.logger.info(`[MCMod] 搜索成功，找到 ${results.length} 条结果`);
-    if (results.length > 0) {
-      ctx.logger.info(`[MCMod] 第一条结果: ${results[0].title} - ${results[0].url}`);
-
-      // 如果需要获取完整内容且存在结果
-      if (getFullContent && results.length > 0) {
-        try {
-          ctx.logger.info(`[MCMod] 尝试获取完整内容: ${results[0].url}`);
-          const fullContent = await fetchPageContent(ctx, results[0].url);
-          if (fullContent) {
-            results[0].extract = fullContent;
-            results[0].fullContent = true;
-            ctx.logger.info(`[MCMod] 已获取完整内容，长度: ${fullContent.length}字符`);
-          }
-        } catch (error) {
-          ctx.logger.warn(`[MCMod] 获取完整内容失败: ${error.message}`);
-        }
-      }
-
-      if (results[0].extract) {
-        const excerpt = results[0].extract.substring(0, 100) + '...';
-        ctx.logger.info(`[MCMod] 内容概览: ${excerpt}`);
+      } catch (error) {
+        ctx.logger.warn(`[MCMod] 解析结果项失败: ${error.message}`);
       }
     }
 
-    return { results, total };
+    ctx.logger.info(`[MCMod] 搜索成功，找到 ${items.length} 条结果`);
+    return { items, total, queryUrl: searchUrl };
   } catch (error) {
     ctx.logger.error(`[MCMod] 搜索失败: ${error.message}`);
-    return { results: [], total: 0 };
+    return { items: [], total: 0, queryUrl: searchUrl };
   }
 }
 
@@ -214,11 +154,9 @@ async function parseMcmodResults(ctx: Context, query: string, getFullContent = f
  */
 export async function extractMcmodContent(page): Promise<string | null> {
   try {
-    // 等待页面主要内容加载
     await page.waitForSelector('.class-menu-main, .item-content', { timeout: 10000 })
 
-    // 执行提取内容的脚本
-    const content = await page.evaluate(() => {
+    return await page.evaluate(() => {
       function cleanText(text: string): string {
         if (!text) return '';
         return text.replace(/\s+/g, ' ')
@@ -226,92 +164,79 @@ export async function extractMcmodContent(page): Promise<string | null> {
           .trim();
       }
 
-      // 获取标题
+      // 获取标题和状态信息
+      const shortName = document.querySelector('.class-title .short-name')?.textContent?.trim() || '';
       const modTitle = document.querySelector('.class-title h3')?.textContent?.trim() || '';
       const modSubtitle = document.querySelector('.class-title h4')?.textContent?.trim() || '';
-
-      // 获取分类信息
-      const categoryElements = document.querySelectorAll('.common-class-category li a');
-      const categories = Array.from(categoryElements)
-        .map(el => {
-          // 尝试从title或data-original-title属性获取分类名称
-          return el.getAttribute('data-original-title') ||
-                 el.getAttribute('title') ||
-                 el.textContent?.trim() || '';
-        })
-        .filter(text => text && !text.includes('common-icon-category'));
+      const statusLabels = Array.from(document.querySelectorAll('.class-status, .class-source'))
+        .map(el => el.textContent?.trim() || '')
+        .filter(Boolean);
 
       // 构建标题部分
-      let result = modTitle ? `《${modTitle}` : '';
-      if (modSubtitle) result += ` (${modSubtitle})`;
-      result += '》\n';
-
-      if (categories.length > 0) {
-        result += `[${categories.join(' / ')}]\n`;
+      let result = `${shortName} ${modSubtitle} | ${modTitle}`;
+      if (statusLabels.length > 0) {
+        result += ` (${statusLabels.join(' | ')})`;
       }
-      result += '\n';
+      result += '\n\n';
 
-      // 提取模组基本信息
-      const infoItems = document.querySelectorAll('.class-info-left .col-lg-4, .class-info-left li');
-      if (infoItems.length > 0) {
-        result += '【基本信息】\n';
-        infoItems.forEach(item => {
-          const text = cleanText(item.textContent || '');
-          if (text && !text.includes('模组标签') && !text.includes('相关链接')) {
-            result += `${text}\n`;
-          }
-        });
-        result += '\n';
-      }
+      // 提取运作方式和运行环境
+      const infoItems = document.querySelectorAll('.class-info-left .col-lg-4');
+      let runMode = '', runEnv = '';
 
-      // 提取模组介绍内容
-      const introElement = document.querySelector('.common-text');
-      if (introElement) {
-        // 提取正文中的所有标题和段落
-        const contentNodes = introElement.querySelectorAll('p, .common-text-title, ul, ol, table, h1, h2, h3, h4, h5, h6');
+      infoItems.forEach(item => {
+        const text = item.textContent?.trim() || '';
+        if (text.includes('运作方式:')) {
+          runMode = text.replace('运作方式:', '').trim();
+        } else if (text.includes('运行环境:')) {
+          runEnv = text.replace('运行环境:', '').trim();
+        }
+      });
 
-        contentNodes.forEach(node => {
-          const tagName = node.tagName.toLowerCase();
+      if (runMode) result += `运作方式: ${runMode}\n`;
+      if (runEnv) result += `运行环境: ${runEnv}\n`;
 
-          // 处理标题
-          if (tagName.startsWith('h') || node.classList.contains('common-text-title')) {
-            const titleText = cleanText(node.textContent || '');
-            if (titleText) {
-              result += `\n【${titleText}】\n`;
-            }
-          }
-          // 处理段落
-          else if (tagName === 'p') {
-            const paragraphText = cleanText(node.textContent || '');
-            if (paragraphText) {
-              result += `${paragraphText}\n\n`;
-            }
-          }
-          // 处理列表
-          else if (tagName === 'ul' || tagName === 'ol') {
-            const listItems = node.querySelectorAll('li');
-            listItems.forEach((item, index) => {
-              const itemText = cleanText(item.textContent || '');
-              if (itemText) {
-                result += tagName === 'ol' ? `${index + 1}. ${itemText}\n` : `• ${itemText}\n`;
+      // 提取支持版本
+      const mcverElement = document.querySelector('.col-lg-12.mcver');
+      if (mcverElement) {
+        result += '支持版本:\n';
+
+        // 简化版本号显示的辅助函数
+        function simplifyVersions(versions) {
+          const groupedVersions = {};
+          versions.forEach(version => {
+            const match = version.match(/^(\d+\.\d+)/);
+            if (match) {
+              const mainVersion = match[1];
+              if (!groupedVersions[mainVersion]) {
+                groupedVersions[mainVersion] = [];
               }
-            });
-            result += '\n';
+              groupedVersions[mainVersion].push(version);
+            }
+          });
+
+          const result = [];
+          for (const mainVersion in groupedVersions) {
+            const count = groupedVersions[mainVersion].length;
+            result.push(count === 1 ?
+              groupedVersions[mainVersion][0] :
+              `${mainVersion}(${count}个版本)`);
           }
-          // 处理表格
-          else if (tagName === 'table') {
-            const rows = node.querySelectorAll('tr');
-            rows.forEach(row => {
-              const cells = row.querySelectorAll('th, td');
-              const rowContent = Array.from(cells)
-                .map(cell => cleanText(cell.textContent || ''))
-                .filter(Boolean)
-                .join(' | ');
-              if (rowContent) {
-                result += `${rowContent}\n`;
-              }
-            });
-            result += '\n';
+
+          return result.join(', ');
+        }
+
+        // 获取所有版本分类
+        const versionCategories = mcverElement.querySelectorAll('ul');
+        versionCategories.forEach(category => {
+          const categoryTitle = category.querySelector('li')?.textContent?.trim() || '';
+          if (categoryTitle) {
+            const versions = Array.from(category.querySelectorAll('li:not(:first-child)'))
+              .map(li => li.textContent?.trim() || '')
+              .filter(Boolean);
+
+            if (versions.length > 0) {
+              result += `${categoryTitle} ${simplifyVersions(versions)}\n`;
+            }
           }
         });
       }
@@ -319,90 +244,171 @@ export async function extractMcmodContent(page): Promise<string | null> {
       // 提取相关链接
       const linksSection = document.querySelector('.common-link-frame');
       if (linksSection) {
-        const linkItems = linksSection.querySelectorAll('.common-link-icon-frame li');
-        if (linkItems.length > 0) {
-          result += '\n【相关链接】\n';
-          linkItems.forEach(item => {
-            const linkName = item.querySelector('.name')?.textContent?.trim() || '';
-            const linkTitle = item.querySelector('a')?.getAttribute('data-original-title') ||
-                             item.querySelector('a')?.getAttribute('title') || '';
+        result += '相关链接:\n';
+        const linkItems = document.querySelectorAll('.common-link-icon-frame li');
 
-            if (linkName) {
-              result += `• ${linkName}`;
-              if (linkTitle && linkTitle !== linkName) {
-                result += `: ${linkTitle}`;
+        linkItems.forEach(item => {
+          const linkName = item.querySelector('.name')?.textContent?.trim() || '';
+          const linkTitle = item.querySelector('a')?.getAttribute('data-original-title') ||
+                           item.querySelector('a')?.getAttribute('title') || '';
+          const linkHref = item.querySelector('a')?.getAttribute('href') || '';
+
+          // 提取真实URL（处理跳转链接）
+          let realUrl = '';
+          if (linkHref && linkHref.includes('link.mcmod.cn/target/')) {
+            const encodedUrl = linkHref.split('link.mcmod.cn/target/')[1];
+            if (encodedUrl) {
+              try {
+                realUrl = atob(encodedUrl);
+              } catch (e) {
+                realUrl = linkHref;
               }
-              result += '\n';
             }
-          });
-        }
-      }
+          } else {
+            realUrl = linkHref;
+          }
 
-      // 提取版本信息
-      const versionItems = document.querySelectorAll('.common-rowlist.log li a');
-      if (versionItems.length > 0) {
-        result += '\n【最近更新】\n';
-        let count = 0;
-        versionItems.forEach(item => {
-          if (count < 5) {  // 只显示最近5个版本
-            const versionText = item.textContent?.trim() || '';
-            const timeElement = item.nextElementSibling;
-            const timeText = timeElement?.textContent?.trim() || '';
-
-            if (versionText) {
-              result += `• ${versionText}`;
-              if (timeText) {
-                result += ` (${timeText})`;
-              }
-              result += '\n';
-              count++;
+          if (linkName && realUrl) {
+            result += `${linkName}`;
+            if (linkTitle && linkTitle !== linkName) {
+              result += ` (${linkTitle})`;
             }
+            result += `: ${realUrl}\n`;
           }
         });
       }
 
-      // 清理结果
-      return result
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-    });
+      // 提取简介内容
+      result += '简介:\n';
+      const introElement = document.querySelector('.common-text');
+      if (introElement) {
+        const introTitle = introElement.querySelector('.common-text-title:nth-of-type(1)');
+        const introText = [];
 
-    return content;
+        // 从简介标题开始，收集直到下一个标题为止的段落
+        if (introTitle) {
+          let currentElement = introTitle.nextElementSibling;
+          while (currentElement && !currentElement.classList.contains('common-text-title')) {
+            if (currentElement.tagName.toLowerCase() === 'p') {
+              const paragraphText = cleanText(currentElement.textContent || '');
+              if (paragraphText) {
+                introText.push(paragraphText);
+              }
+            }
+            currentElement = currentElement.nextElementSibling;
+          }
+        }
+
+        // 如果找不到专门的简介部分，则从开头提取一部分段落作为简介
+        if (introText.length === 0) {
+          const paragraphs = introElement.querySelectorAll('p');
+          let count = 0;
+          paragraphs.forEach(p => {
+            if (count < 3) { // 最多提取3段
+              const paragraphText = cleanText(p.textContent || '');
+              if (paragraphText) {
+                introText.push(paragraphText);
+                count++;
+              }
+            }
+          });
+        }
+
+        if (introText.length > 0) {
+          result += `『简介』\n${introText.join('\n\n')}\n`;
+        }
+      }
+
+      return result;
+    });
   } catch (error) {
     console.error('提取MC百科内容失败:', error);
     return null;
   }
 }
 
-// 搜索MCMOD百科并返回第一个结果
-export async function searchMcmod(ctx: Context, query: string): Promise<Result | null> {
-  const { results } = await parseMcmodResults(ctx, query)
+// 获取MC百科词条详细内容
+export async function getMcmodDetail(ctx: Context, title: string, url?: string): Promise<Result | null> {
+  try {
+    ctx.logger.info(`[MCMod] 获取词条详情: ${title}`)
 
-  // 如果有结果，尝试获取完整内容
-  if (results.length > 0 && !results[0].fullContent) {
+    // 如果没有提供URL，则需要搜索获取URL
+    if (!url) {
+      const searchResults = await parseMcmodResults(ctx, title)
+      const exactMatch = searchResults.items.find(item =>
+        item.title.toLowerCase() === title.toLowerCase()
+      )
+
+      // 获取最匹配的结果
+      const bestMatch = exactMatch || searchResults.items[0]
+      if (!bestMatch) return null
+
+      url = bestMatch.url
+      if (!url) return null
+
+      // 如果通过搜索找到了结果，使用搜索结果的标题
+      title = bestMatch.title
+    }
+
+    // 创建结果对象
+    const result: Result = {
+      title,
+      url,
+      contents: [{
+        type: ContentType.TEXT,
+        value: '正在获取内容...'
+      }],
+      source: 'mcmod'
+    }
+
+    // 获取完整内容
     try {
-      const fullContent = await fetchPageContent(ctx, results[0].url, extractMcmodContent)
+      const fullContent = await fetchPageContent(ctx, url, extractMcmodContent)
       if (fullContent) {
-        results[0].extract = fullContent
-        results[0].fullContent = true
-        ctx.logger.info(`[MCMod] 已获取MC百科完整内容，长度: ${fullContent.length}字符`)
+        result.contents = [{
+          type: ContentType.FULL_EXTRACT,
+          value: fullContent
+        }]
+        ctx.logger.info(`[MCMod] 已获取完整内容，长度: ${fullContent.length}字符`)
       }
     } catch (error) {
       ctx.logger.warn(`[MCMod] 获取完整内容失败: ${error.message}`)
+      result.contents = [{
+        type: ContentType.TEXT,
+        value: '获取内容失败，请直接访问链接查看详情。'
+      }]
     }
+
+    return result
+  } catch (error) {
+    ctx.logger.error(`[MCMod] 获取词条详情失败: ${error.message}`)
+    return null
+  }
+}
+
+// 搜索MCMOD百科并返回第一个结果
+export async function searchMcmod(ctx: Context, query: string): Promise<Result | null> {
+  const searchResults = await parseMcmodResults(ctx, query)
+
+  if (searchResults.items.length > 0) {
+    const firstItem = searchResults.items[0]
+    return await getMcmodDetail(ctx, firstItem.title, firstItem.url)
   }
 
-  return results.length > 0 ? results[0] : null
+  return null
 }
 
 // 搜索MCMOD百科并返回多个结果
 export async function searchMcmodList(ctx: Context, query: string): Promise<SearchResults> {
-  const { results, total } = await parseMcmodResults(ctx, query)
-  return { query, total, results }
+  const { items, total, queryUrl } = await parseMcmodResults(ctx, query)
+  return { query, queryUrl, total, items }
 }
 
 // 注册MCMOD搜索命令
 export function registerMod(ctx: Context, mc: Command, config?: Config) {
+  // 提供方法给其他模块调用
+  ctx.provide('mcmod_getDetail', (title: string, url?: string) => getMcmodDetail(ctx, title, url))
+
   // 主命令：查询单个结果
   const mod = mc.subcommand('.mod <query:text>', '查询MC百科词条')
     .option('visual', '-v <mode:string>', { fallback: '' })
@@ -419,9 +425,8 @@ export function registerMod(ctx: Context, mc: Command, config?: Config) {
     .action(async ({ session, options }, query) => {
       if (!query) return '请输入要搜索的内容'
       const searchResults = await searchMcmodList(ctx, query)
-      if (searchResults.results.length === 0) return '未找到相关百科词条'
+      if (searchResults.items.length === 0) return '未找到相关百科词条'
 
-      // 使用通用的 renderList 函数，传入摘要显示选项
       return renderList(
         session,
         searchResults,
