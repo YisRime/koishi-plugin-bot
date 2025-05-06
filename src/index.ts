@@ -4,9 +4,6 @@ import { registerInfo } from './server/info'
 import { registerServer } from './server/server'
 import { registerVer, regVerCheck, UpdTarget, cleanupVerCheck, ServerMaps } from './tool/ver'
 import { initWebSocket, cleanupWebSocket, WsServerConfig, RconServerConfig } from './server/service'
-import { registerWiki } from './wiki/wiki'
-import { registerMod } from './wiki/mcmod'
-import { OutputMode } from './wiki/utils'
 
 export const name = 'bot'
 export const inject = {optional: ['puppeteer']}
@@ -17,9 +14,6 @@ export interface Config {
   verEnabled: boolean
   playerEnabled: boolean
   infoEnabled: boolean
-  wikiEnabled: boolean
-  mcmodEnabled: boolean
-  outputMode: OutputMode
   serverApis?: Array<{ type: 'java' | 'bedrock'; url: string }>
   serverTemplate: string
   serverMaps: ServerMaps[]
@@ -29,8 +23,6 @@ export interface Config {
 
 export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
-    wikiEnabled: Schema.boolean().description('启用 Wiki 查询').default(true),
-    mcmodEnabled: Schema.boolean().description('启用 MC百科 查询').default(true),
     outputMode: Schema.union([
       Schema.const('text').description('纯文本'),
       Schema.const('fwd').description('合并转发'),
@@ -108,10 +100,6 @@ export function apply(ctx: Context, config: Config) {
   // 服务器连接
   if (config.rconServers.length > 0 || config.wsServers.length > 0) registerServer(mc, config)
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
-  // MC Wiki 查询
-  config.wikiEnabled !== false && registerWiki(ctx, mc, config)
-  // MC 百科 查询
-  config.mcmodEnabled !== false && registerMod(ctx, mc, config)
 }
 
 export function dispose() {
