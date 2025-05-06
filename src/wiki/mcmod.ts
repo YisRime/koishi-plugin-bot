@@ -215,106 +215,162 @@ async function parseMcmodResults(ctx: Context, query: string, getFullContent = f
 export async function extractMcmodContent(page): Promise<string | null> {
   try {
     // 等待页面主要内容加载
-    await page.waitForSelector('.class-info, .item-content', { timeout: 10000 })
+    await page.waitForSelector('.class-menu-main, .item-content', { timeout: 10000 })
 
     // 执行提取内容的脚本
     const content = await page.evaluate(() => {
-      // 查找主要内容元素
-      const contentElement = document.querySelector('.class-info') || document.querySelector('.item-content')
-      if (!contentElement) return null
-
-      // 提取标题和类型
-      const titleElement = document.querySelector('.class-title h3') || document.querySelector('.item-name')
-      const title = titleElement ? titleElement.textContent?.trim() : ''
-
-      // 提取mod分类
-      const categoryElement = document.querySelector('.class-category li a')
-      const category = categoryElement ? categoryElement.getAttribute('class')?.replace('c_', '') : ''
-
-      // 分类映射
-      const categoryMap = {
-        '1': '科技', '2': '魔法', '3': '冒险',
-        '4': '农业', '5': '装饰', '21': '魔改',
-        '23': '实用', '24': '辅助'
+      function cleanText(text: string): string {
+        if (!text) return '';
+        return text.replace(/\s+/g, ' ')
+          .replace(/\[.*?\]/g, '')
+          .trim();
       }
-      const categoryName = category ? categoryMap[category] || '其他' : ''
+
+      // 获取标题
+      const modTitle = document.querySelector('.class-title h3')?.textContent?.trim() || '';
+      const modSubtitle = document.querySelector('.class-title h4')?.textContent?.trim() || '';
+
+      // 获取分类信息
+      const categoryElements = document.querySelectorAll('.common-class-category li a');
+      const categories = Array.from(categoryElements)
+        .map(el => {
+          // 尝试从title或data-original-title属性获取分类名称
+          return el.getAttribute('data-original-title') ||
+                 el.getAttribute('title') ||
+                 el.textContent?.trim() || '';
+        })
+        .filter(text => text && !text.includes('common-icon-category'));
 
       // 构建标题部分
-      let result = title ? `《${title}》` : ''
-      if (categoryName) {
-        result += ` [${categoryName}类]`
-      }
-      result += '\n\n'
+      let result = modTitle ? `《${modTitle}` : '';
+      if (modSubtitle) result += ` (${modSubtitle})`;
+      result += '》\n';
 
-      // 提取简介
-      const introElement = document.querySelector('.class-info-intro') || document.querySelector('.item-desc')
+      if (categories.length > 0) {
+        result += `[${categories.join(' / ')}]\n`;
+      }
+      result += '\n';
+
+      // 提取模组基本信息
+      const infoItems = document.querySelectorAll('.class-info-left .col-lg-4, .class-info-left li');
+      if (infoItems.length > 0) {
+        result += '【基本信息】\n';
+        infoItems.forEach(item => {
+          const text = cleanText(item.textContent || '');
+          if (text && !text.includes('模组标签') && !text.includes('相关链接')) {
+            result += `${text}\n`;
+          }
+        });
+        result += '\n';
+      }
+
+      // 提取模组介绍内容
+      const introElement = document.querySelector('.common-text');
       if (introElement) {
-        const introText = introElement.textContent?.trim() || ''
-        if (introText) {
-          result += `${introText}\n\n`
-        }
-      }
+        // 提取正文中的所有标题和段落
+        const contentNodes = introElement.querySelectorAll('p, .common-text-title, ul, ol, table, h1, h2, h3, h4, h5, h6');
 
-      // 提取详细内容
-      const detailElement = document.querySelector('.class-info-text') || document.querySelector('.item-content-text')
-      if (detailElement) {
-        // 处理内容中的标题和段落
-        const childNodes = Array.from(detailElement.childNodes)
-        let inBlock = false
+        contentNodes.forEach(node => {
+          const tagName = node.tagName.toLowerCase();
 
-        for (const node of childNodes) {
           // 处理标题
-          if (node.nodeType === 1 && /^h[1-6]$/.test((node as Element).tagName.toLowerCase())) {
-            const headingText = node.textContent?.trim() || ''
-            if (headingText) {
-              result += `\n【${headingText}】\n`
-              inBlock = true
+          if (tagName.startsWith('h') || node.classList.contains('common-text-title')) {
+            const titleText = cleanText(node.textContent || '');
+            if (titleText) {
+              result += `\n【${titleText}】\n`;
             }
           }
           // 处理段落
-          else if (node.nodeType === 1 && (node as Element).tagName.toLowerCase() === 'p') {
-            const paragraphText = node.textContent?.trim().replace(/\[.*?\]/g, '') || ''
+          else if (tagName === 'p') {
+            const paragraphText = cleanText(node.textContent || '');
             if (paragraphText) {
-              result += inBlock ? paragraphText + '\n' : '\n' + paragraphText + '\n'
+              result += `${paragraphText}\n\n`;
             }
           }
-          // 处理DIV块
-          else if (node.nodeType === 1 && (node as Element).tagName.toLowerCase() === 'div') {
-            const blockText = node.textContent?.trim().replace(/\[.*?\]/g, '') || ''
-            if (blockText) {
-              result += inBlock ? blockText + '\n' : '\n' + blockText + '\n'
-            }
+          // 处理列表
+          else if (tagName === 'ul' || tagName === 'ol') {
+            const listItems = node.querySelectorAll('li');
+            listItems.forEach((item, index) => {
+              const itemText = cleanText(item.textContent || '');
+              if (itemText) {
+                result += tagName === 'ol' ? `${index + 1}. ${itemText}\n` : `• ${itemText}\n`;
+              }
+            });
+            result += '\n';
           }
+          // 处理表格
+          else if (tagName === 'table') {
+            const rows = node.querySelectorAll('tr');
+            rows.forEach(row => {
+              const cells = row.querySelectorAll('th, td');
+              const rowContent = Array.from(cells)
+                .map(cell => cleanText(cell.textContent || ''))
+                .filter(Boolean)
+                .join(' | ');
+              if (rowContent) {
+                result += `${rowContent}\n`;
+              }
+            });
+            result += '\n';
+          }
+        });
+      }
+
+      // 提取相关链接
+      const linksSection = document.querySelector('.common-link-frame');
+      if (linksSection) {
+        const linkItems = linksSection.querySelectorAll('.common-link-icon-frame li');
+        if (linkItems.length > 0) {
+          result += '\n【相关链接】\n';
+          linkItems.forEach(item => {
+            const linkName = item.querySelector('.name')?.textContent?.trim() || '';
+            const linkTitle = item.querySelector('a')?.getAttribute('data-original-title') ||
+                             item.querySelector('a')?.getAttribute('title') || '';
+
+            if (linkName) {
+              result += `• ${linkName}`;
+              if (linkTitle && linkTitle !== linkName) {
+                result += `: ${linkTitle}`;
+              }
+              result += '\n';
+            }
+          });
         }
       }
 
-      // 提取信息表
-      const infoTable = document.querySelector('.class-info-table') || document.querySelector('.item-info-table')
-      if (infoTable) {
-        result += '\n【基本信息】\n'
+      // 提取版本信息
+      const versionItems = document.querySelectorAll('.common-rowlist.log li a');
+      if (versionItems.length > 0) {
+        result += '\n【最近更新】\n';
+        let count = 0;
+        versionItems.forEach(item => {
+          if (count < 5) {  // 只显示最近5个版本
+            const versionText = item.textContent?.trim() || '';
+            const timeElement = item.nextElementSibling;
+            const timeText = timeElement?.textContent?.trim() || '';
 
-        const rows = Array.from(infoTable.querySelectorAll('tr'))
-        for (const row of rows) {
-          const name = row.querySelector('.name')?.textContent?.trim() || ''
-          const value = row.querySelector('.value')?.textContent?.trim() || ''
-          if (name && value) {
-            result += `${name}：${value}\n`
+            if (versionText) {
+              result += `• ${versionText}`;
+              if (timeText) {
+                result += ` (${timeText})`;
+              }
+              result += '\n';
+              count++;
+            }
           }
-        }
+        });
       }
 
-      // 清理格式
+      // 清理结果
       return result
-        .replace(/\[h\d=.*?\]/g, '')
-        .replace(/\[.*?\]/g, '')
         .replace(/\n{3,}/g, '\n\n')
-        .trim()
-    })
+        .trim();
+    });
 
-    return content
+    return content;
   } catch (error) {
-    console.error('提取MC百科内容失败:', error)
-    return null
+    console.error('提取MC百科内容失败:', error);
+    return null;
   }
 }
 
