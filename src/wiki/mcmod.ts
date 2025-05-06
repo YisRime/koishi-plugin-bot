@@ -1,52 +1,135 @@
 import { Context, Command } from 'koishi'
-import { render, parseMode, renderList, safeRequest, cleanText, fetchPageContent, Result, SearchResults, Content, ContentType, SearchResultItem } from './utils'
+import { sendContent, parseMode, Result, SearchResults, ContentSource, cleanSourceText } from './utils'
+import { requestMcmodSearch, fetchPageContent } from './api'
 import { Config } from '../index'
 
-/**
- * MCMod百科特有的文本清理函数
- */
-function cleanMcmodText(text: string): string {
-  return cleanText(text
-    .replace(/\[\w+:[^]]*\]/g, '')
-    .replace(/\[h\d=.*?\]/g, '')
-    .replace(/\[.*?\]/g, '')
-  )
+// 获取MC百科词条详细内容
+export async function getMcmodDetail(ctx: Context, title: string, url?: string): Promise<Result | null> {
+  try {
+    ctx.logger.info(`[MCMod] 获取词条详情: ${title}`)
+    if (!url) {
+      const searchHtml = await requestMcmodSearch(ctx, title)
+      const { items } = parseMcmodSearchResults(ctx, searchHtml, title)
+      const bestMatch = items.find(item => item.title.toLowerCase() === title.toLowerCase()) || items[0]
+      if (!bestMatch?.url) return null
+      url = bestMatch.url
+      title = bestMatch.title
+    }
+
+    // 创建初始结果对象
+    const result: Result = {
+      title,
+      url,
+      content: '正在获取内容...',
+      source: 'mcmod'
+    }
+
+    try {
+      // 尝试获取完整内容
+      const fullContent = await fetchPageContent(ctx, url, extractMcmodContent)
+      if (fullContent) {
+        result.content = fullContent
+        ctx.logger.info(`[MCMod] 已获取完整内容，长度: ${fullContent.length}字符`)
+      } else {
+        result.content = '获取内容失败，请直接访问链接查看详情。'
+      }
+    } catch (error) {
+      ctx.logger.warn(`[MCMod] 获取完整内容失败: ${error.message}`)
+      result.content = '获取内容失败，请直接访问链接查看详情。'
+    }
+
+    return result
+  } catch (error) {
+    ctx.logger.error(`[MCMod] 获取词条详情失败: ${error.message}`)
+    return null
+  }
+}
+
+// 搜索MCMOD百科并返回第一个结果
+export async function searchMcmod(ctx: Context, query: string): Promise<Result | null> {
+  try {
+    const searchHtml = await requestMcmodSearch(ctx, query)
+    const { items } = parseMcmodSearchResults(ctx, searchHtml, query)
+    return items.length ? getMcmodDetail(ctx, items[0].title, items[0].url) : null
+  } catch (error) {
+    ctx.logger.error(`[MCMod] 搜索失败: ${error.message}`)
+    return null
+  }
+}
+
+// 搜索MCMOD百科并返回多个结果
+export async function searchMcmodList(ctx: Context, query: string): Promise<SearchResults> {
+  try {
+    const searchHtml = await requestMcmodSearch(ctx, query)
+    return { ...parseMcmodSearchResults(ctx, searchHtml, query), query }
+  } catch (error) {
+    ctx.logger.error(`[MCMod] 搜索列表获取失败: ${error.message}`)
+    return {
+      query,
+      queryUrl: `https://search.mcmod.cn/s?key=${encodeURIComponent(query)}&filter=0&site=1`,
+      total: 0,
+      items: []
+    }
+  }
+}
+
+// 注册MCMOD搜索命令
+export function registerMod(ctx: Context, mc: Command, config?: Config) {
+  const mod = mc.subcommand('.mod <query:text>', '查询MC百科词条')
+    .option('visual', '-v <mode:string>', { fallback: '' })
+    .action(async ({ session, options }, query) => {
+      if (!query) return '请输入要查询的内容'
+
+      const result = await searchMcmod(ctx, query)
+      if (!result) return '未找到相关百科词条'
+
+      return sendContent(session, {
+        type: 'detail',
+        title: result.title,
+        source: result.source,
+        content: result,
+        options: { mode: parseMode(options, config) }
+      })
+    })
+
+  mod.subcommand('.search <query:text>', '搜索MC百科显示多个结果')
+    .option('visual', '-v <mode:string>', { fallback: '' })
+    .option('excerpt', '-e', { fallback: true })
+    .action(async ({ session, options }, query) => {
+      if (!query) return '请输入要搜索的内容'
+
+      const searchResults = await searchMcmodList(ctx, query)
+      if (!searchResults.items.length) return '未找到相关百科词条'
+
+      return sendContent(session, {
+        type: 'list',
+        title: `MC百科搜索：${query}`,
+        source: 'mcmod' as ContentSource,
+        content: searchResults,
+        options: {
+          mode: parseMode(options, config),
+          showExcerpt: options.excerpt !== false
+        }
+      })
+    })
 }
 
 /**
- * 规范化MCMOD链接
+ * 从HTML中提取MC百科搜索结果
  */
-function normalizeUrl(url: string, ctx?: Context): string {
-  if (!url) return ''
-
-  // 添加https前缀并确保使用HTTPS
-  let normalizedUrl = url
-  if (!normalizedUrl.startsWith('http')) {
-    normalizedUrl = 'https://' + normalizedUrl
-  } else if (normalizedUrl.startsWith('http:')) {
-    normalizedUrl = normalizedUrl.replace('http:', 'https:')
-  }
-
-  // 过滤无效链接
-  if (normalizedUrl.includes('/class/category/')) {
-    ctx?.logger.info(`[MCMod] 过滤无效链接: ${normalizedUrl}`)
-    return ''
-  }
-
-  return normalizedUrl
+export interface SearchResultItem {
+  title: string
+  url: string
+  excerpt: string
+  source: ContentSource
+  category?: string
 }
 
-/**
- * 从HTML中提取搜索结果列表
- */
-async function parseMcmodResults(ctx: Context, query: string): Promise<{ items: SearchResultItem[], total: number, queryUrl: string }> {
+export function parseMcmodSearchResults(ctx: Context, html: string, query: string): {items: SearchResultItem[], total: number, queryUrl: string} {
   const searchUrl = `https://search.mcmod.cn/s?key=${encodeURIComponent(query)}&filter=0&site=1`
-  ctx.logger.info(`[MCMod] 搜索: "${query}"`)
-  ctx.logger.info(`[MCMod] 请求链接: ${searchUrl}`)
+  const logger = ctx.logger
 
   try {
-    const html = await safeRequest(ctx, searchUrl, {}, { responseType: 'text' })
-
     // 提取总结果数
     const totalMatch = html.match(/找到约\s*(\d+)\s*条结果/i)
     const total = totalMatch ? parseInt(totalMatch[1]) : 0
@@ -80,7 +163,25 @@ async function parseMcmodResults(ctx: Context, query: string): Promise<{ items: 
           title = cleanMcmodText(altMatch[2].replace(/<[^>]*>/g, ''));
         }
 
-        const url = normalizeUrl(rawUrl, ctx);
+        // 内联 normalizeMcmodUrl 函数
+        let url = '';
+        if (rawUrl) {
+          // 添加https前缀并确保使用HTTPS
+          let normalizedUrl = rawUrl
+          if (!normalizedUrl.startsWith('http')) {
+            normalizedUrl = 'https://' + normalizedUrl
+          } else if (normalizedUrl.startsWith('http:')) {
+            normalizedUrl = normalizedUrl.replace('http:', 'https:')
+          }
+
+          // 过滤无效链接
+          if (normalizedUrl.includes('/class/category/')) {
+            logger?.info(`[MCMod] 过滤无效链接: ${normalizedUrl}`)
+            continue;
+          }
+          url = normalizedUrl;
+        }
+
         if (!url) continue;
 
         // 提取正文内容
@@ -133,25 +234,23 @@ async function parseMcmodResults(ctx: Context, query: string): Promise<{ items: 
           title,
           url,
           excerpt: enhancedExcerpt,
-          source: 'mcmod',
+          source: 'mcmod' as ContentSource,
           category
         });
       } catch (error) {
-        ctx.logger.warn(`[MCMod] 解析结果项失败: ${error.message}`);
+        logger.warn(`[MCMod] 解析结果项失败: ${error.message}`);
       }
     }
 
-    ctx.logger.info(`[MCMod] 搜索成功，找到 ${items.length} 条结果`);
+    logger.info(`[MCMod] 搜索成功，找到 ${items.length} 条结果`);
     return { items, total, queryUrl: searchUrl };
   } catch (error) {
-    ctx.logger.error(`[MCMod] 搜索失败: ${error.message}`);
+    logger.error(`[MCMod] 搜索结果解析失败: ${error.message}`);
     return { items: [], total: 0, queryUrl: searchUrl };
   }
 }
 
-/**
- * 提取MC百科页面内容
- */
+// 提取MC百科页面内容
 export async function extractMcmodContent(page): Promise<string | null> {
   try {
     await page.waitForSelector('.class-menu-main, .item-content', { timeout: 10000 })
@@ -253,19 +352,15 @@ export async function extractMcmodContent(page): Promise<string | null> {
                            item.querySelector('a')?.getAttribute('title') || '';
           const linkHref = item.querySelector('a')?.getAttribute('href') || '';
 
-          // 提取真实URL（处理跳转链接）
-          let realUrl = '';
+          // 提取真实URL
+          let realUrl = linkHref;
           if (linkHref && linkHref.includes('link.mcmod.cn/target/')) {
             const encodedUrl = linkHref.split('link.mcmod.cn/target/')[1];
             if (encodedUrl) {
               try {
                 realUrl = atob(encodedUrl);
-              } catch (e) {
-                realUrl = linkHref;
-              }
+              } catch (e) { }
             }
-          } else {
-            realUrl = linkHref;
           }
 
           if (linkName && realUrl) {
@@ -327,111 +422,10 @@ export async function extractMcmodContent(page): Promise<string | null> {
   }
 }
 
-// 获取MC百科词条详细内容
-export async function getMcmodDetail(ctx: Context, title: string, url?: string): Promise<Result | null> {
-  try {
-    ctx.logger.info(`[MCMod] 获取词条详情: ${title}`)
-
-    // 如果没有提供URL，则需要搜索获取URL
-    if (!url) {
-      const searchResults = await parseMcmodResults(ctx, title)
-      const exactMatch = searchResults.items.find(item =>
-        item.title.toLowerCase() === title.toLowerCase()
-      )
-
-      // 获取最匹配的结果
-      const bestMatch = exactMatch || searchResults.items[0]
-      if (!bestMatch) return null
-
-      url = bestMatch.url
-      if (!url) return null
-
-      // 如果通过搜索找到了结果，使用搜索结果的标题
-      title = bestMatch.title
-    }
-
-    // 创建结果对象
-    const result: Result = {
-      title,
-      url,
-      contents: [{
-        type: ContentType.TEXT,
-        value: '正在获取内容...'
-      }],
-      source: 'mcmod'
-    }
-
-    // 获取完整内容
-    try {
-      const fullContent = await fetchPageContent(ctx, url, extractMcmodContent)
-      if (fullContent) {
-        result.contents = [{
-          type: ContentType.FULL_EXTRACT,
-          value: fullContent
-        }]
-        ctx.logger.info(`[MCMod] 已获取完整内容，长度: ${fullContent.length}字符`)
-      }
-    } catch (error) {
-      ctx.logger.warn(`[MCMod] 获取完整内容失败: ${error.message}`)
-      result.contents = [{
-        type: ContentType.TEXT,
-        value: '获取内容失败，请直接访问链接查看详情。'
-      }]
-    }
-
-    return result
-  } catch (error) {
-    ctx.logger.error(`[MCMod] 获取词条详情失败: ${error.message}`)
-    return null
-  }
-}
-
-// 搜索MCMOD百科并返回第一个结果
-export async function searchMcmod(ctx: Context, query: string): Promise<Result | null> {
-  const searchResults = await parseMcmodResults(ctx, query)
-
-  if (searchResults.items.length > 0) {
-    const firstItem = searchResults.items[0]
-    return await getMcmodDetail(ctx, firstItem.title, firstItem.url)
-  }
-
-  return null
-}
-
-// 搜索MCMOD百科并返回多个结果
-export async function searchMcmodList(ctx: Context, query: string): Promise<SearchResults> {
-  const { items, total, queryUrl } = await parseMcmodResults(ctx, query)
-  return { query, queryUrl, total, items }
-}
-
-// 注册MCMOD搜索命令
-export function registerMod(ctx: Context, mc: Command, config?: Config) {
-  // 提供方法给其他模块调用
-  ctx.provide('mcmod_getDetail', (title: string, url?: string) => getMcmodDetail(ctx, title, url))
-
-  // 主命令：查询单个结果
-  const mod = mc.subcommand('.mod <query:text>', '查询MC百科词条')
-    .option('visual', '-v <mode:string>', { fallback: '' })
-    .action(async ({ session, options }, query) => {
-      if (!query) return '请输入要查询的内容'
-      const result = await searchMcmod(ctx, query)
-      return render(ctx, session, result, parseMode(options, config))
-    })
-
-  // 子命令：搜索多个结果
-  mod.subcommand('.search <query:text>', '搜索MC百科显示多个结果')
-    .option('visual', '-v <mode:string>', { fallback: '' })
-    .option('excerpt', '-e', { fallback: true })
-    .action(async ({ session, options }, query) => {
-      if (!query) return '请输入要搜索的内容'
-      const searchResults = await searchMcmodList(ctx, query)
-      if (searchResults.items.length === 0) return '未找到相关百科词条'
-
-      return renderList(
-        session,
-        searchResults,
-        parseMode(options, config),
-        { showExcerpt: options.excerpt !== false }
-      )
-    })
+/**
+ * MCMod百科特有的文本清理函数
+ * @deprecated 使用通用的cleanSourceText替代
+ */
+export function cleanMcmodText(text: string): string {
+  return cleanSourceText(text, 'mcmod');
 }
