@@ -24,7 +24,8 @@ export interface Config {
   serverMaps: ServerMaps[]
   rconServers: RconServerConfig[]
   wsServers: WsServerConfig[]
-  outputMode: 'text' | 'fwd' | 'shot'
+  useForward: boolean
+  useScreenshot: boolean
   curseforgeEnabled: boolean
   modrinthEnabled: boolean
   mcmodEnabled: boolean
@@ -37,13 +38,12 @@ export const Config: Schema<Config> = Schema.intersect([
     mcwikiEnabled: Schema.boolean().description('启用 Minecraft Wiki 查询').default(true),
     mcmodEnabled: Schema.boolean().description('启用 MCMOD 查询').default(true),
     modrinthEnabled: Schema.boolean().description('启用 Modrinth 查询').default(true),
-    curseforgeEnabled: Schema.boolean().description('启用 CurseForge 查询').default(true),
+    curseforgeEnabled: Schema.boolean().description('启用 CurseForge 查询').default(true)
+  }).description('查询开关配置'),
+  Schema.object({
+    useForward: Schema.boolean().description('启用合并转发输出').default(true),
+    useScreenshot: Schema.boolean().description('启用网页截图选项').default(true),
     curseforgeApiKey: Schema.string().description('CurseForge API 密钥').role('secret'),
-    outputMode: Schema.union([
-      Schema.const('text').description('纯文本'),
-      Schema.const('fwd').description('合并转发'),
-      Schema.const('shot').description('网页截图')
-    ]).description('显示模式').default('fwd')
   }).description('资源查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),

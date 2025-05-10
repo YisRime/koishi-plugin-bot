@@ -2,26 +2,18 @@ import { Context, Command } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
 
-// Minecraft Wiki API 的基本URL
-const WIKI_API_BASE = 'https://minecraft.fandom.com/zh/api.php'
+const WIKI_API_BASE = 'https://zh.minecraft.wiki/api.php'
 
-// 搜索 Minecraft Wiki
+// 搜索Wiki页面
 export async function searchMcwikiPages(ctx: Context, keyword: string, options = {}) {
   try {
-    // 构建搜索参数
-    const params: any = {
+    const params = {
       action: 'query',
       list: 'search',
       srsearch: keyword,
-      format: 'json'
-    }
-
-    // 指定命名空间
-    if (options['namespace']) params.srnamespace = options['namespace']
-
-    // 设置搜索限制
-    if (options['limit'] && !isNaN(options['limit'])) {
-      params.srlimit = Math.min(Math.max(1, options['limit']), 50) // 1-50之间
+      format: 'json',
+      srlimit: options['limit'] || 10,
+      ...(options['namespace'] ? { srnamespace: options['namespace'] } : {})
     }
 
     const response = await ctx.http.get(WIKI_API_BASE, { params })
@@ -32,57 +24,37 @@ export async function searchMcwikiPages(ctx: Context, keyword: string, options =
   }
 }
 
-// 获取 Wiki 页面详情
+// 获取Wiki页面详情
 export async function getMcwikiPage(ctx: Context, pageId: number) {
   try {
-    // 获取基本页面信息
     const response = await ctx.http.get(WIKI_API_BASE, {
       params: {
         action: 'query',
         pageids: pageId,
-        prop: 'info|extracts|categories|links|images',
+        prop: 'info|extracts|categories|links',
         inprop: 'url',
         exintro: true,
         explaintext: true,
-        cllimit: 5,  // 最多5个分类
-        pllimit: 5,  // 最多5个链接
-        imlimit: 3,  // 最多3张图片
+        cllimit: 5,
+        pllimit: 5,
         format: 'json'
       }
     })
 
-    if (response.query?.pages) {
-      const page = response.query.pages[pageId]
-      if (!page) return null
+    const page = response.query?.pages?.[pageId]
+    if (!page) return null
 
-      // 提取分类信息
-      const categories = page.categories?.map(c => c.title.replace('Category:', '')) || []
+    // 整合页面信息
+    const url = page.fullurl
+    const content = [
+      `# ${page.title}`,
+      page.extract,
+      page.categories?.length ? `\n## 分类\n${page.categories.map(c => c.title.replace('Category:', '')).join(', ')}` : '',
+      page.links?.length ? `\n## 相关页面\n- ${page.links.map(l => l.title).join('\n- ')}` : '',
+      `\n[查看完整页面](${url})`
+    ].filter(Boolean).join('\n\n')
 
-      // 提取相关链接
-      const links = page.links?.map(l => l.title) || []
-
-      // 提取图片（可选）
-      const images = page.images?.map(i => i.title.replace('File:', '')) || []
-
-      let content = `
-# ${page.title}
-
-${page.extract?.substring(0, 500) || '无法获取页面摘要'}${page.extract?.length > 500 ? '...' : ''}`
-
-      // 添加分类信息
-      if (categories.length > 0) {
-        content += `\n\n## 分类\n${categories.join(', ')}`
-      }
-
-      // 添加相关链接
-      if (links.length > 0) {
-        content += `\n\n## 相关页面\n- ${links.join('\n- ')}`
-      }
-
-      content += `\n\n[查看完整页面](${page.fullurl})`
-      return content.trim()
-    }
-    return null
+    return { content, url }
   } catch (error) {
     ctx.logger.error('Wiki 页面详情获取失败:', error)
     return null
@@ -94,32 +66,27 @@ export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
   mc.subcommand('.wiki <keyword:text>', '查询 Minecraft Wiki')
     .option('exact', '-e 精确匹配')
     .option('category', '-c <category:string> 分类筛选')
+    .option('shot', '-s 使用截图模式')
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入要搜索的关键词'
 
       try {
-        // 构造搜索选项
-        const searchOptions: any = {}
+        // 构建搜索关键词
+        let searchKey = keyword
+        if (options.exact) searchKey = `"${searchKey}"`
+        if (options.category) searchKey += ` incategory:"${options.category}"`
 
-        // 处理精确匹配
-        if (options.exact) {
-          keyword = `"${keyword}"` // 添加引号表示精确匹配
-        }
+        const pages = await searchMcwikiPages(ctx, searchKey)
+        if (!pages.length) return '未找到匹配的Wiki条目'
 
-        // 处理分类筛选
-        if (options.category) {
-          keyword = `${keyword} incategory:"${options.category}"`
-        }
+        const pageInfo = await getMcwikiPage(ctx, pages[0].pageid)
+        if (!pageInfo) return '获取Wiki页面详情失败'
 
-        // 搜索页面
-        const pages = await searchMcwikiPages(ctx, keyword, searchOptions)
-        if (pages.length === 0) return '未找到匹配的Wiki条目'
+        const result = await renderOutput(
+          session, pageInfo.content, pageInfo.url, ctx, config, options.shot
+        )
 
-        // 显示第一个结果
-        const content = await getMcwikiPage(ctx, pages[0].pageid)
-        if (!content) return '获取Wiki页面详情失败'
-
-        return renderOutput(session, content, config.outputMode, ctx)
+        return config.useForward && result === '' && !options.shot ? undefined : result
       } catch (error) {
         ctx.logger.error('Wiki 查询失败:', error)
         return '查询时发生错误，请稍后再试'
