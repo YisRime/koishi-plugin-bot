@@ -38,13 +38,13 @@ const CF_MAPS = {
 export async function searchCurseForgeProjects(ctx: Context, keyword: string, api: string, options = {}) {
   try {
     if (!api) return []
-    const params = { gameId: 432, searchFilter: keyword }
+    const params = { gameId: 432, searchFilter: keyword, sortOrder: options['sortOrder'] || 'desc' }
     // 处理搜索参数
     const validParams = [
       'categoryId', 'classId', 'gameVersion', 'modLoaderType',
-      'gameVersionTypeId', 'authorId', 'primaryAuthorId', 'slug',
-      'categoryIds', 'gameVersions', 'modLoaderTypes',
-      'sortField', 'sortOrder', 'pageSize', 'index'
+      'gameVersionTypeId', 'authorId', 'primaryAuthorId',
+      'slug', 'categoryIds', 'gameVersions',
+      'modLoaderTypes', 'sortField', 'pageSize', 'index'
     ]
     validParams.forEach(param => {
       if (options[param] === undefined) return
