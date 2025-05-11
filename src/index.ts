@@ -26,11 +26,12 @@ export interface Config {
   wsServers: WsServerConfig[]
   useForward: boolean
   useScreenshot: boolean
-  curseforgeEnabled: boolean
+  curseforgeEnabled: false | string
   modrinthEnabled: boolean
   mcmodEnabled: boolean
   mcwikiEnabled: boolean
-  curseforgeApiKey?: string
+  searchDesc: number
+  searchResults: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -38,12 +39,16 @@ export const Config: Schema<Config> = Schema.intersect([
     mcwikiEnabled: Schema.boolean().description('启用 Minecraft Wiki 查询').default(true),
     mcmodEnabled: Schema.boolean().description('启用 MCMOD 查询').default(true),
     modrinthEnabled: Schema.boolean().description('启用 Modrinth 查询').default(true),
-    curseforgeEnabled: Schema.boolean().description('启用 CurseForge 查询').default(true)
+    curseforgeEnabled: Schema.union([
+      Schema.const(false).description('禁用'),
+      Schema.string().description('启用').role('secret')
+    ]).description('启用 CurseForge 查询').default(false)
   }).description('查询开关配置'),
   Schema.object({
     useForward: Schema.boolean().description('启用合并转发输出').default(true),
     useScreenshot: Schema.boolean().description('启用网页截图选项').default(true),
-    curseforgeApiKey: Schema.string().description('CurseForge API 密钥').role('secret'),
+    searchDesc: Schema.number().description('搜索结果简介字数').default(50).min(0),
+    searchResults: Schema.number().description('搜索结果个数').default(10).min(1),
   }).description('资源查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),
@@ -118,12 +123,12 @@ export function apply(ctx: Context, config: Config) {
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
   // 资源查询
   if (config.modrinthEnabled) registerModrinth(ctx, mc, config)
-  if (config.curseforgeEnabled && config.curseforgeApiKey) registerCurseForge(ctx, mc, config)
+  if (config.curseforgeEnabled) registerCurseForge(ctx, mc, config)
   if (config.mcmodEnabled) registerMcmod(ctx, mc, config)
   if (config.mcwikiEnabled) registerMcwiki(ctx, mc, config)
   // 统一搜索
   if (config.mcmodEnabled || config.mcwikiEnabled || config.modrinthEnabled
-    || (config.curseforgeEnabled && config.curseforgeApiKey)) registerSearch(ctx, mc, config)
+    || config.curseforgeEnabled) registerSearch(ctx, mc, config)
 }
 
 export function dispose() {

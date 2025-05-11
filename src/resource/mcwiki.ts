@@ -19,7 +19,7 @@ export async function searchMcwikiPages(ctx: Context, keyword: string, options =
     const response = await ctx.http.get(WIKI_API_BASE, { params })
     return response.query?.search || []
   } catch (error) {
-    ctx.logger.error('Wiki 页面搜索失败:', error)
+    ctx.logger.error('Wiki 搜索失败:', error)
     return []
   }
 }
@@ -44,19 +44,21 @@ export async function getMcwikiPage(ctx: Context, pageId: number) {
     const page = response.query?.pages?.[pageId]
     if (!page) return null
 
-    // 整合页面信息
     const url = page.fullurl
+    // 精简内容构建
     const content = [
       `# ${page.title}`,
       page.extract,
-      page.categories?.length ? `\n## 分类\n${page.categories.map(c => c.title.replace('Category:', '')).join(', ')}` : '',
-      page.links?.length ? `\n## 相关页面\n- ${page.links.map(l => l.title).join('\n- ')}` : '',
-      `\n[查看完整页面](${url})`
+      page.categories?.length ?
+        `## 分类\n${page.categories.map(c => c.title.replace('Category:', '')).join(', ')}` : '',
+      page.links?.length ?
+        `## 相关页面\n- ${page.links.map(l => l.title).join('\n- ')}` : '',
+      `[查看完整页面](${url})`
     ].filter(Boolean).join('\n\n')
 
     return { content, url }
   } catch (error) {
-    ctx.logger.error('Wiki 页面详情获取失败:', error)
+    ctx.logger.error('Wiki 详情获取失败:', error)
     return null
   }
 }
@@ -71,7 +73,7 @@ export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
       if (!keyword) return '请输入要搜索的关键词'
 
       try {
-        // 构建搜索关键词
+        // 构建搜索词
         let searchKey = keyword
         if (options.exact) searchKey = `"${searchKey}"`
         if (options.category) searchKey += ` incategory:"${options.category}"`
@@ -80,7 +82,7 @@ export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
         if (!pages.length) return '未找到匹配的Wiki条目'
 
         const pageInfo = await getMcwikiPage(ctx, pages[0].pageid)
-        if (!pageInfo) return '获取Wiki页面详情失败'
+        if (!pageInfo) return '获取Wiki详情失败'
 
         const result = await renderOutput(
           session, pageInfo.content, pageInfo.url, ctx, config, options.shot

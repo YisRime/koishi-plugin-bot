@@ -16,22 +16,24 @@ export async function searchMcmodProjects(ctx: Context, keyword: string, options
     const response = await ctx.http.get(MCMOD_API_BASE, { params })
     return response.data || []
   } catch (error) {
-    ctx.logger.error('MCMOD 资源搜索失败:', error)
+    ctx.logger.error('MCMOD 搜索失败:', error)
     return []
   }
 }
 
-// 获取MCMOD额外信息
+// 简化详情获取
 async function fetchMcmodProjectDetail(ctx: Context, id: string) {
   try {
     const html = await ctx.http.get(`https://www.mcmod.cn/item/${id}.html`)
 
-    // 提取重要信息
-    const downloadLink = (html.match(/<a[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*download[^"']*["'][^>]*>/i) || [])[1]
+    // 提取信息用正则
+    const downloadMatch = html.match(/<a[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*download[^"']*["'][^>]*>/i)
     const descMatch = html.match(/<div[^>]*class=["'][^"']*intro[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
-    const description = descMatch ? descMatch[1]?.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : null
 
-    return { downloadLink, description }
+    return {
+      downloadLink: downloadMatch && downloadMatch[1],
+      description: descMatch ? descMatch[1]?.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : null
+    }
   } catch (error) {
     ctx.logger.error('MCMOD 附加信息获取失败:', error)
     return {}
@@ -76,7 +78,7 @@ export function registerMcmod(ctx: Context, mc: Command, config: Config) {
 
         if (!projects.length) return '未找到匹配的MCMOD条目'
 
-        // 处理第一个结果
+        // 转换为统一格式
         const projectData = {
           name: projects[0].name,
           description: projects[0].description,
