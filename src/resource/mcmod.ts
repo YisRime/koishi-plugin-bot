@@ -1,4 +1,4 @@
-import { Context, Command } from 'koishi'
+import { Context, Command, h } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
 
@@ -29,10 +29,13 @@ async function fetchMcmodProjectDetail(ctx: Context, id: string) {
     // 提取信息用正则
     const downloadMatch = html.match(/<a[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*download[^"']*["'][^>]*>/i)
     const descMatch = html.match(/<div[^>]*class=["'][^"']*intro[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+    // 尝试获取图标URL
+    const iconMatch = html.match(/<div[^>]*class=["'][^"']*col-info-img[^"']*["'][^>]*>[\s\S]*?<img[^>]*src=["']([^"']+)["'][^>]*>/i)
 
     return {
       downloadLink: downloadMatch && downloadMatch[1],
-      description: descMatch ? descMatch[1]?.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : null
+      description: descMatch ? descMatch[1]?.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() : null,
+      iconUrl: iconMatch && iconMatch[1]
     }
   } catch (error) {
     ctx.logger.error('MCMOD 附加信息获取失败:', error)
@@ -45,18 +48,38 @@ export async function getMcmodProject(ctx: Context, project) {
   const extraInfo = project.extra?.id ? await fetchMcmodProjectDetail(ctx, project.extra.id) : {}
 
   // 构建内容
-  const content = [
-    `# ${project.name}`,
-    extraInfo.description || project.description || '暂无描述',
-    [
-      `类型: ${project.extra?.type || '未知'}`,
-      `游戏版本: ${project.extra?.mcversion || '未知'}`,
-      extraInfo.downloadLink ? `下载链接: ${extraInfo.downloadLink}` : null
-    ].filter(Boolean).map(item => `- ${item}`).join('\n'),
-    `[查看详情](${project.url})`
-  ].filter(Boolean).join('\n\n')
+  const content = []
 
-  return { content, url: project.url }
+  // 添加标题
+  content.push(`【${project.name}】`)
+
+  // 添加图标
+  if (extraInfo.iconUrl) {
+    content.push(h.image(extraInfo.iconUrl))
+  }
+
+  // 添加描述
+  content.push(extraInfo.description || project.description || '暂无描述')
+
+  // 添加基本信息
+  const infoItems = [
+    `类型: ${project.extra?.type || '未知'}`,
+    `游戏版本: ${project.extra?.mcversion || '未知'}`,
+    extraInfo.downloadLink ? `下载链接: ${extraInfo.downloadLink}` : null
+  ].filter(Boolean)
+
+  if (infoItems.length > 0) {
+    content.push(infoItems.map(item => `● ${item}`).join('\n'))
+  }
+
+  // 添加详情链接
+  content.push(`查看详情: ${project.url}`)
+
+  return {
+    content,
+    url: project.url,
+    icon: extraInfo.iconUrl || null
+  }
 }
 
 // 注册 mcmod 命令

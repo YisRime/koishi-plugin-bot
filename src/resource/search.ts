@@ -78,19 +78,22 @@ const PLATFORMS = {
   }
 }
 
-// 简化选择列表格式化
+// 更新格式化搜索结果函数以适应数组形式
 function formatSearchResults(results: SearchResult[], descLength: number = 50) {
-  if (!results?.length) return '未找到匹配的资源'
+  if (!results?.length) return ['未找到匹配的资源']
 
-  return ['请回复数字选择一个查看详情：',
-    ...results.map((p, i) => {
-      // 根据descLength配置决定是否显示描述及显示多少字符
-      const descPart = descLength > 0 && p.description
-        ? `\n   ${p.description.substring(0, descLength)}${p.description.length > descLength ? '...' : ''}`
-        : '';
-      return `${i + 1}. [${p.platform}] ${p.name}${descPart}`;
-    })
-  ].join('\n')
+  const contentArray = ['请回复数字选择一个查看详情：']
+
+  // 添加每个结果项
+  results.forEach((p, i) => {
+    // 根据descLength配置决定是否显示描述及显示多少字符
+    const descPart = descLength > 0 && p.description
+      ? `\n   ${p.description.substring(0, descLength)}${p.description.length > descLength ? '...' : ''}`
+      : '';
+    contentArray.push(`${i + 1}. [${p.platform}] ${p.name}${descPart}`);
+  })
+
+  return contentArray
 }
 
 // 交错排列结果
@@ -255,7 +258,8 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
 
         // 交错排序并显示
         const combinedResults = interleavePlatformResults(resultsByPlatform, config.searchResults)
-        await renderOutput(session, formatSearchResults(combinedResults, config.searchDesc), null, ctx, config, false)
+        const formattedResults = formatSearchResults(combinedResults, config.searchDesc)
+        await renderOutput(session, formattedResults, null, ctx, config, false)
 
         // 获取用户选择
         const response = await session.prompt(60 * 1000)

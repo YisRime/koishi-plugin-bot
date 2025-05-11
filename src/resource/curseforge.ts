@@ -1,4 +1,4 @@
-import { Context, Command } from 'koishi'
+import { Context, Command, h } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
 
@@ -108,60 +108,63 @@ export async function getCurseForgeProject(ctx: Context, projectId: number, api:
     const formatDate = date => new Date(date).toLocaleString()
 
     // 构建内容块
-    const contentBlocks = [
-      // 标题和Logo
-      project.logo?.url ?
-        `# ${project.name}\n![Logo](${project.logo.url})` :
-        `# ${project.name}`,
+    const contentBlocks = []
 
-      // 摘要
-      project.summary,
+    // 添加标题
+    contentBlocks.push(`【${project.name}】`)
 
-      // 基本信息
-      [
-        `状态: ${CF_MAPS.STATUS[project.status] || '未知'}`,
-        `作者: ${project.authors.map(a => a.name).join(', ')}`,
-        `下载量: ${project.downloadCount.toLocaleString()}`,
-        `创建时间: ${formatDate(project.dateCreated)}`,
-        `发布时间: ${formatDate(project.dateReleased)}`,
-        `最后更新: ${formatDate(project.dateModified)}`,
-        `游戏版本: ${project.latestFilesIndexes?.map(f => f.gameVersion).filter((v, i, a) => a.indexOf(v) === i).join(', ') || '未知'}`,
-        `模组加载器: ${project.latestFilesIndexes?.map(f => CF_MAPS.LOADER[f.modLoader] || f.modLoader || '未知').filter((v, i, a) => a.indexOf(v) === i).join(', ') || '未知'}`,
-        `分类: ${project.categories?.map(c => c.name).join(', ') || '未知'}`,
-        project.gamePopularityRank ? `人气排名: #${project.gamePopularityRank}` : null,
-        project.thumbsUpCount ? `点赞数: ${project.thumbsUpCount}` : null,
-        project.rating ? `评分: ${project.rating.toFixed(1)}` : null
-      ].filter(Boolean).map(item => `- ${item}`).join('\n')
-    ]
+    // 添加Logo
+    if (project.logo?.url) {
+      contentBlocks.push(h.image(project.logo.url))
+    }
+
+    // 摘要
+    if (project.summary) {
+      contentBlocks.push(project.summary)
+    }
+
+    // 基本信息
+    contentBlocks.push([
+      `状态: ${CF_MAPS.STATUS[project.status] || '未知'}`,
+      `作者: ${project.authors.map(a => a.name).join(', ')}`,
+      `下载量: ${project.downloadCount.toLocaleString()}`,
+      `创建时间: ${formatDate(project.dateCreated)}`,
+      `发布时间: ${formatDate(project.dateReleased)}`,
+      `最后更新: ${formatDate(project.dateModified)}`,
+      `游戏版本: ${project.latestFilesIndexes?.map(f => f.gameVersion).filter((v, i, a) => a.indexOf(v) === i).join(', ') || '未知'}`,
+      `模组加载器: ${project.latestFilesIndexes?.map(f => CF_MAPS.LOADER[f.modLoader] || f.modLoader || '未知').filter((v, i, a) => a.indexOf(v) === i).join(', ') || '未知'}`,
+      `分类: ${project.categories?.map(c => c.name).join(', ') || '未知'}`,
+      project.gamePopularityRank ? `人气排名: #${project.gamePopularityRank}` : null,
+      project.thumbsUpCount ? `点赞数: ${project.thumbsUpCount}` : null,
+      project.rating ? `评分: ${project.rating.toFixed(1)}` : null
+    ].filter(Boolean).map(item => `● ${item}`).join('\n'))
 
     // 相关链接
     const links = [
-      project.links?.websiteUrl && `[官方网站](${project.links.websiteUrl})`,
-      project.links?.wikiUrl && `[Wiki](${project.links.wikiUrl})`,
-      project.links?.issuesUrl && `[问题追踪](${project.links.issuesUrl})`,
-      project.links?.sourceUrl && `[源代码](${project.links.sourceUrl})`
+      project.links?.websiteUrl && `官方网站: ${project.links.websiteUrl}`,
+      project.links?.wikiUrl && `Wiki: ${project.links.wikiUrl}`,
+      project.links?.issuesUrl && `问题追踪: ${project.links.issuesUrl}`,
+      project.links?.sourceUrl && `源代码: ${project.links.sourceUrl}`
     ].filter(Boolean);
 
     if (links.length > 0) {
-      contentBlocks.push(`## 相关链接\n${links.join(' | ')}`)
+      contentBlocks.push(`◆ 相关链接 ◆\n${links.join('\n')}`)
     }
 
     // 截图部分
     if (project.screenshots?.length) {
-      contentBlocks.push('## 截图\n' +
-        project.screenshots.slice(0, 3).map(s =>
-          `![${s.title || '截图'}](${s.url})`
-        ).join('\n\n')
-      )
+      contentBlocks.push('◆ 截图 ◆')
+      project.screenshots.slice(0, 3).forEach(s => {
+        contentBlocks.push(`${s.title || '截图'}:`)
+        contentBlocks.push(h.image(s.url))
+      })
     }
 
-    // 移除最近文件和依赖关系部分
-
     // 项目页面链接
-    contentBlocks.push(`[查看完整项目页面](${url})`)
+    contentBlocks.push(`访问完整项目页面: ${url}`)
 
     return {
-      content: contentBlocks.filter(Boolean).join('\n\n'),
+      content: contentBlocks,
       url
     }
   } catch (error) {

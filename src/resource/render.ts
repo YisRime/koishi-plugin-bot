@@ -1,15 +1,24 @@
 import { Context, Session, h } from 'koishi'
 import { Config } from '../index'
 
+// 添加图片元素转换函数，将 h.image 元素转换为 OneBot 可接受的格式
+function convertImageForOneBot(item) {
+  if (typeof item === 'object' && item?.type === 'img') {
+    // 将 h.image 转换为纯文本形式的 CQ 码
+    return `[CQ:image,file=${item.attrs?.src || ''}]`
+  }
+  return item
+}
+
 export async function renderOutput(
   session: Session,
-  content: string,
+  content: any[],  // 只接受数组形式
   url: string = null,
   ctx: Context,
   config: Config,
   screenshot: boolean = false
 ) {
-  if (!content) return ''
+  if (!content || content.length === 0) return ''
 
   // 处理截图
   if (config.useScreenshot && screenshot && url) {
@@ -21,26 +30,60 @@ export async function renderOutput(
     }
   }
 
-  // 转发消息
-  if (config.useForward) {
+  // 检查是否为 OneBot 平台
+  const isOneBot = session.platform === 'onebot'
+
+  // 只有 OneBot 平台才使用合并转发
+  if (config.useForward && isOneBot) {
     try {
-      const parts = content.split('\n\n').filter(p => p.trim())
-      const messages = parts.map(part => ({
-        type: 'node',
-        data: { name: 'MC Tools', uin: session.selfId, content: part.trim() }
-      }))
+      // 创建多个消息节点，每个元素一个节点，并转换图片格式
+      const messages = content.map(item => {
+        // 处理可能的图片元素
+        const processedContent = convertImageForOneBot(item)
+
+        return {
+          type: 'node',
+          data: {
+            name: 'MC Tools',
+            uin: session.selfId,
+            content: processedContent
+          }
+        }
+      })
 
       const isGroup = session.guildId || (session.subtype === 'group')
       const target = isGroup ? (session.guildId || session.channelId) : session.channelId
       const method = isGroup ? 'sendGroupForwardMsg' : 'sendPrivateForwardMsg'
 
-      await session.bot.internal[method](target, messages)
+      // 尝试使用合并转发
+      try {
+        await session.bot.internal[method](target, messages)
+        return ''
+      } catch (forwardError) {
+        // 如果合并转发失败，回退到直接发送
+        ctx.logger.error('合并转发失败，回退到直接发送:', forwardError)
+        for (const item of content) {
+          await session.send(item)
+        }
+        return ''
+      }
+    } catch (error) {
+      ctx.logger.error('消息处理失败:', error)
+    }
+  } else {
+    // 非 OneBot 平台或不使用转发功能，直接发送消息
+    try {
+      // 依次发送每个内容元素
+      for (const item of content) {
+        await session.send(item)
+      }
       return ''
     } catch (error) {
-      ctx.logger.error('转发消息失败:', error)
+      ctx.logger.error('消息发送失败:', error)
     }
   }
 
+  // 如果上述方法都失败，直接返回内容
   return content
 }
 

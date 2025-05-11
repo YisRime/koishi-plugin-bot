@@ -1,4 +1,4 @@
-import { Context, Command } from 'koishi'
+import { Context, Command, h } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
 
@@ -31,7 +31,7 @@ export async function getMcwikiPage(ctx: Context, pageId: number) {
       params: {
         action: 'query',
         pageids: pageId,
-        prop: 'info|extracts|categories|links',
+        prop: 'info|extracts|categories|links|images',
         inprop: 'url',
         exintro: true,
         explaintext: true,
@@ -45,18 +45,66 @@ export async function getMcwikiPage(ctx: Context, pageId: number) {
     if (!page) return null
 
     const url = page.fullurl
-    // 精简内容构建
-    const content = [
-      `# ${page.title}`,
-      page.extract,
-      page.categories?.length ?
-        `## 分类\n${page.categories.map(c => c.title.replace('Category:', '')).join(', ')}` : '',
-      page.links?.length ?
-        `## 相关页面\n- ${page.links.map(l => l.title).join('\n- ')}` : '',
-      `[查看完整页面](${url})`
-    ].filter(Boolean).join('\n\n')
 
-    return { content, url }
+    // 尝试获取页面的第一个图片URL
+    let imageUrl = null
+    if (page.images && page.images.length > 0) {
+      const firstImage = page.images[0].title
+      // 获取图片的实际URL
+      try {
+        const imgResponse = await ctx.http.get(WIKI_API_BASE, {
+          params: {
+            action: 'query',
+            titles: firstImage,
+            prop: 'imageinfo',
+            iiprop: 'url',
+            format: 'json'
+          }
+        })
+        const imgPages = imgResponse.query?.pages
+        if (imgPages) {
+          const imgPageId = Object.keys(imgPages)[0]
+          imageUrl = imgPages[imgPageId]?.imageinfo?.[0]?.url
+        }
+      } catch (error) {
+        ctx.logger.error('Wiki 图片获取失败:', error)
+      }
+    }
+
+    // 精简内容构建
+    const content = []
+
+    // 添加标题
+    content.push(`【${page.title}】`)
+
+    // 添加图片
+    if (imageUrl) {
+      content.push(h.image(imageUrl))
+    }
+
+    // 添加描述
+    if (page.extract) {
+      content.push(page.extract)
+    }
+
+    // 添加分类信息
+    if (page.categories?.length) {
+      content.push(`◆ 分类 ◆\n${page.categories.map(c => c.title.replace('Category:', '')).join(', ')}`)
+    }
+
+    // 添加相关页面
+    if (page.links?.length) {
+      content.push(`◆ 相关页面 ◆\n${page.links.map(l => `● ${l.title}`).join('\n')}`)
+    }
+
+    // 添加页面链接
+    content.push(`查看完整页面: ${url}`)
+
+    return {
+      content,
+      url,
+      icon: imageUrl
+    }
   } catch (error) {
     ctx.logger.error('Wiki 详情获取失败:', error)
     return null

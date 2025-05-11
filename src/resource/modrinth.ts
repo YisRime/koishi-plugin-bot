@@ -84,76 +84,80 @@ export async function getModrinthProject(ctx: Context, projectId: string) {
     const formatDate = date => date ? new Date(date).toLocaleString() : '未知'
 
     // 构建内容块
-    const contentBlocks = [
-      // 标题部分
-      project.icon_url ?
-        `# ${project.title}\n![图标](${project.icon_url})` :
-        `# ${project.title}`,
+    const contentBlocks = []
 
-      // 描述部分
-      project.description,
+    // 添加标题和图标
+    contentBlocks.push(`【${project.title}】`)
 
-      // 基本信息
-      [
-        `项目类型: ${formatValue('type', project.project_type)}`,
-        `作者: ${project.author || '未知'}`,
-        `下载量: ${project.downloads?.toLocaleString() || '0'}`,
-        `关注数: ${project.followers?.toLocaleString() || '0'}`,
-        `状态: ${formatValue('project', project.status)}`,
-        `货币化: ${formatValue('monetization', project.monetization_status)}`,
-        `客户端: ${formatValue('compatibility', project.client_side)}`,
-        `服务端: ${formatValue('compatibility', project.server_side)}`,
-        `创建: ${formatDate(project.published)}`,
-        `更新: ${formatDate(project.updated)}`,
-        project.approved ? `审核通过: ${formatDate(project.approved)}` : null,
-        `游戏版本: ${project.game_versions?.join(', ') || '未知'}`,
-        `加载器: ${project.loaders?.join(', ') || '未知'}`,
-        `主分类: ${project.categories?.join(', ') || '未知'}`,
-        project.additional_categories?.length ? `附加分类: ${project.additional_categories.join(', ')}` : null,
-        `许可: ${project.license?.id || '未知'}${project.license?.name ? ` (${project.license.name})` : ''}`
-      ].filter(Boolean).map(item => `- ${item}`).join('\n')
-    ]
+    // 添加图标（如果有）
+    if (project.icon_url) {
+      contentBlocks.push(h.image(project.icon_url))
+    }
+
+    // 描述部分
+    if (project.description) {
+      contentBlocks.push(project.description)
+    }
+
+    // 基本信息
+    contentBlocks.push([
+      `项目类型: ${formatValue('type', project.project_type)}`,
+      `作者: ${project.author || '未知'}`,
+      `下载量: ${project.downloads?.toLocaleString() || '0'}`,
+      `关注数: ${project.followers?.toLocaleString() || '0'}`,
+      `状态: ${formatValue('project', project.status)}`,
+      `货币化: ${formatValue('monetization', project.monetization_status)}`,
+      `客户端: ${formatValue('compatibility', project.client_side)}`,
+      `服务端: ${formatValue('compatibility', project.server_side)}`,
+      `创建: ${formatDate(project.published)}`,
+      `更新: ${formatDate(project.updated)}`,
+      project.approved ? `审核通过: ${formatDate(project.approved)}` : null,
+      `游戏版本: ${project.game_versions?.join(', ') || '未知'}`,
+      `加载器: ${project.loaders?.join(', ') || '未知'}`,
+      `主分类: ${project.categories?.join(', ') || '未知'}`,
+      project.additional_categories?.length ? `附加分类: ${project.additional_categories.join(', ')}` : null,
+      `许可: ${project.license?.id || '未知'}${project.license?.name ? ` (${project.license.name})` : ''}`
+    ].filter(Boolean).map(item => `● ${item}`).join('\n'))
 
     // 相关链接
     const links = [
-      project.source_url && `[源代码](${project.source_url})`,
-      project.issues_url && `[问题追踪](${project.issues_url})`,
-      project.wiki_url && `[Wiki](${project.wiki_url})`,
-      project.discord_url && `[Discord](${project.discord_url})`
+      project.source_url && `源代码: ${project.source_url}`,
+      project.issues_url && `问题追踪: ${project.issues_url}`,
+      project.wiki_url && `Wiki: ${project.wiki_url}`,
+      project.discord_url && `Discord: ${project.discord_url}`
     ].filter(Boolean);
 
     if (links.length > 0) {
-      contentBlocks.push(`## 相关链接\n${links.join(' | ')}`)
+      contentBlocks.push(`◆ 相关链接 ◆\n${links.join('\n')}`)
     }
-
-    // 移除团队信息部分
 
     // 捐赠信息
     if (project.donation_urls?.length > 0) {
-      contentBlocks.push(`## 赞助渠道\n${project.donation_urls.map(d =>
-        `- [${d.platform}](${d.url})${d.id ? ` (${d.id})` : ''}`
+      contentBlocks.push(`◆ 赞助渠道 ◆\n${project.donation_urls.map(d =>
+        `● ${d.platform}: ${d.url}${d.id ? ` (${d.id})` : ''}`
       ).join('\n')}`)
     }
 
-    // 移除版本信息部分
-
     // 图库
     if (project.gallery?.length > 0) {
-      contentBlocks.push(`## 图库\n${project.gallery.slice(0, 3).map(img =>
-        `![${img.title || '图片'}](${img.url})`
-      ).join('\n\n')}`)
+      contentBlocks.push(`◆ 图库 ◆`)
+      // 添加图片
+      project.gallery.slice(0, 3).forEach(img => {
+        contentBlocks.push(`${img.title || '图片'}:`)
+        contentBlocks.push(h.image(img.url))
+      })
     }
 
     // 简介
     if (project.body) {
-      contentBlocks.push(`## 详细介绍\n${project.body.substring(0, 500)}${project.body.length > 500 ? '...' : ''}`)
+      contentBlocks.push(`◆ 详细介绍 ◆\n${project.body.substring(0, 500).replace(/[#\-*]/g, '').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1: $2')}${project.body.length > 500 ? '...' : ''}`)
     }
 
     // 项目链接
-    contentBlocks.push(`[访问项目页面](${projectUrl})`)
+    contentBlocks.push(`访问项目页面: ${projectUrl}`)
 
     return {
-      content: contentBlocks.filter(Boolean).join('\n\n'),
+      content: contentBlocks,
       url: projectUrl,
       icon: project.icon_url || null
     }
