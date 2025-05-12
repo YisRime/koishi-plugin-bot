@@ -18,11 +18,11 @@ const PLATFORMS = {
      * @param {Context} ctx - Koishi上下文
      * @param {string} keyword - 搜索关键词
      * @param {Config} config - 配置对象
-     * @param {Object} options - 搜索选项
+     * @param {any} options - 搜索选项
      * @returns {Promise<Array>} 搜索结果列表
      */
-    search: (ctx, keyword, config, options = {}) => searchModrinthProjects(ctx, keyword, {
-      ...options, limit: config.searchResults
+    search: (ctx, keyword, config, options: any = {}) => searchModrinthProjects(ctx, keyword, {
+      ...options, limit: options.limit || config.searchResults, offset: options.offset
     }),
     /**
      * 获取Modrinth项目详情
@@ -191,9 +191,13 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
     .option('shot', '-s 使用截图模式')
     .option('mrs', '-mrs <sort:string> [MR]排序方式')
     .option('mrf', '-mrf <facets:string> [MR]高级过滤')
+    .option('offset', '-mro <offset:number> [MR]跳过数量')
+    .option('mrl', '-mrl <limit:number> [MR]结果数量')
     .option('cfl', '-cfl <loader:string> [CF]加载器')
     .option('cfs', '-cfs <sort:string> [CF]排序方式')
     .option('cfo', '-cfo <order:string> [CF]升降序')
+    .option('cfi', '-cfi <index:number> [CF]跳过数量')
+    .option('cfp', '-cfp <pageSize:number> [CF]结果数量')
     .option('version', '-v <version:string> 支持版本')
     .option('type', `-t <type:string> 资源类型(${Object.keys(cfTypeMap).join('|')})`)
     .action(async ({ session, options }, keyword) => {
@@ -208,13 +212,15 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
         const platformOptions = {
           modrinth: {
             facets: options.mrf || (options.type && JSON.stringify([[`project_type:${options.type}`]])),
-            sort: options.mrs, version: options.version
+            sort: options.mrs, version: options.version, offset: options.offset,
+            limit: options.mrl ? Math.min(options.mrl, 100) : Math.min(config.searchResults, 100)
           },
           curseforge: {
             categoryId: options.type ? cfTypeMap[options.type] : undefined,
             gameVersion: options.version,
             modLoaderType: options.cfl ? cfLoaderMap[options.cfl] : undefined,
-            sortField: options.cfs, sortOrder: options.cfo
+            sortField: options.cfs, sortOrder: options.cfo,
+            pageSize: options.cfp > 50 ? 50 : options.cfp, index: options.cfi
           },
           mcmod: { type: options.type },
           mcwiki: {}

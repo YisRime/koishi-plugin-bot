@@ -135,14 +135,17 @@ export function registerCurseForge(ctx: Context, mc: Command, config: Config) {
     .option('version', '-v <version:string> 支持版本')
     .option('loader', '-l <loader:string> 加载器')
     .option('shot', '-s 使用截图模式')
+    .option('index', '-i <index:number> 跳过数量')
+    .option('pageSize', '-p <pageSize:number> 结果数量')
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入关键词'
       if (!config.curseforgeEnabled) return '未配置 CurseForge API 密钥'
       try {
         const searchOptions = {
           categoryId: options.type ? CF_MAPS.TYPE[options.type] : undefined,
-          gameVersion: options.version,
-          modLoaderType: options.loader ? CF_MAPS.LOADER[options.loader] : undefined
+          gameVersion: options.version, index: options.index,
+          modLoaderType: options.loader ? CF_MAPS.LOADER[options.loader] : undefined,
+          pageSize: options.pageSize > 50 ? 50 : options.pageSize,
         }
         const projects = await searchCurseForgeProjects(ctx, keyword, config.curseforgeEnabled, searchOptions)
         if (!projects.length) return '未找到匹配的资源'
