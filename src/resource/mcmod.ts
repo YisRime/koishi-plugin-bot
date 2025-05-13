@@ -7,13 +7,20 @@ const MCMOD_API_BASE = 'https://search.mcmod.cn/s'
 // 搜索MCMOD资源
 export async function searchMcmodProjects(ctx: Context, keyword: string, options = {}) {
   try {
-    const response = await ctx.http.get(MCMOD_API_BASE, {
-      params: {
-        key: keyword,
-        format: 'json',
-        ...(options['type'] ? { type: options['type'] } : {})
-      }
-    })
+    const params = {
+      key: keyword,
+      format: 'json',
+      ...(options['type'] ? { type: options['type'] } : {})
+    }
+
+    // 构造并记录请求URL
+    const url = new URL(MCMOD_API_BASE);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.append(key, String(value));
+    });
+    ctx.logger.info(`[MCMOD] 搜索请求: ${url.toString()}`);
+
+    const response = await ctx.http.get(MCMOD_API_BASE, { params })
     return response.data || []
   } catch (error) {
     ctx.logger.error('MCMOD 搜索失败:', error)
@@ -26,7 +33,10 @@ export async function getMcmodProject(ctx: Context, project) {
   // 内联之前的 fetchMcmodProjectDetail 函数
   let iconUrl, description, downloadLink;
   try {
-    const html = await ctx.http.get(`https://www.mcmod.cn/item/${project.extra?.id}.html`)
+    const detailUrl = `https://www.mcmod.cn/item/${project.extra?.id}.html`;
+    ctx.logger.info(`[MCMOD] 获取详情: ${detailUrl}`);
+
+    const html = await ctx.http.get(detailUrl)
 
     // 使用正则提取信息
     const downloadMatch = html.match(/<a[^>]*href=["']([^"']+)["'][^>]*class=["'][^"']*download[^"']*["'][^>]*>/i)

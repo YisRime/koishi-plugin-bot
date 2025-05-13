@@ -32,7 +32,6 @@ export interface Config {
   mcwikiEnabled: boolean
   searchDesc: number
   searchResults: number
-  totalSearchResults: number
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -50,7 +49,6 @@ export const Config: Schema<Config> = Schema.intersect([
     useScreenshot: Schema.boolean().description('启用网页截图选项').default(true),
     searchDesc: Schema.number().description('搜索结果简介字数').default(50).min(0),
     searchResults: Schema.number().description('每页显示结果数').default(10).min(1),
-    totalSearchResults: Schema.number().description('总搜索结果数').default(100).min(10),
   }).description('资源查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),

@@ -2,8 +2,6 @@ import { searchModrinthProjects, getModrinthProject } from './modrinth'
 import { searchCurseForgeProjects, getCurseForgeProject } from './curseforge'
 import { searchMcmodProjects, getMcmodProject } from './mcmod'
 import { searchMcwikiPages, getMcwikiPage } from './mcwiki'
-import { Config } from '../index'
-import { Context } from 'koishi'
 
 /**
  * 支持的平台配置，包含各平台的搜索、详情获取和数据转换方法
@@ -20,9 +18,7 @@ export const PLATFORMS = {
      * @param {Object} options - 搜索选项
      * @returns {Promise<Array>} 搜索结果列表
      */
-    search: (ctx, keyword, config, options = {}) => searchModrinthProjects(ctx, keyword, {
-      ...options, limit: config.searchResults
-    }),
+    search: (ctx, keyword, config, options = {}) => searchModrinthProjects(ctx, keyword, options),
     /**
      * 获取Modrinth项目详情
      * @type {Function}
@@ -143,7 +139,7 @@ export const PLATFORMS = {
      */
     transform: p => ({
       platform: 'Minecraft Wiki', name: p.title, description: p.snippet.replace(/<\/?[^>]+(>|$)/g, ''),
-      url: `https://minecraft.fandom.com/zh/wiki/${encodeURIComponent(p.title)}`,
+      url: `https://zh.minecraft.wiki/w/${encodeURIComponent(p.title)}`,
       extra: { id: p.pageid }
     }),
     /**

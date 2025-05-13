@@ -7,16 +7,23 @@ const WIKI_API_BASE = 'https://zh.minecraft.wiki/api.php'
 // 搜索Wiki页面
 export async function searchMcwikiPages(ctx: Context, keyword: string, options = {}) {
   try {
-    const response = await ctx.http.get(WIKI_API_BASE, {
-      params: {
-        action: 'query',
-        list: 'search',
-        srsearch: keyword,
-        format: 'json',
-        srlimit: options['limit'] || 10,
-        ...(options['namespace'] ? { srnamespace: options['namespace'] } : {})
-      }
-    })
+    const params = {
+      action: 'query',
+      list: 'search',
+      srsearch: keyword,
+      format: 'json',
+      srlimit: options['limit'] || 10,
+      ...(options['namespace'] ? { srnamespace: options['namespace'] } : {})
+    }
+
+    // 构造并记录请求URL
+    const url = new URL(WIKI_API_BASE);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.append(key, String(value));
+    });
+    ctx.logger.info(`[Minecraft Wiki] 搜索请求: ${url.toString()}`);
+
+    const response = await ctx.http.get(WIKI_API_BASE, { params })
     return response.query?.search || []
   } catch (error) {
     ctx.logger.error('Minecraft Wiki 搜索失败:', error)
@@ -28,19 +35,26 @@ export async function searchMcwikiPages(ctx: Context, keyword: string, options =
 export async function getMcwikiPage(ctx: Context, pageId: number) {
   try {
     // 获取页面基本信息
-    const response = await ctx.http.get(WIKI_API_BASE, {
-      params: {
-        action: 'query',
-        pageids: pageId,
-        prop: 'info|extracts|categories|links|images',
-        inprop: 'url',
-        exintro: true,
-        explaintext: true,
-        cllimit: 5,
-        pllimit: 5,
-        format: 'json'
-      }
-    })
+    const params = {
+      action: 'query',
+      pageids: pageId,
+      prop: 'info|extracts|categories|links|images',
+      inprop: 'url',
+      exintro: true,
+      explaintext: true,
+      cllimit: 5,
+      pllimit: 5,
+      format: 'json'
+    }
+
+    // 构造并记录请求URL
+    const url = new URL(WIKI_API_BASE);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.append(key, String(value));
+    });
+    ctx.logger.info(`[Minecraft Wiki] 获取页面详情: ${url.toString()}`);
+
+    const response = await ctx.http.get(WIKI_API_BASE, { params })
 
     const page = response.query?.pages?.[pageId]
     if (!page) return null
@@ -49,15 +63,22 @@ export async function getMcwikiPage(ctx: Context, pageId: number) {
     let imageUrl = null
     if (page.images?.length > 0) {
       try {
-        const imgResponse = await ctx.http.get(WIKI_API_BASE, {
-          params: {
-            action: 'query',
-            titles: page.images[0].title,
-            prop: 'imageinfo',
-            iiprop: 'url',
-            format: 'json'
-          }
-        })
+        const imgParams = {
+          action: 'query',
+          titles: page.images[0].title,
+          prop: 'imageinfo',
+          iiprop: 'url',
+          format: 'json'
+        }
+
+        // 构造并记录图片请求URL
+        const imgUrl = new URL(WIKI_API_BASE);
+        Object.entries(imgParams).forEach(([key, value]) => {
+          imgUrl.searchParams.append(key, String(value));
+        });
+        ctx.logger.info(`[Minecraft Wiki] 获取图片: ${imgUrl.toString()}`);
+
+        const imgResponse = await ctx.http.get(WIKI_API_BASE, { params: imgParams })
         const imgPages = imgResponse.query?.pages
         if (imgPages) {
           imageUrl = imgPages[Object.keys(imgPages)[0]]?.imageinfo?.[0]?.url

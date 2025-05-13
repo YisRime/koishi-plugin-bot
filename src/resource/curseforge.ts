@@ -41,6 +41,14 @@ export async function searchCurseForgeProjects(ctx: Context, keyword: string, ap
         params[param] = options[param]
       }
     })
+
+    // 构造并记录请求URL (移除API密钥以避免泄露)
+    const url = new URL(`${CF_API_BASE}/mods/search`);
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.append(key, String(value));
+    });
+    ctx.logger.info(`[CurseForge] 搜索请求: ${url.toString()}`);
+
     const response = await ctx.http.get(`${CF_API_BASE}/mods/search`, { headers: { 'x-api-key': api }, params })
     return response.data || []
   } catch (error) {
@@ -59,6 +67,11 @@ export async function searchCurseForgeProjects(ctx: Context, keyword: string, ap
 export async function getCurseForgeProject(ctx: Context, projectId: number, api: string) {
   try {
     if (!api) return null
+
+    // 记录请求URL (移除API密钥以避免泄露)
+    const url = `${CF_API_BASE}/mods/${projectId}`;
+    ctx.logger.info(`[CurseForge] 获取项目详情: ${url}`);
+
     const projectRes = await ctx.http.get(`${CF_API_BASE}/mods/${projectId}`, { headers: { 'x-api-key': api } })
     const project = projectRes.data
     if (!project) return null
@@ -113,6 +126,7 @@ export function registerCurseForge(ctx: Context, mc: Command, config: Config) {
     .option('type', `-t <type:string> 资源类型(${Object.keys(CF_MAPS.TYPE).join('|')})`)
     .option('version', '-v <version:string> 支持版本')
     .option('loader', '-l <loader:string> 加载器')
+    .option('skip', '-k <count:number> 跳过结果数')
     .option('shot', '-s 使用截图模式')
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入关键词'
@@ -120,8 +134,8 @@ export function registerCurseForge(ctx: Context, mc: Command, config: Config) {
       try {
         const searchOptions = {
           categoryId: options.type ? CF_MAPS.TYPE[options.type] : undefined,
-          gameVersion: options.version,
-          modLoaderType: options.loader ? CF_MAPS.LOADER[options.loader] : undefined
+          gameVersion: options.version, index: Math.max(0, options.skip), pageSize: 1,
+          modLoaderType: options.loader ? CF_MAPS.LOADER[options.loader] : undefined,
         }
         const projects = await searchCurseForgeProjects(ctx, keyword, config.curseforgeEnabled, searchOptions)
         if (!projects.length) return '未找到匹配的资源'
