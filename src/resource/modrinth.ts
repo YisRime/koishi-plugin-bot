@@ -44,10 +44,9 @@ function parseFacets(facetsStr: string): string[][] {
  */
 export async function searchModrinthProjects(ctx: Context, keyword: string, options = {}) {
   try {
-    const { facets, sort, offset, limit, ...otherOptions } = options as any
+    const { facets, sort, ...otherOptions } = options as any
     const params = {
-      query: keyword, ...(sort && { index: sort }), ...(offset !== undefined && { offset }),
-      ...(limit !== undefined && { limit: Math.min(limit, 100) }),
+      query: keyword, ...(sort && { index: sort }),
       ...Object.fromEntries(Object.entries(otherOptions).filter(([_, v]) => v !== undefined))
     }
     if (facets) params['facets'] = JSON.stringify(parseFacets(facets))
@@ -128,13 +127,11 @@ export function registerModrinth(ctx: Context, mc: Command, config: Config) {
     .option('version', '-v <version:string> 支持版本')
     .option('facets', '-f <facets:string> 高级过滤')
     .option('sort', '-sort <sort:string> 排序方式')
-    .option('offset', '-o <offset:number> 跳过数量')
-    .option('limit', '-l <limit:number> 结果数量')
     .option('shot', '-s 使用截图模式')
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入关键词'
       try {
-        const searchOptions = { sort: options.sort, offset: options.offset, limit: options.limit ? Math.min(options.limit, 100) : undefined}
+        const searchOptions = { sort: options.sort }
         const facetsArray = []
         if (options.type) facetsArray.push([`project_type:${options.type}`])
         if (options.version) facetsArray.push([`versions:${options.version}`])
