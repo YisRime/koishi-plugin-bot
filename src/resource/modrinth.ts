@@ -1,18 +1,10 @@
 import { Context, Command, h } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
+import { STATUS_MAP } from './maps'
 
 /** Modrinth API基础URL */
 const MR_API_BASE = 'https://api.modrinth.com/v2'
-
-/**
- * 状态映射表
- * @type {Object}
- */
-const STATUS_MAP = {
-  compatibility: { required: '必需', optional: '可选', unsupported: '不支持' },
-  type: { mod: '模组', modpack: '整合包', resourcepack: '资源包', shader: '着色器' }
-}
 
 /**
  * 解析Facets字符串为适当的格式

@@ -1,31 +1,10 @@
 import { Context, Command, h } from 'koishi'
 import { Config } from '../index'
 import { renderOutput } from './render'
+import { CF_MAPS } from './maps'
 
 /** CurseForge API基础URL */
 const CF_API_BASE = 'https://api.curseforge.com/v1'
-
-/**
- * CurseForge相关映射表
- * @type {Object}
- */
-const CF_MAPS = {
-  /** 资源类型映射 */
-  TYPE: {
-    'mod': 6, 'resourcepack': 12, 'world': 17, 'plugin': 5,
-    'modpack': 4471, 'addon': 4559, 'customization': 4546,
-    'shader': 6552, 'datapack': 6945
-  },
-  /** 加载器类型映射 */
-  LOADER: {
-    'any': 0, 'forge': 1, 'cauldron': 2, 'liteloader': 3,
-    'fabric': 4, 'quilt': 5, 'neoforge': 6
-  },
-  /** 发布类型映射 */
-  RELEASE: { 1: '正式版', 2: '快照版', 3: '开发版' },
-  /** 依赖关系映射 */
-  RELATION: { 1: '必需', 2: '可选', 3: '不兼容', 4: '内置', 5: '工具' }
-}
 
 /**
  * 搜索CurseForge项目
