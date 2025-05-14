@@ -9,14 +9,15 @@ const WIKI_API_BASE = 'https://zh.minecraft.wiki/api.php'
  * 搜索Minecraft Wiki页面
  * @param ctx Koishi上下文
  * @param keyword 搜索关键词
- * @param options 搜索选项，可包含namespace等参数
+ * @param options 搜索选项，可包含offset和what参数
  * @returns 搜索结果数组，失败则返回空数组
  */
 export async function searchMcwikiPages(ctx: Context, keyword: string, options = {}) {
   try {
     const params = {
       action: 'query', list: 'search', srsearch: keyword, format: 'json',
-      ...(options['namespace'] && { srnamespace: options['namespace'] })
+      ...(options['offset'] && { sroffset: options['offset'] }),
+      ...(options['what'] && { srwhat: options['what'] })
     }
     const response = await ctx.http.get(WIKI_API_BASE, { params })
     return response.query?.search || []
@@ -169,13 +170,16 @@ function processWikiExtract(extract: string, paragraphLimit: number): string[] {
  */
 export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
   mc.subcommand('.wiki <keyword:text>', '查询 Minecraft Wiki')
+    .option('skip', '-k <count:number> 跳过结果数')
+    .option('what', '-w <what:string> 搜索范围')
     .option('exact', '-e 精确匹配')
     .option('shot', '-s 使用截图模式')
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入关键词'
       try {
         const searchKey = options.exact ? `"${keyword}"` : keyword
-        const pages = await searchMcwikiPages(ctx, searchKey)
+        const searchOptions = { offset: options.skip, what: options.what }
+        const pages = await searchMcwikiPages(ctx, searchKey, searchOptions)
         if (!pages.length) return '未找到匹配的条目'
         const pageInfo = await getMcwikiPage(ctx, pages[0].pageid, config)
         if (!pageInfo) return '获取详情失败'

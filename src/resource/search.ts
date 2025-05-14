@@ -19,6 +19,7 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
     .option('cfo', '-cfo <order:string> [CF]升降序')
     .option('version', '-v <version:string> 支持版本')
     .option('skip', '-k <count:number> 跳过结果数')
+    .option('what', '-w <what:string> [Wiki]搜索范围')
     .option('type', `-t <type:string> 资源类型(${Object.keys(CF_MAPS.TYPE).join('|')})`)
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '需要关键词'
@@ -56,7 +57,7 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
               index: platformOffsets['curseforge'], pageSize: 50
             },
             mcmod: { type: options.type },
-            mcwiki: {}
+            mcwiki: { offset: platformOffsets['mcwiki'], what: options.what }
           }
           // 并行搜索
           const searchResults = await Promise.all(activePlatforms.map(async p => {
@@ -167,7 +168,7 @@ export function registerSearch(ctx: Context, mc: Command, config: Config) {
           const selected = allResults[choice - 1];
           const platform = Object.values(PLATFORMS).find(p => p.name === selected.platform);
           const detailId = selected.platform === 'MCMOD' ? selected : selected.extra.id;
-          const detail = await platform?.getDetail(ctx, detailId, config);
+          const detail = await platform.getDetail(ctx, detailId, config);
           if (!detail) return '获取详情失败';
           return renderOutput(session, detail.content, detail.url, ctx, config);
         };
