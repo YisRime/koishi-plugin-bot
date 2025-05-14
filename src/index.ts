@@ -24,6 +24,7 @@ export interface Config {
   serverMaps: ServerMaps[]
   rconServers: RconServerConfig[]
   wsServers: WsServerConfig[]
+  bindEnabled: boolean
   useForward: boolean
   useScreenshot: boolean
   curseforgeEnabled: false | string
@@ -89,6 +90,7 @@ export const Config: Schema<Config> = Schema.intersect([
     .default('{icon}\n{name}\n{motd}\n{version} | {online}/{max} | {ping}ms\nIP:{ip}\nSRV:{srv}\n{edition} {gamemode} {software} {serverid} {eulablock}[\n在线玩家({playercount}):\n{playerlist:10}][\n插件列表({plugincount}):\n{pluginlist:10}][\n模组列表({modcount}):\n{modlist:10}]')
   }).description('服务器查询配置'),
   Schema.object({
+    bindEnabled: Schema.boolean().description('启用白名单管理').default(false),
     serverMaps: Schema.array(Schema.object({
       serverId: Schema.number().description('服务器 ID').required(),
       platform: Schema.string().description('平台 ID'),
@@ -122,8 +124,8 @@ export function apply(ctx: Context, config: Config) {
   config.playerEnabled !== false && registerPlayer(ctx, mc)
   // 服务器信息查询
   config.infoEnabled !== false && config.serverApis?.length && registerInfo(ctx, mc, config)
-  // 服务器连接
-  if (config.rconServers.length > 0 || config.wsServers.length > 0) registerServer(mc, config)
+  // 服务器连接与管理
+  if (config.rconServers.length > 0 || config.wsServers.length > 0) registerServer(ctx, mc, config)
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
   // 资源查询
   if (config.modrinthEnabled) registerModrinth(ctx, mc, config)

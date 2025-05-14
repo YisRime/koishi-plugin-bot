@@ -1,18 +1,18 @@
+import { Context } from 'koishi'
 import { Config } from '../index'
 import { executeRconCommand, findServer, sendMinecraftMessage, formatMinecraftText } from './service'
+import { FileManager } from '../utils/fileManager'
 
 /**
  * 处理服务器命令前的通用逻辑
  * @param {Object} ctx - 命令上下文对象
- * @param {Object} ctx.session - Koishi会话对象
- * @param {Object} ctx.options - 命令选项
  * @param {Config} config - 插件配置
  * @returns {boolean} 是否通过前置检查
  */
 function setupServerIdBefore({ session, options }, config: Config) {
   if (!session) return false;
   if (!options.server) {
-    const mapping = config.serverMaps.find(m =>m.platform === session.platform && m.channelId === session.guildId);
+    const mapping = config.serverMaps.find(m => m.platform === session.platform && m.channelId === session.guildId);
     if (!mapping) {
       session.send('该群组未配置对应服务器');
       return false;
@@ -48,10 +48,11 @@ async function verifyAndSendMessage({ session, options }, config: Config, messag
 
 /**
  * 注册服务器相关命令
+ * @param {Context} ctx - Koishi上下文
  * @param {any} parent - 父命令实例
  * @param {Config} config - 插件配置
  */
-export function registerServer(parent: any, config: Config) {
+export function registerServer(ctx: Context, parent: any, config: Config) {
   const server = parent.subcommand('.server', '管理 Minecraft 服务器')
     .usage('mc.server - 向 Minecraft 服务器内发送消息和执行命令');
 
@@ -92,7 +93,7 @@ export function registerServer(parent: any, config: Config) {
         session.send(`服务器 #${serverId} 未配置 RCON`);
       }
     });
-
+  // WebSocket 相关命令
   if (config.wsServers.length > 0) {
     server.subcommand('.broadcast <message:text>', '发送全服广播')
       .usage('mc.server.broadcast <广播内容> - 向在线玩家发送醒目广播')
@@ -220,5 +221,68 @@ export function registerServer(parent: any, config: Config) {
           await session.send(`JSON 解析失败 - ${error.message}`);
         }
       });
+  }
+  // 白名单命令
+  if (config.bindEnabled) { const fileManager = new FileManager(ctx);
+    server.subcommand('.bind [username:string]', '白名单管理')
+      .usage('mc.server.bind [用户名] - 绑定或解绑 Minecraft 用户名')
+      .option('server', '-s <serverId:number> 指定服务器 ID')
+      .option('remove', '-r 解绑指定用户名')
+      .action(async ({ session, options }, username) => {
+        if (!session) return
+        const bindings = await fileManager.getWhitelistBindings()
+        const userId = session.userId
+        // 显示已绑定列表
+        if (!username) {
+          if (!bindings[userId] || Object.keys(bindings[userId]).length === 0) return session.send('未绑定任何用户名')
+          const bindingList = Object.entries(bindings[userId])
+            .map(([name, serverId]) => `${name} → 服务器#${serverId}`).join('\n')
+          return session.send(`已绑定的用户名：\n${bindingList}`)
+        }
+        // 解绑模式
+        if (options.remove) {
+          if (!bindings[userId] || !bindings[userId][username]) return session.send(`未找到绑定用户名 ${username}`)
+          const serverId = bindings[userId][username]
+          const serverInfo = findServer(config, serverId)
+          if (!serverInfo.found || !serverInfo.rconConfig) return session.send(`服务器 #${serverId} 不存在或未配置RCON`)
+          try {
+            await executeRconCommand(`whitelist remove ${username}`, serverInfo.rconConfig, session)
+            delete bindings[userId][username]
+            if (Object.keys(bindings[userId]).length === 0) delete bindings[userId]
+            await fileManager.saveWhitelistBindings(bindings)
+            return session.send(`已解绑用户名 ${username} [#${serverId}]`)
+          } catch (error) {
+            ctx.logger.warn(`白名单移除失败: ${error.message} [#${serverId}]`)
+            return session.send(`白名单移除失败，未解除绑定: ${error.message} [#${serverId}]`)
+          }
+        }
+        // 绑定模式
+        if (username.length < 3 || username.length > 16) return session.send('无效的用户名')
+        // 获取服务器ID
+        const serverId = options.server ||
+          config.serverMaps.find(m => m.platform === session.platform && m.channelId === session.channelId)?.serverId
+        if (!serverId) return session.send('该群组未配置对应服务器')
+        const serverInfo = findServer(config, serverId)
+        if (!serverInfo.found) return session.send(`未找到服务器 #${serverId}`)
+        if (!serverInfo.rconConfig) return session.send(`服务器 #${serverId} 未配置 RCON`)
+        // 检查该用户名是否已被绑定到其他服务器
+        for (const [uid, userBindings] of Object.entries(bindings)) {
+          if (uid !== userId && username in userBindings) return session.send(`用户名 ${username} 已被其他用户绑定到服务器 #${userBindings[username]}`)
+        }
+        // 检查是否已绑定同一服务器的相同用户名
+        if (bindings[userId]?.hasOwnProperty(username) && bindings[userId][username] === serverId) return session.send(`已绑定用户名 ${username} 到服务器 #${serverId}`)
+        try {
+          await executeRconCommand(`whitelist add ${username}`, serverInfo.rconConfig, session)
+          if (!bindings[userId]) {
+            bindings[userId] = { [username]: serverId }
+          } else {
+            bindings[userId][username] = serverId
+          }
+          await fileManager.saveWhitelistBindings(bindings)
+          return session.send(`已绑定用户名 ${username} 到服务器 #${serverId}`)
+        } catch (error) {
+          return session.send(`白名单添加失败，未绑定: ${error.message} [#${serverId}]`)
+        }
+      })
   }
 }
