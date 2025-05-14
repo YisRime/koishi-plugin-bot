@@ -49,7 +49,7 @@ export const PLATFORMS = {
      * @param {string} keyword - 搜索关键词
      * @param {Config} config - 配置对象
      * @param {Object} options - 搜索选项
-     * @returns {Promise<Array>} 搜索结果列表
+     * @returns {Promise<Object>} 包含结果和分页信息的对象
      */
     search: (ctx, keyword, config, options = {}) => searchCurseForgeProjects(ctx, keyword, config.curseforgeEnabled, options),
     /**

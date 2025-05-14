@@ -32,6 +32,8 @@ export interface Config {
   mcwikiEnabled: boolean
   searchDesc: number
   searchResults: number
+  maxParagraphs: number;
+  maxDescLength: number;
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -45,10 +47,12 @@ export const Config: Schema<Config> = Schema.intersect([
     ]).description('启用 CurseForge 查询').default(false)
   }).description('查询开关配置'),
   Schema.object({
-    useForward: Schema.boolean().description('启用合并转发输出').default(true),
-    useScreenshot: Schema.boolean().description('启用网页截图选项').default(true),
-    searchDesc: Schema.number().description('搜索结果简介字数').default(50).min(0),
-    searchResults: Schema.number().description('每页显示结果数').default(10).min(1),
+    useForward: Schema.boolean().description('启用合并转发').default(true),
+    useScreenshot: Schema.boolean().description('启用网页截图').default(true),
+    searchDesc: Schema.number().description('简介长度').default(50).min(0).max(500),
+    searchResults: Schema.number().description('搜索结果数/页').default(10).min(1).max(100),
+    maxParagraphs: Schema.number().description('详情段落数限制').default(20).min(1).max(20),
+    maxDescLength: Schema.number().description('每段字数限制').default(1000).min(10).max(1000),
   }).description('资源查询配置'),
   Schema.object({
     playerEnabled: Schema.boolean().description('启用玩家信息查询').default(true),

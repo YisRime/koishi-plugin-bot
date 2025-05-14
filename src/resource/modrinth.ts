@@ -44,14 +44,6 @@ export async function searchModrinthProjects(ctx: Context, keyword: string, opti
       ...Object.fromEntries(Object.entries(otherOptions).filter(([_, v]) => v !== undefined))
     }
     if (facets) params['facets'] = JSON.stringify(parseFacets(facets))
-
-    // 构造并记录请求URL
-    const url = new URL(`${MR_API_BASE}/search`);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, String(value));
-    });
-    ctx.logger.info(`[Modrinth] 搜索请求: ${url.toString()}`);
-
     const response = await ctx.http.get(`${MR_API_BASE}/search`, { params })
     return response.hits || []
   } catch (error) {
@@ -61,18 +53,94 @@ export async function searchModrinthProjects(ctx: Context, keyword: string, opti
 }
 
 /**
+ * 将长文本分割成适当长度的段落
+ * @param text 要处理的文本
+ * @param paragraphLimit 段落字数限制
+ * @returns 分段后的文本数组
+ */
+function splitIntoParagraphs(text: string, paragraphLimit: number): string[] {
+  const result: string[] = []
+  if (text.length <= paragraphLimit) {
+    result.push(text)
+    return result
+  }
+  const sentenceBreaks = text.match(/[。！？\.!?]+/g)
+  if (sentenceBreaks?.length > 5) {
+    // 按句子分段
+    let subParagraph = ''
+    for (const sentence of text.split(/(?<=[。！？\.!?]+)/)) {
+      if ((subParagraph + sentence).length > paragraphLimit) {
+        if (subParagraph.trim()) result.push(subParagraph.trim())
+        subParagraph = sentence
+      } else {
+        subParagraph += sentence
+      }
+    }
+    if (subParagraph.trim()) result.push(subParagraph.trim())
+  } else {
+    // 按字符数分段
+    for (let j = 0; j < text.length; j += paragraphLimit) {
+      result.push(text.substring(j, Math.min(j + paragraphLimit, text.length)).trim())
+    }
+  }
+  return result
+}
+
+/**
+ * 处理Modrinth项目描述文本，进行分段
+ * @param body 项目描述原始文本
+ * @param paragraphLimit 段落字数限制
+ * @returns 分段后的字符串数组
+ */
+function processModrinthBody(body: string, paragraphLimit: number): string[] {
+  const images: string[] = []
+  // 提取所有img标签的URL
+  body = body.replace(/<img\s+src="([^"]+)"(?:\s+alt="[^"]*")?\s*\/?>/g, (match, url) => {
+    images.push(url)
+    return `__IMAGE__${images.length - 1}__`
+  })
+  // 处理其他HTML标签
+  body = body
+    .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g, '$1')
+    .replace(/<center>([\s\S]*?)<\/center>/g, '$1')
+    .replace(/<p[^>]*>([\s\S]*?)<\/p>/g, '$1\n\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+  // 规范化文本
+  const normalizedText = body.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n')
+  const paragraphs = normalizedText.split('\n\n')
+  const result: string[] = []
+  // 处理段落
+  for (const paragraph of paragraphs) {
+    if (!paragraph.trim()) continue
+    // 检查是否是图片占位符
+    const imageMatch = paragraph.trim().match(/^__IMAGE__(\d+)__$/)
+    if (imageMatch) {
+      const imageIndex = parseInt(imageMatch[1])
+      if (!isNaN(imageIndex) && imageIndex >= 0 && imageIndex < images.length) result.push(`__IMAGE__${images[imageIndex]}__`)
+      continue
+    }
+    // 处理普通文本
+    const cleanParagraph = paragraph
+      .replace(/[#\-*]/g, '')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1: $2')
+      .replace(/__IMAGE__\d+__/g, '')
+    if (!cleanParagraph.trim()) continue
+    result.push(...splitIntoParagraphs(cleanParagraph.trim(), paragraphLimit))
+  }
+  return result
+}
+
+/**
  * 获取Modrinth项目详情
  * @param {Context} ctx - Koishi上下文
  * @param {string} projectId - 项目ID
+ * @param {Config} config - 配置对象
  * @returns {Promise<Object|null>} 项目详情，包含content和url
  */
-export async function getModrinthProject(ctx: Context, projectId: string) {
+export async function getModrinthProject(ctx: Context, projectId: string, config: Config) {
   try {
-    // 记录请求URL
-    const url = `${MR_API_BASE}/project/${projectId}`;
-    ctx.logger.info(`[Modrinth] 获取项目详情: ${url}`);
-
-    const project = await ctx.http.get(url)
+    const project = await ctx.http.get(`${MR_API_BASE}/project/${projectId}`)
     if (!project) return null
     const projectUrl = `https://modrinth.com/${project.project_type}/${project.slug}`
     const formatDate = date => date ? new Date(date).toLocaleString() : '未知'
@@ -110,8 +178,19 @@ export async function getModrinthProject(ctx: Context, projectId: string) {
       project.gallery.slice(0, 3).forEach(img => {content.push(h.image(img.url))})
     }
     // 详细介绍
-    if (project.body) content.push(`详细介绍：\n${project.body.substring(0, 1000).replace(/[#\-*]/g, '')
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1: $2')}${project.body.length > 1000 ? '...' : ''}`)
+    if (project.body) {
+      content.push(`详细介绍：`)
+      const bodyParts = processModrinthBody(project.body, config.maxDescLength).slice(0, config.maxParagraphs)
+      // 处理详细介绍中的图片标记
+      content.push(...bodyParts.map(part => {
+        const imageMatch = part.match(/^__IMAGE__(.+)__$/)
+        if (imageMatch) return h.image(imageMatch[1])
+        return part
+      }))
+      if (processModrinthBody(project.body, config.maxDescLength).length > config.maxParagraphs) {
+        content.push('（更多内容请查看完整页面）')
+      }
+    }
     // 项目地址
     content.push(`项目地址：${projectUrl}`)
     return { content, url: projectUrl }
@@ -138,7 +217,7 @@ export function registerModrinth(ctx: Context, mc: Command, config: Config) {
     .action(async ({ session, options }, keyword) => {
       if (!keyword) return '请输入关键词'
       try {
-        const searchOptions = { sort: options.sort, offset: Math.max(0, options.skip), limit: 1 }
+        const searchOptions = { sort: options.sort, offset: Math.max(0, options.skip || 0), limit: 1 }
         const facetsArray = []
         if (options.type) facetsArray.push([`project_type:${options.type}`])
         if (options.version) facetsArray.push([`versions:${options.version}`])
@@ -146,7 +225,7 @@ export function registerModrinth(ctx: Context, mc: Command, config: Config) {
         if (facetsArray.length) searchOptions['facets'] = JSON.stringify(facetsArray)
         const projects = await searchModrinthProjects(ctx, keyword, searchOptions)
         if (!projects.length) return '未找到匹配的资源'
-        const projectInfo = await getModrinthProject(ctx, projects[0].project_id)
+        const projectInfo = await getModrinthProject(ctx, projects[0].project_id, config)
         if (!projectInfo) return '获取详情失败'
         const result = await renderOutput(session, projectInfo.content, projectInfo.url, ctx, config, options.shot)
         return config.useForward && result === '' && !options.shot ? undefined : result

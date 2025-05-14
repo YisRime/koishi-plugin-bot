@@ -12,11 +12,11 @@ const CF_API_BASE = 'https://api.curseforge.com/v1'
  * @param {string} keyword - 搜索关键词
  * @param {string} api - API密钥
  * @param {Object} options - 搜索选项
- * @returns {Promise<Array>} 搜索结果
+ * @returns {Promise<Object>} 搜索结果和分页信息
  */
 export async function searchCurseForgeProjects(ctx: Context, keyword: string, api: string, options = {}) {
   try {
-    if (!api) return []
+    if (!api) return { results: [], pagination: { totalCount: 0 } }
     const params = { gameId: 432, searchFilter: keyword, sortOrder: options['sortOrder'] || 'desc' }
     // 处理搜索参数
     const validParams = [
@@ -41,19 +41,11 @@ export async function searchCurseForgeProjects(ctx: Context, keyword: string, ap
         params[param] = options[param]
       }
     })
-
-    // 构造并记录请求URL (移除API密钥以避免泄露)
-    const url = new URL(`${CF_API_BASE}/mods/search`);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.append(key, String(value));
-    });
-    ctx.logger.info(`[CurseForge] 搜索请求: ${url.toString()}`);
-
     const response = await ctx.http.get(`${CF_API_BASE}/mods/search`, { headers: { 'x-api-key': api }, params })
-    return response.data || []
+    return { results: response.data || [], pagination: response.pagination || { totalCount: 0 } }
   } catch (error) {
     ctx.logger.error('CurseForge 搜索失败:', error)
-    return []
+    return { results: [], pagination: { totalCount: 0 } }
   }
 }
 
@@ -67,19 +59,13 @@ export async function searchCurseForgeProjects(ctx: Context, keyword: string, ap
 export async function getCurseForgeProject(ctx: Context, projectId: number, api: string) {
   try {
     if (!api) return null
-
-    // 记录请求URL (移除API密钥以避免泄露)
-    const url = `${CF_API_BASE}/mods/${projectId}`;
-    ctx.logger.info(`[CurseForge] 获取项目详情: ${url}`);
-
     const projectRes = await ctx.http.get(`${CF_API_BASE}/mods/${projectId}`, { headers: { 'x-api-key': api } })
     const project = projectRes.data
     if (!project) return null
     const formatDate = date => new Date(date).toLocaleString()
     // 构建内容
     const content = [
-      project.logo.url && h.image(project.logo.url),
-      `[${project.name}]\n${project.summary}`,
+      project.logo.url && h.image(project.logo.url), `[${project.name}]\n${project.summary}`,
       // 基本信息
       [
         `分类: ${project.categories?.map(c => c.name).join(', ')}`,
@@ -134,12 +120,12 @@ export function registerCurseForge(ctx: Context, mc: Command, config: Config) {
       try {
         const searchOptions = {
           categoryId: options.type ? CF_MAPS.TYPE[options.type] : undefined,
-          gameVersion: options.version, index: Math.max(0, options.skip), pageSize: 1,
+          gameVersion: options.version, index: Math.max(0, options.skip || 0), pageSize: 1,
           modLoaderType: options.loader ? CF_MAPS.LOADER[options.loader] : undefined,
         }
-        const projects = await searchCurseForgeProjects(ctx, keyword, config.curseforgeEnabled, searchOptions)
-        if (!projects.length) return '未找到匹配的资源'
-        const projectInfo = await getCurseForgeProject(ctx, projects[0].id, config.curseforgeEnabled)
+        const { results } = await searchCurseForgeProjects(ctx, keyword, config.curseforgeEnabled, searchOptions)
+        if (!results.length) return '未找到匹配的资源'
+        const projectInfo = await getCurseForgeProject(ctx, results[0].id, config.curseforgeEnabled)
         if (!projectInfo) return '获取详情失败'
         const result = await renderOutput(session, projectInfo.content, projectInfo.url, ctx, config, options.shot)
         return config.useForward && result === '' && !options.shot ? undefined : result
