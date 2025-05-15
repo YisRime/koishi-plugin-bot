@@ -108,7 +108,7 @@ export async function getCurseForgeProject(ctx: Context, projectId: number, api:
  * @param {Config} config - 配置对象
  */
 export function registerCurseForge(ctx: Context, mc: Command, config: Config) {
-  mc.subcommand('.curseforge <keyword:text>', `查询 CurseForge 资源`)
+  mc.subcommand('.curseforge <keyword:string>', `查询 CurseForge 资源`)
     .option('type', `-t <type:string> 资源类型(${Object.keys(CF_MAPS.TYPE).join('|')})`)
     .option('version', '-v <version:string> 支持版本')
     .option('loader', '-l <loader:string> 加载器')

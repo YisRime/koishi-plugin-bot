@@ -207,7 +207,7 @@ export async function getModrinthProject(ctx: Context, projectId: string, config
  * @param {Config} config - 配置对象
  */
 export function registerModrinth(ctx: Context, mc: Command, config: Config) {
-  mc.subcommand('.modrinth <keyword:text>', '查询 Modrinth 资源')
+  mc.subcommand('.modrinth <keyword:string>', '查询 Modrinth 资源')
     .option('type', '-t <type:string> 资源类型')
     .option('version', '-v <version:string> 支持版本')
     .option('facets', '-f <facets:string> 高级过滤')

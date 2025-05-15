@@ -12,18 +12,29 @@ const WIKI_API_BASE = 'https://zh.minecraft.wiki/api.php'
  * @param options 搜索选项，可包含offset和what参数
  * @returns 搜索结果数组，失败则返回空数组
  */
-export async function searchMcwikiPages(ctx: Context, keyword: string, options = {}) {
+export async function searchMcwikiPages(ctx: Context, keyword: string, options: Record<string, any> = {}) {
   try {
-    const params = {
-      action: 'query', list: 'search', srsearch: keyword, format: 'json',
-      ...(options['offset'] && { sroffset: options['offset'] }),
-      ...(options['what'] && { srwhat: options['what'] })
-    }
-    const response = await ctx.http.get(WIKI_API_BASE, { params })
-    return response.query?.search || []
+    const { offset = 0, what } = options;
+    const sroffset = Number(offset);
+    // 构建API参数
+    const params: Record<string, any> = { action: 'query', list: 'search', srsearch: keyword, format: 'json' };
+    if (sroffset > 0) params.sroffset = sroffset;
+    if (what) params.srwhat = what;
+    // 执行API请求
+    const response = await ctx.http.get(WIKI_API_BASE, { params });
+    const results = response.query?.search || [];
+    const searchInfo = response.query?.searchinfo || {};
+    const continueInfo = response.continue || {};
+    return { results,
+      pagination: {
+        totalResults: searchInfo.totalhits || 0, offset: sroffset,
+        nextOffset: continueInfo.sroffset ? Number(continueInfo.sroffset) : undefined,
+        exhausted: results.length === 0 || !continueInfo.sroffset
+      }
+    };
   } catch (error) {
-    ctx.logger.error('Minecraft Wiki 搜索失败:', error)
-    return []
+    ctx.logger.error('Minecraft Wiki 搜索失败:', error);
+    return { results: [], pagination: { totalResults: 0, offset: Number(options.offset || 0), exhausted: true } };
   }
 }
 
@@ -169,7 +180,7 @@ function processWikiExtract(extract: string, paragraphLimit: number): string[] {
  * @param config 机器人配置
  */
 export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
-  mc.subcommand('.wiki <keyword:text>', '查询 Minecraft Wiki')
+  mc.subcommand('.wiki <keyword:string>', '查询 Minecraft Wiki')
     .option('skip', '-k <count:number> 跳过结果数')
     .option('what', '-w <what:string> 搜索范围')
     .option('exact', '-e 精确匹配')
@@ -178,8 +189,8 @@ export function registerMcwiki(ctx: Context, mc: Command, config: Config) {
       if (!keyword) return '请输入关键词'
       try {
         const searchKey = options.exact ? `"${keyword}"` : keyword
-        const searchOptions = { offset: options.skip, what: options.what }
-        const pages = await searchMcwikiPages(ctx, searchKey, searchOptions)
+        const searchOptions = { offset: Math.max(0, options.skip || 0), what: options.what }
+        const { results: pages, pagination } = await searchMcwikiPages(ctx, searchKey, searchOptions)
         if (!pages.length) return '未找到匹配的条目'
         const pageInfo = await getMcwikiPage(ctx, pages[0].pageid, config)
         if (!pageInfo) return '获取详情失败'

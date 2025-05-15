@@ -85,9 +85,9 @@ export const PLATFORMS = {
      * @param {string} keyword - 搜索关键词
      * @param {Config} config - 配置对象
      * @param {Object} options - 搜索选项
-     * @returns {Promise<Array>} 搜索结果列表
+     * @returns {Promise<Object>} 包含结果和分页信息的对象
      */
-    search: searchMcmodProjects,
+    search: (ctx, keyword, config, options = {}) => searchMcmodProjects(ctx, keyword, options, config),
     /**
      * 获取MCMOD项目详情
      * @param {Context} ctx - Koishi上下文
@@ -95,23 +95,22 @@ export const PLATFORMS = {
      * @param {Config} config - 配置对象
      * @returns {Promise<Object>} 项目详情
      */
-    getDetail: getMcmodProject,
+    getDetail: (ctx, id, config) => getMcmodProject(ctx, id, config),
     /**
      * 转换MCMOD项目数据为统一格式
      * @param {Object} p - 项目数据
      * @returns {Object} 统一格式的项目数据
      */
     transform: p => ({
-      platform: 'MCMOD', name: p.name, description: p.description,
-      url: `https://www.mcmod.cn/item/${p.id}.html`,
-      extra: { id: p.id, type: p.type, mcversion: p.mcversion }
+      platform: 'MCMOD', name: p.name, description: p.description, url: p.url,
+      extra: { id: p.id, type: p.type, category: p.category }
     }),
     /**
      * 检查配置是否启用该平台
      * @param {Config} config - 配置对象
      * @returns {boolean} 是否启用
      */
-    checkConfig: config => config.mcmodEnabled
+    checkConfig: config => !!config.mcmodEnabled
   },
   mcwiki: {
     name: 'Minecraft Wiki',
@@ -123,7 +122,7 @@ export const PLATFORMS = {
      * @param {Object} options - 搜索选项
      * @returns {Promise<Array>} 搜索结果列表
      */
-    search: searchMcwikiPages,
+    search: (ctx, keyword, config, options = {}) => searchMcwikiPages(ctx, keyword, options),
     /**
      * 获取Minecraft Wiki页面详情
      * @param {Context} ctx - Koishi上下文
@@ -180,4 +179,60 @@ export const CF_MAPS = {
 export const STATUS_MAP = {
   compatibility: { required: '必需', optional: '可选', unsupported: '不支持' },
   type: { mod: '模组', modpack: '整合包', resourcepack: '资源包', shader: '着色器' }
+}
+
+/**
+ * MCMOD相关映射表
+ * @type {Object}
+ */
+export const MCMOD_MAPS = {
+  /** 搜索过滤器映射 */
+  FILTER: {
+    'mod': 1,       // 模组
+    'modpack': 2,   // 整合包
+    'item': 3,      // 资料
+    'post': 4,      // 教程
+    'author': 5,    // 作者
+    'user': 6,      // 用户
+    'community': 7  // 社群
+  },
+  /** 资源类型映射 */
+  RESOURCE_TYPE: {
+    '1': '物品/方块',
+    '2': '生物',
+    '3': '附魔',
+    '4': '世界生成',
+    '5': '维度',
+    '6': 'BUFF/DEBUFF',
+    '7': '多方块结构',
+    '8': '自然生成',
+    '9': '绑定热键',
+    '10': '游戏设定',
+    '11': '指令',
+    '12': 'API'
+  },
+  /** 类别映射 */
+  CATEGORY: {
+    '1': '工业',
+    '6': '科技',
+    '8': '魔法',
+    '12': '冒险',
+    '13': '农业',
+    '14': '交通运输',
+    '15': '红石',
+    '16': '存储',
+    '17': '世界生成',
+    '18': '生物',
+    '20': '装饰'
+  },
+  /** 资源类型映射 */
+  TYPE: {
+    'class': '模组',
+'modpack': '整合包',
+    'item': '资料',
+    'post': '教程',
+    'author': '作者',
+    'user': '用户',
+    'community': '社群'
+  }
 }

@@ -29,7 +29,7 @@ export interface Config {
   useScreenshot: boolean
   curseforgeEnabled: false | string
   modrinthEnabled: boolean
-  mcmodEnabled: boolean
+  mcmodEnabled: false | string
   mcwikiEnabled: boolean
   searchDesc: number
   searchResults: number
@@ -40,8 +40,11 @@ export interface Config {
 export const Config: Schema<Config> = Schema.intersect([
   Schema.object({
     mcwikiEnabled: Schema.boolean().description('启用 Minecraft Wiki 查询').default(true),
-    mcmodEnabled: Schema.boolean().description('启用 MCMOD 查询').default(true),
     modrinthEnabled: Schema.boolean().description('启用 Modrinth 查询').default(true),
+    mcmodEnabled: Schema.union([
+      Schema.const(false).description('禁用'),
+      Schema.string().description('启用').role('link').default('https://mcmod-api.yis-rime.workers.dev/')
+    ]).description('启用 MCMOD 查询').default('string'),
     curseforgeEnabled: Schema.union([
       Schema.const(false).description('禁用'),
       Schema.string().description('启用').role('secret')
@@ -129,8 +132,8 @@ export function apply(ctx: Context, config: Config) {
   if (config.wsServers.length > 0) initWebSocket(ctx, config)
   // 资源查询
   if (config.modrinthEnabled) registerModrinth(ctx, mc, config)
-  if (config.curseforgeEnabled) registerCurseForge(ctx, mc, config)
-  if (config.mcmodEnabled) registerMcmod(ctx, mc, config)
+  if (typeof config.curseforgeEnabled === 'string' && config.curseforgeEnabled) registerCurseForge(ctx, mc, config)
+  if (typeof config.mcmodEnabled === 'string' && config.mcmodEnabled) registerMcmod(ctx, mc, config)
   if (config.mcwikiEnabled) registerMcwiki(ctx, mc, config)
   // 统一搜索
   if (config.mcmodEnabled || config.mcwikiEnabled || config.modrinthEnabled
