@@ -6,118 +6,98 @@ import { MCMOD_MAPS } from './maps'
 /**
  * 处理MCMOD介绍文本，提取图片和分段
  */
-function processMcmodIntroduction(body: string, paragraphLimit: number): string[] {
-  const images = []
-
-  // 提取图片并替换为占位符，支持更多种格式的图片引用
-  body = body.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
-    images.push(url)
-    return `__IMAGE__${images.length - 1}__`
-  })
-    // 标准化标题格式
-    .replace(/^(#+)\s+(.*?)$/gm, '\n$1 $2\n')
-    .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/g, '\n## $1\n')
-    // 处理HTML标签
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<p[^>]*>([\s\S]*?)<\/p>/g, '$1\n\n')
-    .replace(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g, '[$2]($1)')
-    .replace(/<(?!\/?(strong|em|code|pre)\b)[^>]*>/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    // 保留Markdown列表格式
-    .replace(/^(\s*[-*]\s+)/gm, '• ')
-    // 标准化换行
-    .replace(/\r\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
+function processMcmodIntroduction(ctx: Context, body: string, paragraphLimit: number): any[] {
   const result = []
+  // 标准化换行和清理
+  body = body.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 
-  // 分段处理
-  const paragraphs = body.split('\n\n')
-  for (let i = 0; i < paragraphs.length; i++) {
-    const paragraph = paragraphs[i].trim()
-    if (!paragraph) continue
+  // 提取所有图片
+  const images = []
+  let match
+  const imgRegex = /!\[((?:\[[^\]]*\]|[^\]])*)\]\(([^)]+)\)/g
+  while ((match = imgRegex.exec(body)) !== null) {
+    images.push({
+      index: match.index,
+      length: match[0].length,
+      url: match[2],
+      text: match[0]
+    })
+  }
 
-    // 处理图片占位符 - 直接使用h.image
-    const imageMatch = paragraph.match(/^__IMAGE__(\d+)__$/)
-    if (imageMatch) {
-      const imageIndex = parseInt(imageMatch[1])
-      if (imageIndex >= 0 && imageIndex < images.length) {
-        result.push(h.image(images[imageIndex])) // 直接转换为h.image对象
-      }
-      continue
-    }
+  // 无图片时的简化处理
+  if (!images.length) {
+    let currentContent = ''
+    for (const paragraph of body.split('\n\n').filter(p => p.trim())) {
+      const isHeading = /^#{1,6}\s/.test(paragraph.trim())
 
-    // 处理标题段落 - 保持标题独立成段
-    if (paragraph.match(/^#{1,6}\s/)) {
-      result.push(paragraph)
-      continue
-    }
-
-    // 处理列表项 - 尝试保持整个列表在一起
-    if (paragraph.startsWith('• ') && i + 1 < paragraphs.length && paragraphs[i + 1].startsWith('• ')) {
-      let listContent = paragraph
-      let nextIndex = i + 1
-
-      while (nextIndex < paragraphs.length && paragraphs[nextIndex].startsWith('• ')) {
-        listContent += '\n' + paragraphs[nextIndex]
-        i = nextIndex // 跳过已处理的列表项
-        nextIndex++
-      }
-
-      if (listContent.length <= paragraphLimit) {
-        result.push(listContent)
+      if ((isHeading && currentContent) ||
+          (currentContent && currentContent.length + paragraph.length + 2 > paragraphLimit)) {
+        result.push(currentContent)
+        currentContent = paragraph
       } else {
-        // 如果列表太长，按行分割
-        const listItems = listContent.split('\n')
-        let currentGroup = ''
+        currentContent = currentContent ? `${currentContent}\n${paragraph}` : paragraph
+      }
+    }
 
-        for (const item of listItems) {
-          if ((currentGroup + '\n' + item).length > paragraphLimit && currentGroup) {
-            result.push(currentGroup)
-            currentGroup = item
+    if (currentContent) result.push(currentContent)
+    return result;
+  }
+
+  // 有图片时处理图文混合内容
+  let lastIndex = 0, contentBuffer = ''
+
+  for (let i = 0; i < images.length; i++) {
+    const image = images[i]
+
+    // 处理图片前文本
+    if (image.index > lastIndex) {
+      const textBefore = body.substring(lastIndex, image.index).trim()
+      if (textBefore) {
+        for (const para of textBefore.split('\n\n').filter(p => p.trim())) {
+          if (contentBuffer && contentBuffer.length + para.length + 2 > paragraphLimit) {
+            result.push(contentBuffer)
+            contentBuffer = para
           } else {
-            currentGroup = currentGroup ? currentGroup + '\n' + item : item
+            contentBuffer = contentBuffer ? `${contentBuffer}\n${para}` : para
           }
         }
-
-        if (currentGroup) {
-          result.push(currentGroup)
-        }
-      }
-      continue
-    }
-
-    // 处理普通文本段落
-    const cleanParagraph = paragraph.replace(/__IMAGE__\d+__/g, '').trim()
-    if (!cleanParagraph) continue
-
-    // 分割长段落
-    if (cleanParagraph.length <= paragraphLimit) {
-      result.push(cleanParagraph)
-      continue
-    }
-
-    // 按句子或字符分段
-    const sentenceBreaks = cleanParagraph.match(/[。！？\.!?]+/g)
-    if (sentenceBreaks?.length > 5) {
-      // 按句子分段
-      let subParagraph = ''
-      for (const sentence of cleanParagraph.split(/(?<=[。！？\.!?]+)/)) {
-        if ((subParagraph + sentence).length > paragraphLimit) {
-          if (subParagraph.trim()) result.push(subParagraph.trim())
-          subParagraph = sentence
-        } else {
-          subParagraph += sentence
-        }
-      }
-      if (subParagraph.trim()) result.push(subParagraph.trim())
-    } else {
-      // 按字符数分段
-      for (let j = 0; j < cleanParagraph.length; j += paragraphLimit) {
-        result.push(cleanParagraph.substring(j, j + paragraphLimit).trim())
       }
     }
+
+    // 输出缓冲区内容
+    if (contentBuffer) {
+      result.push(contentBuffer)
+      contentBuffer = ''
+    }
+
+    // 添加图片
+    result.push(h.image(image.url))
+    lastIndex = image.index + image.length
+
+    // 处理图片间的可能描述文本
+    if (i < images.length - 1) {
+      const nextImage = images[i + 1]
+      const textBetween = body.substring(lastIndex, nextImage.index).trim()
+
+      if (textBetween && (textBetween.length < paragraphLimit / 2 || !textBetween.includes('\n\n'))) {
+        result.push(textBetween)
+        lastIndex = nextImage.index
+      }
+    }
+  }
+
+  // 处理最后一个图片后的文本
+  const finalText = body.substring(lastIndex).trim()
+  if (finalText) {
+    for (const para of finalText.split('\n\n').filter(p => p.trim())) {
+      if (contentBuffer && contentBuffer.length + para.length + 2 > paragraphLimit) {
+        result.push(contentBuffer)
+        contentBuffer = para
+      } else {
+        contentBuffer = contentBuffer ? `${contentBuffer}\n${para}` : para
+      }
+    }
+    if (contentBuffer) result.push(contentBuffer)
   }
 
   return result
@@ -126,28 +106,19 @@ function processMcmodIntroduction(body: string, paragraphLimit: number): string[
 // 搜索MCMOD资源
 export async function searchMcmodProjects(ctx: Context, keyword: string, options = {}, config: Config = null) {
   try {
-    // 将偏移量转换为页码 (MCMOD每页固定30个结果)
     const pageSize = 30
-    let page = 1
+    const page = options['page'] || (options['offset'] ? Math.floor(options['offset'] / pageSize) + 1 : 1)
 
-    if (options['page'] !== undefined) {
-      page = options['page']
-    } else if (options['offset'] !== undefined) {
-      // 从偏移量转换为页码
-      page = Math.floor(options['offset'] / pageSize) + 1
-    }
-
-    // 构建API参数
+    // 构建API参数和基础URL
     const params = {
       q: keyword,
-      page: page,
+      page,
       ...(options['mold'] === 1 || options['mcmold'] ? { mold: 1 } : {}),
       ...(options['type'] && MCMOD_MAPS.FILTER[options['type']] > 0 ?
           { filter: MCMOD_MAPS.FILTER[options['type']] } : {})
     }
 
-    // 获取API基础URL
-    const apiBase = typeof config?.mcmodEnabled === 'string' ?
+    const apiBase = typeof config?.mcmodEnabled === 'string' && config.mcmodEnabled.trim() ?
       (config.mcmodEnabled.trim().endsWith('/') ? config.mcmodEnabled.trim() : config.mcmodEnabled.trim() + '/') : ''
 
     const response = await ctx.http.get(`${apiBase}api/search`, { params })
@@ -166,44 +137,32 @@ export async function searchMcmodProjects(ctx: Context, keyword: string, options
           page: response.page || 1,
           total: response.total || 1,
           totalResults: response.totalResults || response.results.length,
-          pageSize: pageSize,
-          offset: (response.page - 1) * pageSize  // 添加offset计算以便统一处理
+          pageSize,
+          offset: (response.page - 1) * pageSize
         }
       }
     }
+
     return {
       results: [],
-      pagination: {
-        page: 1,
-        total: 0,
-        totalResults: 0,
-        pageSize: pageSize,
-        offset: 0
-      }
+      pagination: { page: 1, total: 0, totalResults: 0, pageSize, offset: 0 }
     }
   } catch (error) {
     ctx.logger.error('MCMOD 搜索失败:', error)
     return {
       results: [],
-      pagination: {
-        page: 1,
-        total: 0,
-        totalResults: 0,
-        pageSize: 0,
-        offset: 0
-      }
+      pagination: { page: 1, total: 0, totalResults: 0, pageSize: 0, offset: 0 }
     }
   }
 }
 
-// 映射函数
+// 获取映射值
 const getMapValue = (map, key, defaultValue = `未知(${key})`) => map[key] || defaultValue
 
 // 处理MCMOD资源详情
 export async function getMcmodProject(ctx: Context, project, config: Config = null) {
   try {
-    // 获取API基础URL
-    const apiBase = typeof config?.mcmodEnabled === 'string' ?
+    const apiBase = typeof config?.mcmodEnabled === 'string' && config.mcmodEnabled.trim() ?
       (config.mcmodEnabled.trim().endsWith('/') ? config.mcmodEnabled.trim() : config.mcmodEnabled.trim() + '/') : ''
 
     // 构建基本内容
@@ -214,57 +173,48 @@ export async function getMcmodProject(ctx: Context, project, config: Config = nu
       `查看详情: ${project.url}`
     ]
 
-    // 如果不是模组类型，返回基本信息
+    // 非模组类型直接返回基本信息
     if (project.extra?.type !== 'class') {
-      return {
-        content: basicContent,
-        url: project.url,
-        icon: null
+      return { content: basicContent, url: project.url, icon: null }
+    }
+
+    // 获取模组详情
+    const response = await ctx.http.get(`${apiBase}api/class`, {
+      params: {
+        id: project.extra.id,
+        others: false,
+        community: project.community === true,
+        relations: project.relations === true
       }
-    }
+    })
 
-    // 获取模组详细信息
-    const params = {
-      id: project.extra.id,
-      others: false,
-      community: project.community === true,
-      relations: project.relations === true
-    }
-
-    const response = await ctx.http.get(`${apiBase}api/class`, { params })
     if (!response?.basicInfo) throw new Error('无法获取模组详情')
 
     const { basicInfo, compatibility, links, authors, resources, introduction, community, relations } = response
 
-    // 模组名称
-    const modName = [
-      basicInfo.shortName,
-      basicInfo.name,
-      basicInfo.englishName ? `[${basicInfo.englishName}]` : null
-    ].filter(Boolean).join(' ')
+    // 模组名称和基本信息
+    const modName = [basicInfo.shortName, basicInfo.name, basicInfo.englishName ? `[${basicInfo.englishName}]` : null]
+      .filter(Boolean).join(' ')
 
-    // 作者信息
-    const authorInfo = authors?.map(a =>
-      `${a.name}${a.position ? ` (${a.position})` : ''}`).join(', ') || '未知'
+    const authorInfo = authors?.map(a => `${a.name}${a.position ? ` (${a.position})` : ''}`).join(', ') || '未知'
 
-    // 游戏版本信息
+    // 版本信息
     let versionInfo = '未知'
     if (compatibility?.mcVersions) {
       const allVersions = []
       if (compatibility.mcVersions.forge) allVersions.push(`Forge: ${compatibility.mcVersions.forge.join(', ')}`)
       if (compatibility.mcVersions.fabric) allVersions.push(`Fabric: ${compatibility.mcVersions.fabric.join(', ')}`)
-      if (compatibility.mcVersions.behaviorPack)
-        allVersions.push(`行为包: ${compatibility.mcVersions.behaviorPack.join(', ')}`)
+      if (compatibility.mcVersions.behaviorPack) allVersions.push(`行为包: ${compatibility.mcVersions.behaviorPack.join(', ')}`)
       versionInfo = allVersions.join('\n● ')
     }
 
-    // 构建内容
+    // 构建完整内容
     const content = [
       basicInfo.img && h.image(basicInfo.img),
       [
         modName,
         `状态: ${[basicInfo.status?.isActive ? '活跃' : '停更', basicInfo.status?.isOpenSource ? '开源' : '闭源'].join(', ')}`,
-        `分类: ${basicInfo.categories?.map(id => getMapValue(MCMOD_MAPS.CATEGORY, id, `类别${id}`)).join(', ') || '未知'}`,
+        `分类: ${basicInfo.categories?.map(id => getMapValue(MCMOD_MAPS.CATEGORY, id)).join(', ') || '未知'}`,
         `标签: ${basicInfo.tags?.join(', ') || '无标签'}`,
         `作者: ${authorInfo}`,
         `支持平台: ${compatibility?.platforms?.join(', ') || '未知'}`,
@@ -276,66 +226,57 @@ export async function getMcmodProject(ctx: Context, project, config: Config = nu
       links?.length && `相关链接:\n${links.map(link => `● ${link.title}: ${link.url}`).join('\n')}`
     ].filter(Boolean)
 
-    // 添加依赖关系信息
+    // 添加依赖关系
     if (project.relations && relations?.length) {
-      const relationContent = []
+      const relationItems = ['模组关系:']
 
-      relationContent.push('模组关系:')
       for (const relation of relations) {
         if (relation.version) {
-          relationContent.push(`【${relation.version}】版本：`)
-
+          relationItems.push(`【${relation.version}】版本：`)
           if (relation.dependencyMods?.length) {
-            relationContent.push(`  依赖模组: ${relation.dependencyMods.map(mod => mod.name).join(', ')}`)
+            relationItems.push(`  依赖模组: ${relation.dependencyMods.slice(0, 5).map(mod => mod.name).join(', ')}${relation.dependencyMods.length > 5 ? ' 等' : ''}`)
           }
-
           if (relation.relationMods?.length) {
-            relationContent.push(`  关联模组: ${relation.relationMods.map(mod => mod.name).join(', ')}`)
+            relationItems.push(`  关联模组: ${relation.relationMods.slice(0, 5).map(mod => mod.name).join(', ')}${relation.relationMods.length > 5 ? ' 等' : ''}`)
           }
         }
       }
 
-      if (relationContent.length > 1) {
-        content.push(relationContent.join('\n'))
-      }
+      if (relationItems.length > 1) content.push(relationItems.join('\n'))
     }
 
-    // 添加社区信息
+    // 添加社区和教程信息
     if (community) {
       if (community.tutorials?.length) {
         content.push('Mod教程:')
-        content.push(community.tutorials.map(t =>
-          `● [${t.title}](https://www.mcmod.cn/post/${t.id}.html)`
-        ).join('\n'))
+        content.push(community.tutorials.slice(0, 10).map(t =>
+          `● [${t.title}](https://www.mcmod.cn/post/${t.id}.html)`).join('\n') +
+          (community.tutorials.length > 10 ? '\n● 等...' : ''))
       }
 
       if (community.discussions?.length) {
         content.push('Mod讨论:')
-        content.push(community.discussions.map(d =>
-          `● [${d.title}](https://bbs.mcmod.cn/thread-${d.id}-1-1.html)`
-        ).join('\n'))
+        content.push(community.discussions.slice(0, 10).map(d =>
+          `● [${d.title}](https://bbs.mcmod.cn/thread-${d.id}-1-1.html)`).join('\n') +
+          (community.discussions.length > 10 ? '\n● 等...' : ''))
       }
     }
 
     // 处理详细介绍
     if (introduction) {
       content.push(`详细介绍：`)
+      const introParts = processMcmodIntroduction(ctx, introduction, config.maxDescLength)
+        .slice(0, config.maxParagraphs)
+      content.push(...introParts)
 
-      const introParts = processMcmodIntroduction(introduction, config.maxDescLength).slice(0, config.maxParagraphs)
-      content.push(...introParts) // 直接添加处理后的内容，不需要再次转换
-
-      if (processMcmodIntroduction(introduction, config.maxDescLength).length > config.maxParagraphs) {
+      if (introParts.length < processMcmodIntroduction(ctx, introduction, config.maxDescLength).length) {
         content.push('（更多内容请查看完整页面）')
       }
     }
 
     content.push(`查看详情: ${project.url}`)
 
-    return {
-      content,
-      url: project.url,
-      icon: basicInfo.img || null
-    }
+    return { content, url: project.url, icon: basicInfo.img || null }
   } catch (error) {
     ctx.logger.error('MCMOD 详情获取失败:', error)
     return {
@@ -371,18 +312,17 @@ export function registerMcmod(ctx: Context, mc: Command, config: Config) {
 
         if (!projects.results.length) return '未找到匹配的资源'
 
-        const projectData = {
-          name: projects.results[0].name,
-          description: projects.results[0].description,
-          url: projects.results[0].url,
+        const project = projects.results[0]
+        const projectInfo = await getMcmodProject(ctx, {
+          name: project.name,
+          description: project.description,
+          url: project.url,
           community: options.community,
           relations: options.relations,
-          extra: { id: projects.results[0].id, type: projects.results[0].type, category: projects.results[0].category }
-        }
+          extra: { id: project.id, type: project.type, category: project.category }
+        }, config)
 
-        const projectInfo = await getMcmodProject(ctx, projectData, config)
         const result = await renderOutput(session, projectInfo.content, projectInfo.url, ctx, config, options.shot)
-
         return config.useForward && result === '' && !options.shot ? undefined : result
       } catch (error) {
         ctx.logger.error('MCMOD 查询失败:', error)
