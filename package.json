@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-bot",
-  "description": "个人自用测试插件，点击头像查看本人所有插件",
+  "description": "自动切换频道受理人（再也不需要逐个 `assign` 了），同时支持多机器人负载均衡功能",
   "version": "1.5.0",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
@@ -21,7 +21,10 @@
     "chatbot",
     "koishi",
     "plugin",
-    "bot"
+    "bot",
+    "channel",
+    "assign",
+    "balance"
   ],
   "peerDependencies": {
     "koishi": "^4.18.7"
