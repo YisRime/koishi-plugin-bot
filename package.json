@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-bot",
   "description": "自动切换频道受理人（再也不需要逐个 `assign` 了），同时支持多机器人负载均衡功能",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
   ],
